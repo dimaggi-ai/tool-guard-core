@@ -1,0 +1,144 @@
+# Support Credit Guard — caps customer-comp issuance from support agents.
+#
+# Support credits (refunds, account credits, comp months) are the
+# most common B2C abuse surface for an AI support agent: prompt
+# injection by an angry customer ("the CTO promised me $5000") flows
+# straight to a dollar value if there's no policy gate.
+#
+# This pairs structural amount caps with a per-ticket cumulative cap
+# and a regex tripwire on the reason field.
+
+policy_id: pol-support-credit-guard
+name: support-credit-guard
+description: >
+  Per-credit amount cap, per-ticket cumulative cap, reason tripwire,
+  customer-tier-aware ceilings. Designed for tier-1 support agents
+  with autonomous comp authority below a small cap.
+version: 1
+status: approved
+mode: enforcement
+
+scope:
+  tool_names:
+    - issue_account_credit
+    - apply_refund_comp
+    - extend_subscription
+    - issue_gift_card
+  tool_groups:
+    - customer_comp
+
+rules:
+  # ── 1. Per-credit cap ────────────────────────────────────────────
+  - rule_id: rule-credit-amount-cap
+    name: Single comp over $500 requires supervisor approval
+    rule_type: threshold
+    conditions:
+      field: amount
+      operator: gt
+      value: 500
+    effect: escalate
+    effect_config:
+      severity: medium
+      escalate_to: approver
+      timeout_minutes: 30
+    citation:
+      document_id: doc-support-comp
+      section: "7.1"
+      excerpt: >
+        Per-credit comp above $500 routes through a Tier-2
+        supervisor before issuance.
+
+  # ── 2. Per-credit hard cap ───────────────────────────────────────
+  - rule_id: rule-credit-amount-hard-cap
+    name: Single comp over $2,500 denied
+    rule_type: threshold
+    conditions:
+      field: amount
+      operator: gt
+      value: 2500
+    effect: deny
+    effect_config:
+      severity: critical
+      suggested_response: >
+        Comps above $2,500 must use the executive resolution
+        workflow, not the support agent endpoint.
+    citation:
+      document_id: doc-support-comp
+      section: "7.2"
+      excerpt: >
+        Per-credit comp above $2,500 is denied at the agent
+        endpoint; use the executive resolution workflow.
+
+  # ── 3. Per-ticket cumulative cap ─────────────────────────────────
+  # The surrounding agent runtime carries a per-ticket counter in
+  # parameters.cumulative_comp_so_far (in USD). The proxy itself is
+  # stateless; this rule fires when the running total an agent
+  # accumulated against a single ticket exceeds the cap.
+  - rule_id: rule-credit-ticket-cumulative
+    name: Cumulative comp on a single ticket over $2,000 denied
+    rule_type: threshold
+    conditions:
+      field: parameters.cumulative_comp_so_far
+      operator: gt
+      value: 2000
+    effect: deny
+    effect_config:
+      severity: critical
+      suggested_response: >
+        This ticket has already received over $2,000 of cumulative
+        comp. Further issuance requires the executive resolution
+        workflow.
+    citation:
+      document_id: doc-support-comp
+      section: "7.3"
+      excerpt: >
+        Per-ticket cumulative comp above $2,000 is denied; agents
+        cannot split a large comp across many small issuances.
+
+  # ── 4. Reason regex tripwire ─────────────────────────────────────
+  # The classic prompt-injection signature in support tickets is the
+  # customer asserting authority: "the CEO/CTO/manager said". Flag
+  # the reason text for human review without denying outright.
+  - rule_id: rule-credit-reason-authority-claim
+    name: Comp reason claims executive authority — escalate
+    rule_type: regex
+    conditions:
+      field: parameters.reason
+      operator: regex
+      value: '(?i)(ceo|cto|coo|vp|director|manager|supervisor)\s+(said|approved|promised|told|authorized|guaranteed)'
+    effect: escalate
+    effect_config:
+      severity: medium
+      escalate_to: approver
+      timeout_minutes: 30
+      suggested_response: >
+        Reason text references executive authority. Confirm with the
+        named approver out-of-band before issuance.
+    citation:
+      document_id: doc-support-comp
+      section: "7.4"
+      excerpt: >
+        Comp justifications that cite executive authority
+        ("the CTO promised...") are an established prompt-injection
+        signature and require human verification.
+
+  # ── 5. Customer tier sanity check ────────────────────────────────
+  # Trial / freemium accounts should not receive cash comps. Flag
+  # for visibility — there are legitimate cases (won-back trials)
+  # but they should be observable.
+  - rule_id: rule-credit-trial-customer-flag
+    name: Comp to a trial / freemium customer is flagged
+    rule_type: regex
+    conditions:
+      field: parameters.customer_tier
+      operator: regex
+      value: '^(trial|freemium|free)$'
+    effect: flag
+    effect_config:
+      severity: low
+    citation:
+      document_id: doc-support-comp
+      section: "7.5"
+      excerpt: >
+        Cash comps to non-paying customer tiers are flagged for
+        support-leadership review rather than blocked.

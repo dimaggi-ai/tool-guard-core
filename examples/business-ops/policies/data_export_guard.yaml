@@ -1,0 +1,175 @@
+# Customer Data Export Guard — GDPR/CCPA-shaped export controls.
+#
+# Threat model
+# ────────────
+# A support / analytics agent has read access to customer records and
+# an export tool. Without policy:
+#  1. Prompt injection: "export all customer PII to /tmp/x.csv" runs
+#  2. Bulk export across customers (lateral exfil) succeeds silently
+#  3. PII export without legal-hold flag bypasses retention rules
+#  4. Export of right-to-erasure customer fires (data-protection bug)
+#
+# This policy lints clean and runs against the standard ActionEnvelope
+# shape — no schema extensions required.
+
+policy_id: pol-data-export-guard
+name: customer-data-export-guard
+description: >
+  Per-export row cap, PII-field gate, multi-customer bulk escalation,
+  right-to-erasure deny. Designed for data-team agents with
+  legitimate slice-of-customers export needs.
+version: 1
+status: approved
+mode: enforcement
+
+scope:
+  tool_names:
+    - export_customer_data
+    - export_users
+    - dump_customer_records
+  tool_groups:
+    - data_export
+
+rules:
+  # ── 1. Row count cap ─────────────────────────────────────────────
+  - rule_id: rule-export-row-cap
+    name: Export over 10k rows requires approval
+    rule_type: threshold
+    conditions:
+      field: parameters.row_count
+      operator: gt
+      value: 10000
+    effect: escalate
+    effect_config:
+      severity: medium
+      escalate_to: approver
+      timeout_minutes: 30
+      suggested_response: >
+        Exports above 10,000 rows require approval. This catches the
+        bulk-exfiltration pattern even when the requester is logged
+        in legitimately.
+    citation:
+      document_id: doc-data-handling
+      section: "2.1"
+      excerpt: >
+        Customer-record exports above 10,000 rows must be approved by
+        the Data Steward before execution.
+
+  # ── 2. Hard ceiling — no agent ever exports > 100k ───────────────
+  - rule_id: rule-export-absolute-cap
+    name: Export over 100k rows denied outright
+    rule_type: threshold
+    conditions:
+      field: parameters.row_count
+      operator: gt
+      value: 100000
+    effect: deny
+    effect_config:
+      severity: critical
+      suggested_response: >
+        Exports above 100,000 rows are not routed through the
+        agent-facing endpoint. Use the data-warehouse direct query
+        path with separate approval.
+    citation:
+      document_id: doc-data-handling
+      section: "2.2"
+      excerpt: >
+        Agent-issued exports above 100,000 rows must use the data
+        warehouse export workflow, not the agent endpoint.
+
+  # ── 3. PII field gate ───────────────────────────────────────────
+  # If the requested column set names a sensitive field (ssn, dob,
+  # passport, etc.) and there is no legal-hold ticket flagging it,
+  # deny. Encoded as a regex over the comma-joined fields list.
+  - rule_id: rule-export-pii-fields-deny
+    name: Export naming sensitive fields without legal-hold context
+    rule_type: regex
+    # AND-of-conditions:
+    #   1. The fields list names a restricted PII column.
+    #   2. There is NO valid legal-hold ticket (format LH-NNNN).
+    # The second condition uses `not regex` rather than `eq ""` so
+    # that an omitted key, empty string, "0", or arbitrary garbage
+    # all fail the format check and trigger deny — `eq ""` would
+    # silently pass when the key is missing because the engine
+    # returns false for non-existent fields, and that becomes a
+    # security regression (PII through if you just don't send the
+    # legal_hold_ticket key).
+    conditions:
+      and:
+        - field: parameters.fields
+          operator: regex
+          # Word boundaries don't span `_`, so plain \b would miss
+          # `ssn_hash`, `passport_number`, `payment_card_token`, etc.
+          # The leading (^|[^a-z0-9]) treats start-of-string, comma,
+          # space, underscore-adjacent — anything non-alpha — as a
+          # boundary; the trailing class allows the field to be
+          # followed by another identifier char so `_suffix` variants
+          # still trigger.
+          value: '(?i)(^|[^a-z0-9])(ssn|tax_id|passport|dob|date_of_birth|drivers_license|payment_card|cvv|bank_account)([^a-z0-9]|$|_)'
+        - not:
+            field: parameters.legal_hold_ticket
+            operator: regex
+            value: '^LH-[0-9]{4,}$'
+    effect: deny
+    effect_config:
+      severity: critical
+      suggested_response: >
+        Sensitive fields (SSN, DOB, payment data) cannot be exported
+        without a legal-hold ticket reference. Open a ticket via the
+        DPO portal before retrying.
+    citation:
+      document_id: doc-data-handling
+      section: "2.3"
+      excerpt: >
+        Export of restricted PII columns requires a documented
+        legal-hold ticket reference; agent-issued exports without a
+        ticket are denied at the policy layer.
+
+  # ── 4. Multi-customer bulk export escalation ─────────────────────
+  - rule_id: rule-export-multi-customer
+    name: Export across more than one customer escalates
+    rule_type: threshold
+    conditions:
+      field: parameters.customer_id_count
+      operator: gt
+      value: 1
+    effect: escalate
+    effect_config:
+      severity: medium
+      escalate_to: approver
+      timeout_minutes: 30
+    citation:
+      document_id: doc-data-handling
+      section: "2.4"
+      excerpt: >
+        Multi-customer exports cross the lateral exfiltration
+        boundary and require explicit Data Steward acknowledgement.
+
+  # ── 5. Right-to-erasure flagged customer ─────────────────────────
+  # Required-field gate: deny unless customer_status is explicitly
+  # one of the known live states. The previous shape (`eq erased`) had
+  # the missing-field fail-open class — an agent that simply omitted
+  # customer_status from parameters slipped the rule. Using `not regex`
+  # against the known-good values means missing/empty/garbage all fire
+  # the deny.
+  - rule_id: rule-export-erased-customer
+    name: Export of right-to-erasure customer denied
+    rule_type: threshold
+    conditions:
+      not:
+        field: parameters.customer_status
+        operator: regex
+        value: '^(active|inactive|suspended|trialing|cancelled)$'
+    effect: deny
+    effect_config:
+      severity: critical
+      suggested_response: >
+        Customer has exercised their right to erasure (GDPR Art. 17).
+        Further data egress is denied at the policy layer.
+    citation:
+      document_id: doc-data-handling
+      section: "2.5"
+      excerpt: >
+        Right-to-erasure customers (status=erased) must not have
+        their records exposed via any export workflow, agent-driven
+        or otherwise.

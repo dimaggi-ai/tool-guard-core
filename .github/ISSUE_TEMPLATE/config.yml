@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability disclosure
+    url: https://github.com/dimaggi-ai/tool-guard-core/blob/main/SECURITY.md
+    about: Do NOT open a public issue. Email security@dimaggi.ai per SECURITY.md.
+  - name: Documentation
+    url: https://github.com/dimaggi-ai/tool-guard-core/tree/main/docs
+    about: Getting started, architecture, policy authoring, operating, scope and non-goals.
+  - name: Tool Guard Enterprise
+    url: https://dimaggi.ai/demo-portal/
+    about: The commercial management platform (dashboard, RBAC, PII redaction, evidence packs) — live demo with simulated data.

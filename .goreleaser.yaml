@@ -1,0 +1,184 @@
+# GoReleaser config for Tool Guard Core.
+#
+# Local validation (no upload):
+#
+#   goreleaser release --snapshot --clean --skip=publish
+#
+# Real release (triggered by pushing a v* tag):
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#   # → the GitHub Actions release workflow runs `goreleaser release`
+#
+# Produces:
+#   - linux/{amd64,arm64} + darwin/{amd64,arm64} + windows/amd64
+#     tarballs + checksums.txt
+#   - multi-arch container image at ghcr.io/dimaggi-ai/tool-guard-core
+#     (images are NOT signed; verify by digest from the release notes)
+#   - SBOM (syft, configured in the release workflow)
+#   - GitHub Release with auto-generated notes
+
+version: 2
+
+project_name: tool-guard-core
+
+before:
+  hooks:
+    - go mod tidy
+    - go mod download
+
+builds:
+  - id: tg
+    main: ./cmd/tg
+    binary: tg
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.Version={{.Version}}
+      - -X main.Commit={{.Commit}}
+      - -X main.BuildDate={{.Date}}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+  - id: tg-proxy
+    main: ./cmd/tg-proxy
+    binary: tg-proxy
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.Version={{.Version}}
+      - -X main.Commit={{.Commit}}
+      - -X main.BuildDate={{.Date}}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - id: default
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    builds:
+      - tg
+      - tg-proxy
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - LICENSE
+      - NOTICE
+      - README.md
+      - CHANGELOG.md
+      - SECURITY.md
+      - docs/**/*
+      - policies/**/*.yaml
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+snapshot:
+  name_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "Merge pull request"
+      - "Merge branch"
+
+dockers:
+  - id: tg-proxy-amd64
+    image_templates:
+      - "ghcr.io/dimaggi-ai/tool-guard-core:{{ .Version }}-amd64"
+      - "ghcr.io/dimaggi-ai/tool-guard-core:latest-amd64"
+    use: buildx
+    goos: linux
+    goarch: amd64
+    dockerfile: Dockerfile
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.source=https://github.com/dimaggi-ai/tool-guard-core"
+
+  - id: tg-proxy-arm64
+    image_templates:
+      - "ghcr.io/dimaggi-ai/tool-guard-core:{{ .Version }}-arm64"
+      - "ghcr.io/dimaggi-ai/tool-guard-core:latest-arm64"
+    use: buildx
+    goos: linux
+    goarch: arm64
+    dockerfile: Dockerfile
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.source=https://github.com/dimaggi-ai/tool-guard-core"
+
+docker_manifests:
+  - name_template: "ghcr.io/dimaggi-ai/tool-guard-core:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/dimaggi-ai/tool-guard-core:{{ .Version }}-amd64"
+      - "ghcr.io/dimaggi-ai/tool-guard-core:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/dimaggi-ai/tool-guard-core:latest"
+    image_templates:
+      - "ghcr.io/dimaggi-ai/tool-guard-core:latest-amd64"
+      - "ghcr.io/dimaggi-ai/tool-guard-core:latest-arm64"
+
+sboms:
+  - artifacts: archive
+
+release:
+  github:
+    owner: dimaggi-ai
+    name: tool-guard-core
+  prerelease: auto
+  draft: false
+  name_template: "Tool Guard Core {{ .Tag }}"
+  header: |
+    # Tool Guard Core {{ .Tag }}
+
+    The runtime policy firewall for AI agents — Apache 2.0.
+
+    See [CHANGELOG.md](https://github.com/dimaggi-ai/tool-guard-core/blob/main/CHANGELOG.md) for the full release notes.
+  footer: |
+    ## Container image
+
+    ```sh
+    docker pull ghcr.io/dimaggi-ai/tool-guard-core:{{ .Version }}
+    ```
+
+    Multi-arch manifest covering `linux/amd64` and `linux/arm64`.
+
+    ## Verify the binaries
+
+    Every release ships a `checksums.txt`. Verify with:
+
+    ```sh
+    sha256sum -c checksums.txt
+    ```

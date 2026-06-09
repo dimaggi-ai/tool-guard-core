@@ -1,0 +1,250 @@
+policy_id: pol-os-protect
+name: os-protect
+description: >
+  Pre-execution gate for the OS tool. Production-grade defaults: argv-only
+  for os_exec (no shell), filepath.Clean + EvalSymlinks + deep-glob denied
+  prefix list, deny on shell metacharacters in paths, and a path-length
+  cap.
+version: 1
+status: approved
+mode: enforcement
+
+scope:
+  tool_names:
+    - os_exec
+    - os_read_file
+  tool_groups:
+    - system_ops
+
+rules:
+  - rule_id: rule-os-exec-strict
+    name: os_exec — argv allowlist + path arg guard + interpreter deny
+    rule_type: shell_classify
+    conditions:
+      and:
+        - field: tool_name
+          operator: eq
+          value: os_exec
+        - shell_classify:
+            field: parameters.argv
+            require:
+              argv0_allowlist:
+                - uptime
+                - date
+                - whoami
+                - pwd
+                - hostname
+                - df
+                - ls
+                - cat
+                - head
+                - tail
+                - wc
+                - stat
+                - file
+              # Path args run through filepath.Clean + match against
+              # the production-grade sensitive list. ** is deep glob.
+              denied_argv_paths:
+                # Classic credential files
+                - /etc/shadow
+                - /etc/passwd
+                - /etc/sudoers
+                - /etc/gshadow
+                - /etc/group
+                - /etc/krb5.keytab
+                # Server-side keys
+                - /etc/ssh/
+                - /etc/ssl/private/
+                - /etc/pki/tls/private/
+                # System dirs
+                - /root/
+                - /proc/self/
+                - /proc/**/environ
+                - /proc/**/maps
+                - /proc/**/mem
+                - /proc/**/cmdline
+                - /proc/**/fd/
+                # Sensitive devices
+                - /dev/mem
+                - /dev/kmem
+                - /dev/kcore
+                - /dev/port
+                # Cron / scheduler
+                - /etc/crontab
+                - /etc/cron.d/
+                - /etc/cron.daily/
+                - /etc/cron.hourly/
+                - /etc/cron.weekly/
+                - /etc/cron.monthly/
+                - /var/spool/cron/
+                # PAM / security
+                - /etc/security/
+                - /etc/pam.d/
+                # DB server configs
+                - /etc/postgresql/
+                - /etc/mysql/
+                - /etc/redis/
+                # Container runtime / orchestrator
+                - /etc/kubernetes/
+                - /etc/docker/
+                - /run/secrets/
+                - /var/run/secrets/
+                # System data
+                - /var/lib/postgres
+                - /var/lib/mysql
+                - /var/lib/secrets
+                # Auth logs
+                - /var/log/auth.log
+                - /var/log/secure
+                - /var/log/audit/
+                # Per-user secrets / histories / VCS credentials
+                - /home/*/.ssh
+                - /home/*/.aws
+                - /home/*/.gnupg
+                - /home/*/.docker
+                - /home/*/.netrc
+                - /home/*/.pgpass
+                - /home/*/.kube
+                - /home/*/.bash_history
+                - /home/*/.zsh_history
+                - /home/*/.psql_history
+                - /home/*/.mysql_history
+                - /home/*/.rediscli_history
+                - /home/*/.gitconfig
+                - /home/*/.git-credentials
+                - /home/*/.npmrc
+                - /home/*/.pypirc
+                - /home/*/.cargo/credentials
+              # Patterns denied in ANY arg.
+              argv_deny_patterns:
+                - '[;&|`$]'
+                - '\$\('
+                - '\$\{'
+                - '^-exec$'
+                - '^--no-preserve-root$'
+                - '^-c$'
+                - '^-eval$'
+                - '^--eval$'
+              max_argc: 12
+    effect: deny
+    effect_config:
+      severity: high
+      suggested_response: >
+        os_exec rejected. The argv array failed at least one of:
+        argv[0] in the allowlist (basename match, so /usr/bin/sh is
+        still "sh"); no argv element may be a denied filesystem path;
+        no arg may contain shell metacharacters; no -c / -eval style
+        interpreter eval; argc ≤ 12.
+    citation:
+      document_id: doc-os-runbook
+      section: "2.1"
+      excerpt: >
+        Agents invoke os_exec by argv array only; the tool exec()s
+        the program directly and never invokes a shell. The
+        production-grade denied-path list covers credential files,
+        server-side keys, /proc/<pid>/ sensitive entries, container
+        secrets, cron / PAM, and per-user history files.
+
+  - rule_id: rule-os-credential-file-read
+    name: os_read_file — block credential / secret / system-data paths
+    rule_type: path_classify
+    conditions:
+      and:
+        - field: tool_name
+          operator: eq
+          value: os_read_file
+        - path_classify:
+            field: parameters.path
+            require:
+              # Normalisation first so /etc//shadow + /etc/./shadow
+              # + /etc/../etc/shadow all resolve to /etc/shadow.
+              clean_first: true
+              absolute_only: true
+              resolve_symlinks: true
+              # Deny any path containing shell metacharacters or
+              # control bytes — no legitimate filename looks like
+              # /etc/shadow;cat /tmp/x, so an agent asking for one
+              # is an attack signal.
+              deny_shell_metas: true
+              # Linux-only deployment: backslash is never a legitimate
+              # path separator, so add it to the meta-character set.
+              include_backslash: true
+              # Linux PATH_MAX is 4096; agents never need longer.
+              max_path_length: 4096
+              denied_canonical_prefixes:
+                # (same list — copied so each rule is self-describing)
+                - /etc/shadow
+                - /etc/passwd
+                - /etc/sudoers
+                - /etc/gshadow
+                - /etc/group
+                - /etc/krb5.keytab
+                - /etc/ssh/
+                - /etc/ssl/private/
+                - /etc/pki/tls/private/
+                - /root/
+                - /proc/self/
+                - /proc/**/environ
+                - /proc/**/maps
+                - /proc/**/mem
+                - /proc/**/cmdline
+                - /proc/**/fd/
+                - /dev/mem
+                - /dev/kmem
+                - /dev/kcore
+                - /dev/port
+                - /etc/crontab
+                - /etc/cron.d/
+                - /etc/cron.daily/
+                - /etc/cron.hourly/
+                - /etc/cron.weekly/
+                - /etc/cron.monthly/
+                - /var/spool/cron/
+                - /etc/security/
+                - /etc/pam.d/
+                - /etc/postgresql/
+                - /etc/mysql/
+                - /etc/redis/
+                - /etc/kubernetes/
+                - /etc/docker/
+                - /.dockerenv
+                - /run/secrets/
+                - /var/run/secrets/
+                - /var/lib/postgres
+                - /var/lib/mysql
+                - /var/lib/secrets
+                - /var/log/auth.log
+                - /var/log/secure
+                - /var/log/audit/
+                - /home/*/.ssh
+                - /home/*/.aws
+                - /home/*/.gnupg
+                - /home/*/.docker
+                - /home/*/.netrc
+                - /home/*/.pgpass
+                - /home/*/.kube
+                - /home/*/.bash_history
+                - /home/*/.zsh_history
+                - /home/*/.psql_history
+                - /home/*/.mysql_history
+                - /home/*/.rediscli_history
+                - /home/*/.gitconfig
+                - /home/*/.git-credentials
+                - /home/*/.npmrc
+                - /home/*/.pypirc
+                - /home/*/.cargo/credentials
+    effect: deny
+    effect_config:
+      severity: critical
+      suggested_response: >
+        Reads of credential, secret, and system-data paths are denied.
+        The path was normalised (filepath.Clean + EvalSymlinks) and
+        screened for shell metacharacters before the prefix match.
+    citation:
+      document_id: doc-os-runbook
+      section: "2.2"
+      excerpt: >
+        Production-grade credential-path list including server-side
+        keys, container runtime secrets, /proc/<pid>/ sensitive
+        entries, cron and PAM, per-user dotfiles + history files,
+        and developer credential stores (npm, pip, cargo, git).

@@ -1,0 +1,155 @@
+# Mass Communication Guard — caps the blast radius of agent-driven
+# outbound email / SMS / push notifications.
+#
+# Threat model
+# ────────────
+# A marketing or support agent can compose and send. Without policy:
+#  1. Recipient count not capped → 1M-customer "marketing send"
+#  2. Off-segment targeting → marketing copy reaches all customers
+#  3. Banned-content (e.g. price guarantees, medical claims) shipped
+#  4. Sender-domain spoofing (impersonate finance@company.com)
+#
+# Pairs subject-line and body regex tripwires with structural caps.
+
+policy_id: pol-mass-communication-guard
+name: mass-communication-guard
+description: >
+  Recipient cap, banned-phrase tripwires, sender-domain allowlist,
+  approved-segment scope. Applies to email, SMS, and push channels.
+version: 1
+status: approved
+mode: enforcement
+
+scope:
+  tool_names:
+    - send_marketing_email
+    - send_bulk_sms
+    - send_push_notification
+    - blast_announcement
+  tool_groups:
+    - mass_communication
+
+rules:
+  # ── 1. Recipient cap — escalate above 1k ─────────────────────────
+  - rule_id: rule-mass-comm-recipient-escalate
+    name: Sends over 1,000 recipients require approval
+    rule_type: threshold
+    conditions:
+      field: parameters.recipient_count
+      operator: gt
+      value: 1000
+    effect: escalate
+    effect_config:
+      severity: medium
+      escalate_to: approver
+      timeout_minutes: 30
+    citation:
+      document_id: doc-marketing-ops
+      section: "6.1"
+      excerpt: >
+        Outbound communications with > 1,000 recipients require
+        approval to bound the blast radius of misconfigured agents.
+
+  # ── 2. Hard cap — never over 50k from an agent ───────────────────
+  - rule_id: rule-mass-comm-recipient-deny
+    name: Single send over 50k recipients denied
+    rule_type: threshold
+    conditions:
+      field: parameters.recipient_count
+      operator: gt
+      value: 50000
+    effect: deny
+    effect_config:
+      severity: critical
+      suggested_response: >
+        Recipient count above 50,000 must use the marketing
+        operations team's controlled batch tooling, not the
+        agent-facing send endpoint.
+    citation:
+      document_id: doc-marketing-ops
+      section: "6.2"
+      excerpt: >
+        Sends above 50,000 recipients are blocked at the agent
+        endpoint regardless of approval state.
+
+  # ── 3. Banned-content tripwires ──────────────────────────────────
+  # Compliance and brand violations. Each fires deny because they
+  # are legal-risk, not just blast-radius concerns.
+  - rule_id: rule-mass-comm-banned-claims
+    name: Marketing copy with disallowed compliance claims denied
+    rule_type: regex
+    conditions:
+      field: parameters.body
+      operator: regex
+      # Case-insensitive. The `.{0,40}?` between key tokens absorbs
+      # cheap obfuscation: "Guaranteed 50% returns", "cures all
+      # cancer types", "100% risk free trial". Cap the gap at 40 chars
+      # to keep the match local to the claim and avoid over-blocking
+      # benign copy that happens to use both words at distance.
+      value: '(?i)(guaranteed.{0,40}?returns?|cures?\b.{0,40}?\b(cancer|diabetes)|lifetime[\s-]+warranty|risk[-\s]*free|100[%\s]+risk[-\s]*free)'
+    effect: deny
+    effect_config:
+      severity: critical
+      suggested_response: >
+        Marketing copy contains a compliance-restricted claim. Route
+        the draft through Legal before sending.
+    citation:
+      document_id: doc-marketing-ops
+      section: "6.3"
+      excerpt: >
+        Disallowed claim categories (guaranteed returns, medical
+        cures, lifetime warranties, "risk-free") are blocked
+        regardless of channel.
+
+  # ── 4. Sender-domain allowlist ───────────────────────────────────
+  # The agent may impersonate `marketing@`, `support@`, `noreply@` —
+  # but not `finance@`, `ceo@`, `it-security@` or anything outside
+  # the company.com domain.
+  - rule_id: rule-mass-comm-sender-allowlist
+    name: Send from a non-allowlisted sender denied
+    rule_type: regex
+    conditions:
+      not:
+        field: parameters.from_address
+        operator: regex
+        value: '^(marketing|support|noreply|hello)@company\.com$'
+    effect: deny
+    effect_config:
+      severity: high
+      suggested_response: >
+        Sender address must be one of the approved agent personas
+        (marketing@, support@, noreply@, hello@). CEO / finance /
+        security senders are not delegated to agents.
+    citation:
+      document_id: doc-marketing-ops
+      section: "6.4"
+      excerpt: >
+        Agent-issued sends may use the marketing@, support@,
+        noreply@, and hello@ aliases only. Executive and finance
+        personas are not delegated.
+
+  # ── 5. Off-segment targeting flag ────────────────────────────────
+  # The marketing system maintains explicit segments named like
+  # `spring-2026` or `vip-q2` — at least one letter so a bare `""`
+  # or numeric placeholder doesn't satisfy the format. Encoded as
+  # `not regex` rather than `eq ""` so the rule also fires when the
+  # agent simply omits the segment_id key (engine returns false for
+  # missing fields → eq "" wouldn't fire → fail-open bypass).
+  - rule_id: rule-mass-comm-untargeted
+    name: Send without a structured segment_id is flagged for observation
+    rule_type: regex
+    conditions:
+      not:
+        field: parameters.segment_id
+        operator: regex
+        value: '^[a-z0-9]+(-[a-z0-9]+)+$'
+    effect: flag
+    effect_config:
+      severity: low
+    citation:
+      document_id: doc-marketing-ops
+      section: "6.5"
+      excerpt: >
+        Sends without an explicit segment_id are observation-flagged
+        so marketing ops can review whether the agent escaped the
+        intended audience.

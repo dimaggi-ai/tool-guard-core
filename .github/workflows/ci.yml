@@ -1,0 +1,128 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: test ${{ matrix.os }} / go ${{ matrix.go }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+        go:
+          - "1.25"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          cache: true
+
+      - name: Verify modules
+        run: go mod download && go mod verify
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build ./...
+
+      - name: Unit tests with -race
+        run: go test -race -count=1 ./pkg/... ./cmd/...
+
+      - name: Coverage on critical packages
+        run: |
+          go test -cover -count=1 ./pkg/audit ./pkg/engine ./pkg/sqlguard/mssql | tee coverage.txt
+          # Fail the build if a published bar drops. Engine bar is 85% —
+          # it's a larger surface than audit (classifiers + validators);
+          # local runs sit at 88%, the 85% floor gives churn headroom
+          # without letting it silently regress past the README claim.
+          awk '/pkg\/audit/         { if ($5+0 < 85.0) { print "AUDIT coverage below 85%";  exit 1 } }
+               /pkg\/engine/        { if ($5+0 < 85.0) { print "ENGINE coverage below 85%"; exit 1 } }
+               /pkg\/sqlguard\/mssql/ { if ($5+0 < 90.0) { print "MSSQL coverage below 90%"; exit 1 } }' coverage.txt
+
+      - name: Integration tests
+        run: go test -race -count=1 -tags=integration ./cmd/tg/... ./cmd/tg-proxy/...
+
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - name: Run govulncheck
+        run: govulncheck ./...
+
+  examples:
+    name: examples build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+      - name: Build all binaries (main + examples)
+        run: |
+          mkdir -p bin
+          go build -o bin/tg ./cmd/tg
+          go build -o bin/tg-proxy ./cmd/tg-proxy
+          go build -o bin/battle-test ./cmd/battle-test
+          go build -o bin/example-chain ./cmd/example-chain
+          go build -o bin/mcp-server ./examples/mcp-server
+          go build -o bin/content-gen-tools ./examples/content-gen/tools
+          go build -o bin/sample-tool ./examples/sample-app/tool
+          go build -o bin/sample-agent ./examples/sample-app/agent
+          go build -o bin/ollama-agent ./examples/ollama-agent
+      - name: Lint all shipped policy bundles
+        run: |
+          for p in policies/*.yaml \
+                   examples/finance-cfo/policies/*.yaml \
+                   examples/business-ops/policies/*.yaml \
+                   examples/postgres-attack/policies/*.yaml \
+                   examples/sample-app/policies/*.yaml \
+                   examples/content-gen/policies/*.yaml \
+                   examples/content-gen/policies-docker/*.yaml; do
+            out=$(./bin/tg lint -policy "$p" 2>&1)
+            # refund_cap.yaml intentionally lints with 2 warnings;
+            # accept that file specifically.
+            case "$p" in
+              policies/refund_cap.yaml) continue ;;
+            esac
+            if [ "$out" != "[]" ]; then
+              echo "FAIL: $p produced lint findings:"
+              echo "$out"
+              exit 1
+            fi
+            echo "OK: $p"
+          done
+
+  goreleaser-validate:
+    name: goreleaser config check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: Validate .goreleaser.yaml
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: check

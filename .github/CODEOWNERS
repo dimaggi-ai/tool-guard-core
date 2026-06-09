@@ -1,0 +1,25 @@
+# Code owners for Tool Guard Core
+#
+# Lines are matched in order; the LAST matching line wins.
+# See https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-security/customizing-your-repository/about-code-owners
+
+# Default owner — all PRs route here for review.
+*                                       @dimaggi-ai/maintainers
+
+# Engine + audit chain: safety-critical, requires deeper review.
+/pkg/audit/                             @dimaggi-ai/maintainers @dimaggi-ai/security
+/pkg/engine/                            @dimaggi-ai/maintainers @dimaggi-ai/security
+/pkg/sqlguard/                          @dimaggi-ai/maintainers @dimaggi-ai/security
+/pkg/llmguard/                          @dimaggi-ai/maintainers @dimaggi-ai/security
+/cmd/tg-proxy/                          @dimaggi-ai/maintainers @dimaggi-ai/security
+
+# Release / publishing pipeline — signing keys live in org secrets.
+/.goreleaser.yaml                       @dimaggi-ai/maintainers @dimaggi-ai/release
+/.github/workflows/release.yml          @dimaggi-ai/maintainers @dimaggi-ai/release
+
+# Security disclosure policy.
+/SECURITY.md                            @dimaggi-ai/maintainers @dimaggi-ai/security
+
+# Docs can be reviewed by anyone on the docs team.
+/docs/                                  @dimaggi-ai/maintainers @dimaggi-ai/docs
+/README.md                              @dimaggi-ai/maintainers @dimaggi-ai/docs
