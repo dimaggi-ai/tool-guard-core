@@ -1,0 +1,141 @@
+policy_id: pol-db-protect
+name: db-protect
+description: >
+  Pre-execution gate for the database tool. Splits rules cleanly by
+  category so an auditor can see which class each violation belongs to:
+    - DDL  : schema-level destructive ops (DROP, TRUNCATE, ALTER)
+    - DML  : row-level writes               (DELETE, UPDATE, INSERT)
+    - DCL  : access-control verbs           (GRANT, REVOKE)
+  Read tools (list_tables, describe_table, SELECT-only query) are
+  allowed. Every other path goes through the right deny rule and gets
+  its own citation in the audit chain.
+version: 1
+status: approved
+mode: enforcement
+
+scope:
+  tool_names:
+    - list_tables
+    - describe_table
+    - query
+    - drop_table
+    - truncate_table
+    - delete_rows
+  tool_groups:
+    - database_ops
+
+rules:
+  # ── Tool-level blunt denies (DDL/DML by tool name) ──────────────────
+  - rule_id: rule-ddl-block-drop
+    name: DDL — block drop_table tool
+    rule_type: threshold
+    conditions:
+      field: tool_name
+      operator: eq
+      value: drop_table
+    effect: deny
+    effect_config:
+      severity: critical
+      suggested_response: >
+        DROP TABLE is denied by policy. Schema destruction requires an
+        approved change ticket and is never executed by automated agents.
+    citation:
+      document_id: doc-db-runbook
+      section: "1.1"
+      excerpt: >
+        DDL — Destructive schema changes (DROP, TRUNCATE, ALTER) require
+        an approved change ticket and are never executed by automated
+        agents.
+
+  - rule_id: rule-ddl-block-truncate
+    name: DDL — block truncate_table tool
+    rule_type: threshold
+    conditions:
+      field: tool_name
+      operator: eq
+      value: truncate_table
+    effect: deny
+    effect_config:
+      severity: critical
+      suggested_response: TRUNCATE is denied by policy (DDL).
+    citation:
+      document_id: doc-db-runbook
+      section: "1.1"
+      excerpt: TRUNCATE is a DDL destructive operation and is denied.
+
+  - rule_id: rule-dml-block-delete-tool
+    name: DML — block delete_rows tool
+    rule_type: threshold
+    conditions:
+      field: tool_name
+      operator: eq
+      value: delete_rows
+    effect: deny
+    effect_config:
+      severity: high
+      suggested_response: >
+        DELETE statements are denied by policy (DML). Row mutations
+        require human approval.
+    citation:
+      document_id: doc-db-runbook
+      section: "1.2"
+      excerpt: >
+        DML — Row deletion is logged-only; row mutations (DELETE,
+        UPDATE, INSERT) require human approval.
+
+  # ── Semantic gate on the `query` tool's SQL (replaces 3 regex rules) ─
+  - rule_id: rule-query-must-be-clean-select
+    name: query — only a pure SELECT, no dynamic SQL, no program exec
+    rule_type: sql_classify
+    conditions:
+      and:
+        # Only fire for the read tool. tool_name + tool_group are scope
+        # but the engine still evaluates rules for every matched policy;
+        # the AND keeps the parser cost off other tools.
+        - field: tool_name
+          operator: eq
+          value: query
+        - sql_classify:
+            field: parameters.sql
+            dialect: postgres
+            require:
+              top_level_kinds: [SELECT]
+              no_dynamic_sql: true
+              no_program_exec: true
+              allowed_functions:
+                - count
+                - sum
+                - avg
+                - min
+                - max
+                - now
+                - current_timestamp
+                - current_date
+                - lower
+                - upper
+                - length
+                - coalesce
+                - nullif
+                - abs
+                - round
+                - cast
+                - to_char
+                - to_date
+                - to_number
+                - extract
+    effect: deny
+    effect_config:
+      severity: critical
+      suggested_response: >
+        The query tool accepts read-only SELECT statements only. The
+        SQL you sent is not a single top-level SELECT, calls a function
+        outside the allowlist, uses dynamic SQL (DO/EXECUTE/CALL), or
+        reaches the shell via COPY ... FROM/TO PROGRAM.
+    citation:
+      document_id: doc-db-runbook
+      section: "1.3"
+      excerpt: >
+        Defense in depth — the agent's query path is parsed by the
+        proxy's SQL classifier. Only a single top-level SELECT is
+        accepted; every other statement shape is denied regardless of
+        whether the destructive verb appears literally in the input.

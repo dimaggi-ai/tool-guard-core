@@ -1,0 +1,160 @@
+# Wire Transfer Guard — defends the high-risk outbound-payment surface.
+#
+# Wires are different from POs: irreversible once executed, large
+# amounts, often to international beneficiaries, and the standard
+# attack pattern is to swap the beneficiary at the last moment (BEC).
+# This policy is intentionally strict.
+
+policy_id: pol-wire-transfer-guard
+name: wire-transfer-guard
+description: >
+  All wires escalate. Wires to new beneficiaries deny. Wires to
+  sanctioned jurisdictions deny. Per-agent cumulative monetary cap
+  deny. Per-wire hard cap deny.
+version: 1
+status: approved
+mode: enforcement
+
+scope:
+  tool_names:
+    - send_wire
+    - initiate_wire_transfer
+    - ach_payment
+  tool_groups:
+    - high_risk_payment
+
+rules:
+  # ── 1. All wires escalate (no agent-autonomy here) ───────────────
+  # The CFO position is that NO wire is fully automated. Even small
+  # ones touch a human first. The escalate timeout is short for
+  # low-amount routine wires; deny for big ones takes precedence.
+  - rule_id: rule-wire-always-escalate
+    name: Every wire requires human approval
+    rule_type: threshold
+    conditions:
+      field: amount
+      operator: gt
+      value: 0
+    effect: escalate
+    effect_config:
+      severity: medium
+      escalate_to: approver
+      timeout_minutes: 30
+      suggested_response: >
+        Wire transfers are not auto-executed. The request has been
+        queued for human approval.
+    citation:
+      document_id: doc-finance-sop
+      section: "4.1"
+      excerpt: >
+        Per FY26 SOP §4.1, agent-initiated wire transfers are queued
+        for human approval regardless of amount. No agent has
+        unattended wire-execution authority.
+
+  # ── 2. Hard cap on per-wire amount ──────────────────────────────
+  - rule_id: rule-wire-amount-hard-cap
+    name: Single wire over $250,000 is denied outright
+    rule_type: threshold
+    conditions:
+      field: amount
+      operator: gt
+      value: 250000
+    effect: deny
+    effect_config:
+      severity: critical
+      suggested_response: >
+        Wires above $250,000 are not accepted on the agent-facing
+        endpoint. Route through the treasury approval workflow.
+    citation:
+      document_id: doc-finance-sop
+      section: "4.2"
+      excerpt: >
+        Wires exceeding $250,000 must route through the treasury
+        approval workflow, not the agent-facing wire endpoint.
+
+  # ── 3. Beneficiary allowlist by ID format ───────────────────────
+  # Inverted allowlist: only IDs that match B-NNNN (the Beneficiary
+  # Master format) are permitted. Anything else — NEW-7, vendor names,
+  # raw strings, opaque tokens — is denied. This is the same pattern
+  # as the vendor_id allowlist in purchase_guard; both fail closed.
+  - rule_id: rule-wire-deny-new-beneficiary
+    name: Wire to a beneficiary outside the Beneficiary Master is denied
+    rule_type: regex
+    conditions:
+      not:
+        field: parameters.beneficiary_id
+        operator: regex
+        value: '^B-[0-9]{4}$'
+    effect: deny
+    effect_config:
+      severity: critical
+      suggested_response: >
+        Beneficiary ID does not match the Beneficiary Master format
+        (B-NNNN). New beneficiaries require treasury onboarding
+        before any payment.
+    citation:
+      document_id: doc-finance-sop
+      section: "4.3"
+      excerpt: >
+        Wires to beneficiaries not present in the Beneficiary Master
+        are denied without exception; first payment requires manual
+        onboarding.
+
+  # ── 4. Sanctioned-jurisdiction deny ─────────────────────────────
+  # Two firing conditions OR'd:
+  #   a) the beneficiary_country value matches a sanctioned-list
+  #      pattern (alpha-2, alpha-3, or obvious country name)
+  #   b) beneficiary_country is missing or doesn't look like a valid
+  #      country code/name — fail closed when the boundary layer
+  #      hasn't populated this field at all
+  # The second branch closes the bypass where a hostile envelope
+  # simply omits beneficiary_country to dodge the sanctions tripwire.
+  - rule_id: rule-wire-sanctioned-country
+    name: Wire to a sanctioned-jurisdiction beneficiary is denied
+    rule_type: regex
+    conditions:
+      or:
+        - field: parameters.beneficiary_country
+          operator: regex
+          value: '(?i)\b(IR|IRN|Iran|KP|PRK|North\s+Korea|SY|SYR|Syria|CU|CUB|Cuba|RU|RUS|Russia|BY|BLR|Belarus)\b'
+        - not:
+            field: parameters.beneficiary_country
+            operator: regex
+            value: '^[A-Za-z][A-Za-z\s]+$'
+    effect: deny
+    effect_config:
+      severity: critical
+      suggested_response: >
+        Beneficiary country is on the sanctioned-jurisdictions list.
+        This payment cannot proceed via the automated endpoint.
+    citation:
+      document_id: doc-finance-sop
+      section: "4.4"
+      excerpt: >
+        Wires to beneficiaries in OFAC-sanctioned jurisdictions are
+        denied at the policy layer in addition to upstream sanctions
+        screening.
+
+  # ── 5. Daily cumulative monetary spend ──────────────────────────
+  # Uses the engine's generic monetary_sum_24h bucket; the CALLING
+  # RUNTIME aggregates PO + wire + expense calls into one figure per
+  # agent and supplies it on the envelope -- the proxy is stateless.
+  - rule_id: rule-wire-daily-cumulative
+    name: Cumulative agent monetary spend over $500k/day denied
+    rule_type: threshold
+    conditions:
+      field: context.verified.agent_velocity.monetary_sum_24h
+      operator: gt
+      value: 500000
+    effect: deny
+    effect_config:
+      severity: critical
+      suggested_response: >
+        Per-agent daily monetary spend ceiling reached. Subsequent
+        monetary actions on this agent are blocked until 00:00 UTC.
+    citation:
+      document_id: doc-finance-sop
+      section: "4.5"
+      excerpt: >
+        Per-agent cumulative monetary actions above $500,000 in any
+        24h window triggers an automatic block.

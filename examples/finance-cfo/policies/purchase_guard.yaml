@@ -1,0 +1,171 @@
+# Purchase Order Guard — CFO control plane for agent-driven procurement.
+#
+# Threat model
+# ────────────
+# An AI agent is wired to a procurement tool (place_purchase_order /
+# request_purchase). Without policy, a prompt-injected agent can:
+#  1. Issue a $1M PO instead of a $1k PO (single-amount blow-up)
+#  2. Drain the daily budget across many small POs (velocity attack)
+#  3. Pay an attacker-supplied "vendor" never seen before (vendor spoof)
+#  4. Move money outside business hours when approvers are asleep
+#
+# This policy closes 1-4 deterministically. It pairs an amount threshold
+# with a free-text regex tripwire on parameters.justification so lint
+# does not warn amount-without-semantic-check.
+
+policy_id: pol-purchase-guard
+name: purchase-order-guard
+description: >
+  Per-PO cap, daily cumulative cap, approved-vendor allowlist,
+  off-hours escalation, justification tripwire. Designed for agents
+  with autonomous procurement authority below a low cap and human
+  approval above it.
+version: 1
+status: approved
+mode: enforcement
+
+scope:
+  tool_names:
+    - place_purchase_order
+    - request_purchase
+    - create_po
+  tool_groups:
+    - procurement
+
+rules:
+  # ── 1. Per-PO hard cap ───────────────────────────────────────────
+  # `amount` is extracted from parameters.amount by the engine (see
+  # pkg/engine.FlattenEnvelope). String-shaped amounts ("10000.00")
+  # are coerced numerically so SDK serialization quirks don't bypass.
+  - rule_id: rule-po-amount-cap
+    name: Per-PO amount over $10k requires CFO approval
+    rule_type: threshold
+    conditions:
+      field: amount
+      operator: gt
+      value: 10000
+    effect: deny
+    effect_config:
+      severity: high
+      suggested_response: >
+        Purchase orders over $10,000 require CFO approval via the
+        approval portal. Split-PO bypasses are detected separately.
+    citation:
+      document_id: doc-finance-sop
+      section: "3.1"
+      excerpt: >
+        Per the FY26 Finance SOP, individual purchase orders exceeding
+        $10,000 require written CFO approval before submission.
+
+  # ── 2. Cumulative daily monetary spend cap ──────────────────────
+  # Uses the engine's generic monetary_sum_24h bucket. The CALLING
+  # RUNTIME aggregates monetary tool calls (POs, wires, expenses,
+  # comp) and supplies the figure on the envelope -- the proxy does
+  # not track state. There is no separate per-domain cap.
+  - rule_id: rule-po-daily-spend
+    name: Daily agent monetary spend over $50k blocks further automation
+    rule_type: threshold
+    conditions:
+      field: context.verified.agent_velocity.monetary_sum_24h
+      operator: gt
+      value: 50000
+    effect: deny
+    effect_config:
+      severity: critical
+      suggested_response: >
+        This agent has issued more than $50,000 of monetary actions
+        in the last 24h. Subsequent monetary actions are blocked
+        until 00:00 UTC; existing ones are unaffected.
+    citation:
+      document_id: doc-finance-sop
+      section: "3.2"
+      excerpt: >
+        Per-agent cumulative monetary actions above $50,000 in any
+        rolling 24h window trigger an automatic cooling-off period.
+
+  # ── 3. Approved-vendor allowlist ─────────────────────────────────
+  # vendor_id must match V-NNNN (4 digits) — the format finance issues
+  # to approved vendors. Anything else (NEW-, ACME, raw strings) is an
+  # unapproved supplier; escalate so a human can vet first use.
+  - rule_id: rule-po-vendor-allowlist
+    name: Vendor ID outside the approved format requires approval
+    rule_type: regex
+    conditions:
+      not:
+        field: parameters.vendor_id
+        operator: regex
+        value: '^V-[0-9]{4}$'
+    effect: escalate
+    effect_config:
+      severity: medium
+      escalate_to: approver
+      timeout_minutes: 30
+      suggested_response: >
+        Vendor ID does not match the approved-vendor format (V-NNNN).
+        New vendors must be onboarded via the Vendor Master process
+        before agent-issued payments.
+    citation:
+      document_id: doc-finance-sop
+      section: "3.3"
+      excerpt: >
+        Agent-issued POs are restricted to vendors in the approved
+        Vendor Master (IDs of the form V-NNNN). New vendor onboarding
+        requires a separate human-approved workflow.
+
+  # ── 4. Justification consistency tripwire ────────────────────────
+  # If the justification text claims an amount, that amount must not
+  # exceed the structured `amount` field. Catches the
+  # amount-fragmentation pattern where the LLM writes
+  # "buying $100k of widgets" but submits amount=100.
+  - rule_id: rule-po-justification-amount-tripwire
+    name: Justification mentions a dollar amount over the structured cap
+    rule_type: regex
+    conditions:
+      field: parameters.justification
+      operator: regex
+      # $ sign followed by 5+ digits/commas: matches "$10000",
+      # "$10,000", "$1,000,000" but not 4-digit PO numbers like
+      # "PO-1234" or order IDs.
+      value: '\$[0-9,]{5,}'
+    effect: escalate
+    effect_config:
+      severity: medium
+      escalate_to: approver
+      timeout_minutes: 30
+      suggested_response: >
+        The justification text references a dollar amount that may
+        not match the structured amount field. A human reviewer
+        should confirm intent before submission.
+    citation:
+      document_id: doc-finance-sop
+      section: "3.4"
+      excerpt: >
+        Free-text justifications that reference dollar amounts above
+        the structured cap must be reviewed for amount fragmentation.
+
+  # ── 5. Off-hours escalation ──────────────────────────────────────
+  # The upstream service determines whether the call lands outside
+  # business hours and passes a boolean. Keeping time logic out of
+  # the policy DSL means the SOP can change clock semantics (UTC vs
+  # local, holidays, on-call shift) without policy edits.
+  - rule_id: rule-po-off-hours
+    name: PO outside business hours requires approver awareness
+    rule_type: threshold
+    conditions:
+      field: parameters.outside_business_hours
+      operator: eq
+      value: true
+    effect: escalate
+    effect_config:
+      severity: low
+      escalate_to: approver
+      timeout_minutes: 60
+      suggested_response: >
+        Outside business hours, procurement routes to on-call
+        approval rather than direct automation.
+    citation:
+      document_id: doc-finance-sop
+      section: "3.5"
+      excerpt: >
+        Agent-issued procurement outside business hours follows the
+        on-call escalation path rather than direct automation.

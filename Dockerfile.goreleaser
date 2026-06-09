@@ -1,0 +1,18 @@
+# Release-only Dockerfile used by GoReleaser.
+#
+# GoReleaser's docker build context contains ONLY the prebuilt binaries it
+# already compiled (tg, tg-proxy, dropped flat in the context) plus this
+# file — NOT the source tree. So this image just wraps those binaries; it
+# does not compile anything. For a from-source build (local `docker build`)
+# use ./Dockerfile instead.
+FROM gcr.io/distroless/static-debian12:nonroot
+LABEL org.opencontainers.image.title="tool-guard-core"
+LABEL org.opencontainers.image.description="Runtime policy firewall for AI agents — Apache 2.0"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+LABEL org.opencontainers.image.source="https://github.com/dimaggi-ai/tool-guard-core"
+COPY tg       /usr/local/bin/tg
+COPY tg-proxy /usr/local/bin/tg-proxy
+USER nonroot:nonroot
+EXPOSE 9090
+ENTRYPOINT ["/usr/local/bin/tg-proxy"]
+CMD ["-listen=:9090"]

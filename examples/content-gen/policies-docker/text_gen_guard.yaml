@@ -1,0 +1,90 @@
+# Text Generation Guard — protects a free-text generator (chat
+# completion, summarisation, brainstorming) for forbidden categories
+# the LLM's own safety classifier may miss.
+#
+# Why a SECOND classifier?
+# ────────────────────────
+# Generator models (the one BEING called) have their own safety
+# tuning. But:
+#   - Their safety is INTERNAL to the generator vendor — opaque,
+#     un-auditable.
+#   - Different generators have very different safety bars
+#     (gpt-oss vs claude vs a fine-tuned local model).
+# Tool Guard's gate is the OPERATOR's policy — runs OUTSIDE the
+# generator's process, uses a known classifier (Gemma 4), and writes
+# every decision to the hash-chained audit log.
+
+policy_id: pol-text-gen-guard # docker variant
+name: text-generation-guard
+description: >
+  Pre-generation safety gate on free-text generators. Catches
+  prompts asking for forbidden categories before the upstream
+  generator sees them. Audit-traceable.
+version: 1
+status: approved
+mode: enforcement
+
+scope:
+  tool_names:
+    - generate_text
+    - complete_chat
+    - brainstorm
+    - summarise
+  tool_groups:
+    - generative_text
+
+rules:
+  # ── 1. Gemma classifier over the user prompt ────────────────────
+  - rule_id: rule-text-llm-classify
+    name: Gemma 4 classifies the text prompt as forbidden
+    rule_type: llm_classify
+    conditions:
+      llm_classify:
+        prompt_field: parameters.prompt
+        model: gemma4:e4b
+        timeout_seconds: 30
+        forbidden:
+          - weapons_instructions
+          - self_harm_instructions
+          - extremist_content
+          - bio_chem_synthesis
+          - csam
+          - hacking_instructions
+        ollama_url: http://ollama:11434
+    effect: deny
+    effect_config:
+      severity: critical
+      suggested_response: >
+        The text generator is bounded by a content policy. The
+        request's intent matches a forbidden category. Resubmit a
+        different prompt if you believe this is a false positive.
+    citation:
+      document_id: doc-content-policy
+      section: "3.1"
+      excerpt: >
+        Pre-generation Gemma 4 classifier closes the family of
+        prompt-jailbreak patterns the upstream generator's own
+        safety may miss.
+
+  # ── 2. Output token cap ─────────────────────────────────────────
+  # Runaway prompts that ask for 100k-token outputs are cost attacks
+  # and often hide harmful payloads in the tail.
+  - rule_id: rule-text-output-tokens-cap
+    name: max_tokens over 4096 requires approval
+    rule_type: threshold
+    conditions:
+      field: parameters.max_tokens
+      operator: gt
+      value: 4096
+    effect: escalate
+    effect_config:
+      severity: medium
+      escalate_to: approver
+      timeout_minutes: 30
+    citation:
+      document_id: doc-content-policy
+      section: "3.2"
+      excerpt: >
+        Per-call output token caps bound runaway-cost prompts. The
+        4096 cap is conservative; deployments raise it via the
+        approver workflow when justified.

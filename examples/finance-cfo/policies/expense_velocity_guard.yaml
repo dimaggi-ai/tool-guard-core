@@ -1,0 +1,83 @@
+# Expense Velocity Guard — catches the slow-drain attack class.
+#
+# Per-PO and per-wire caps stop a single big spend. They don't stop
+# an attacker (or a confused agent) from issuing ten $1k POs in five
+# minutes, or two hundred small reimbursements over a day. This policy
+# closes that surface by reading velocity-aggregated fields on the
+# context.
+
+policy_id: pol-expense-velocity-guard
+name: expense-velocity-guard
+description: >
+  Per-agent monetary-velocity ceilings across rolling windows.
+  Escalate at $5k/h, deny past $20k/24h on top of the per-action
+  caps. Designed to catch retry-loop spend, prompt-drift
+  over-spending, and slow-drain exfiltration.
+version: 1
+status: approved
+mode: enforcement
+
+scope:
+  tool_groups:
+    - expense
+    - reimbursement
+    - corporate_card
+
+rules:
+  - rule_id: rule-expense-hourly-escalate
+    name: Monetary velocity over $5k/h requires approver acknowledgement
+    rule_type: threshold
+    conditions:
+      field: context.verified.agent_velocity.monetary_sum_1h
+      operator: gt
+      value: 5000
+    effect: escalate
+    effect_config:
+      severity: medium
+      escalate_to: approver
+      timeout_minutes: 15
+    citation:
+      document_id: doc-finance-sop
+      section: "5.1"
+      excerpt: >
+        Per-agent monetary burn above $5,000 in any 1-hour window
+        triggers an awareness escalation to the on-call approver.
+
+  - rule_id: rule-expense-daily-deny
+    name: Monetary velocity over $20k/24h is denied
+    rule_type: threshold
+    conditions:
+      field: context.verified.agent_velocity.monetary_sum_24h
+      operator: gt
+      value: 20000
+    effect: deny
+    effect_config:
+      severity: critical
+      suggested_response: >
+        Per-agent daily monetary ceiling reached ($20k). Subsequent
+        monetary submissions on this agent are blocked until 00:00
+        UTC. Existing pending approvals are unaffected.
+    citation:
+      document_id: doc-finance-sop
+      section: "5.2"
+      excerpt: >
+        Per-agent cumulative monetary submissions above $20,000 in
+        any rolling 24h window are denied automatically until reset.
+
+  - rule_id: rule-expense-line-item-count
+    name: Single expense report with > 50 line items flagged for review
+    rule_type: threshold
+    conditions:
+      field: parameters.line_item_count
+      operator: gt
+      value: 50
+    effect: flag
+    effect_config:
+      severity: low
+    citation:
+      document_id: doc-finance-sop
+      section: "5.3"
+      excerpt: >
+        Expense reports above 50 line items are flagged for finance
+        review (legitimate batches exist; this is observation, not
+        block).

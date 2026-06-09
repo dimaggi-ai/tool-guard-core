@@ -1,0 +1,8 @@
+{
+  "agent_id": "support-agent-v2",
+  "session_id": "sess-001",
+  "org_id": "acme",
+  "tool_name": "issue_refund",
+  "tool_group": "monetary_outflow",
+  "parameters": {"amount": 1000, "reason": "Goodwill credit"}
+}

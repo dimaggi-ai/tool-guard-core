@@ -1,0 +1,65 @@
+name: Policy Protection
+
+# Proves the shipped policies actually BLOCK real attacks — not that the
+# code merely builds. Each job runs a worked example bundle's assertion
+# suite against a live tg-proxy and fails if any attack gets through.
+#
+#   deterministic — finance (CFO spend), business-ops (PII/comms/credit),
+#                   and the end-to-end sample app. No Docker, no LLM.
+#   sql-shell-path — postgres-attack: SQL injection, shell escape, and
+#                    path traversal blocked across 129 checks (28 + 45 +
+#                    56), zero bypasses, against a real Postgres + tools.
+#
+# The multimodal content-gen bundle is intentionally NOT here: it needs a
+# local Ollama + Gemma model (GPU), which standard GitHub runners don't
+# have. Run it yourself per examples/content-gen/README.md.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  deterministic:
+    name: deterministic policies (finance · business-ops · sample app)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.11"
+          cache: true
+      - name: Build binaries
+        run: make build
+
+      - name: Finance (CFO) — block over-cap spend, wires, velocity
+        run: make test-finance
+
+      - name: Business ops — block bulk PII export, mass-comms, credit abuse
+        run: make test-business
+
+      - name: Sample app — end-to-end deny + escalate, audit chain intact
+        run: make sample
+
+  sql-shell-path:
+    name: SQL injection · shell escape · path traversal blocked
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.11"
+          cache: true
+      - name: Build binaries
+        run: make build
+
+      # ubuntu-latest ships Docker + compose v2; no setup needed.
+      - name: postgres-attack — 28 + 45 + 56 checks, zero bypasses
+        run: make test-postgres-full
+
+      - name: Dump proxy logs on failure
+        if: failure()
+        run: |
+          cd examples/postgres-attack
+          docker compose logs tg-proxy | tail -100 || true

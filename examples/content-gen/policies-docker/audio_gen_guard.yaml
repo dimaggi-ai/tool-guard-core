@@ -1,0 +1,112 @@
+# Audio Generation Guard — protects an audio-generation tool
+# (ElevenLabs voice clone, Suno music, MusicGen, AudioLDM, etc.) with
+# a Gemma 4 text classifier over the prompt + speaker reference text.
+#
+# Why this matters
+# ────────────────
+# An AI agent wired to a text-to-speech / voice-clone / music
+# generator is the highest-risk audio surface:
+#   - Voice cloning of public figures (politicians, CEOs) for
+#     disinformation
+#   - Copyrighted lyrics / song generation
+#   - Threatening / harassing audio
+#   - Self-harm or incitement audio
+# The Gemma classifier catches the obvious cases. It reads the PROMPT
+# only -- it cannot compare against a reference voice sample.
+
+policy_id: pol-audio-gen-guard # docker variant
+name: audio-generation-guard
+description: >
+  Gates audio-generation tool calls. Regex prefilter for named-figure
+  voice cloning + Gemma 4 semantic classification for harder cases.
+version: 1
+status: approved
+mode: enforcement
+
+scope:
+  tool_names:
+    - generate_audio
+    - text_to_speech
+    - clone_voice
+    - generate_music
+    - generate_song
+  tool_groups:
+    - generative_audio
+
+rules:
+  # ── 1. Named-public-figure voice clone deny ─────────────────────
+  # The list is illustrative -- maintain your own list for production
+  # deployments. Catches the obvious surface; Gemma handles the
+  # obfuscated cases below.
+  - rule_id: rule-audio-named-figure-deny
+    name: Prompt names a public figure for voice cloning
+    rule_type: regex
+    conditions:
+      field: parameters.prompt
+      operator: regex
+      value: '(?i)\b(voice\s+of|sound\s+like|clone\s+(the\s+)?voice\s+of|make\s+(it\s+)?sound\s+like)\s+(barack\s+obama|donald\s+trump|joe\s+biden|elon\s+musk|taylor\s+swift|the\s+pope)\b'
+    effect: deny
+    effect_config:
+      severity: critical
+      suggested_response: >
+        Voice cloning of named public figures is not supported. The
+        policy is not user-bypassable.
+    citation:
+      document_id: doc-content-policy
+      section: "2.1"
+      excerpt: >
+        Deterministic prefilter for named-figure voice cloning. The
+        list of names lives in an external registry in production
+        deployments.
+
+  # ── 2. Gemma classifier over the prompt ─────────────────────────
+  - rule_id: rule-audio-llm-classify
+    name: Gemma 4 classifies the audio prompt as forbidden
+    rule_type: llm_classify
+    conditions:
+      llm_classify:
+        prompt_field: parameters.prompt
+        model: gemma4:e4b
+        timeout_seconds: 30
+        forbidden:
+          - voice_clone_public_figure
+          - copyrighted_lyrics
+          - threats_or_harassment
+          - self_harm
+          - extremist_audio
+          - csam_audio
+        ollama_url: http://ollama:11434
+    effect: deny
+    effect_config:
+      severity: critical
+      suggested_response: >
+        The audio generator is bounded by a content policy. The
+        prompt's intent matches a forbidden category.
+    citation:
+      document_id: doc-content-policy
+      section: "2.2"
+      excerpt: >
+        Semantic gate via a local Gemma 4 model. Catches paraphrased
+        and lyric-quoting attacks that the keyword denylist misses.
+
+  # ── 3. Length / cost cap ────────────────────────────────────────
+  # An adversarial prompt can request a 60-minute audio file to
+  # exhaust compute. Cap at policy.
+  - rule_id: rule-audio-duration-cap
+    name: Audio duration over 300 seconds requires approval
+    rule_type: threshold
+    conditions:
+      field: parameters.duration_seconds
+      operator: gt
+      value: 300
+    effect: escalate
+    effect_config:
+      severity: medium
+      escalate_to: approver
+      timeout_minutes: 30
+    citation:
+      document_id: doc-content-policy
+      section: "2.3"
+      excerpt: >
+        Audio generation > 5 minutes per call is gated through
+        approver workflow to bound runaway-cost attacks.

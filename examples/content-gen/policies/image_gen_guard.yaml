@@ -1,0 +1,137 @@
+# Image Generation Guard — protects an image-generation tool surface
+# (Stable Diffusion, DALL-E, Midjourney, Flux, etc.) by asking a local
+# Gemma 4 vision model to classify the PROMPT (and, for image-edit
+# tools, the source image) against a forbidden-categories list.
+#
+# Why this matters
+# ────────────────
+# An AI agent wired to an image generator can be steered (prompt
+# injection, jailbreak, hallucinated reasoning) into asking for:
+#   - CSAM
+#   - Deepfakes of real people (politicians, celebrities)
+#   - Copyrighted-style infringement (Studio Ghibli, Disney, Pixar)
+#   - Weapons schematics
+#   - Self-harm imagery
+# Text-only regex rules cannot catch every paraphrase. The hybrid
+# approach lets a Gemma 4 multimodal model judge the semantic intent.
+#
+# Run locally: requires Ollama with a Gemma 4 vision-capable variant
+# pulled (gemma4:e4b is the default; gemma4:12b is more accurate but
+# slower). See examples/content-gen/README.md.
+
+policy_id: pol-image-gen-guard
+name: image-generation-guard
+description: >
+  Gates image-generation tool calls with a Gemma 4 vision classifier.
+  Pure-text fallback rules close known regex-detectable patterns
+  before the LLM is consulted (cheaper + faster).
+version: 1
+status: approved
+mode: enforcement
+
+scope:
+  tool_names:
+    - generate_image
+    - image_to_image
+    - edit_image
+    - inpaint_image
+  tool_groups:
+    - generative_image
+
+rules:
+  # ── 1. Cheap deterministic prefilter ─────────────────────────────
+  # A short regex denylist that catches obvious-keyword attacks
+  # before paying the Gemma latency. The regex is intentionally
+  # narrow (false positives are tolerable here because Gemma still
+  # gets a vote on edge cases).
+  #
+  # SECURITY NOTICE: this regex is a content-safety DENYLIST. It
+  # contains tokens that automated content scanners may flag — that
+  # is the intended function (matching them in agent prompts so the
+  # call is denied). The file ships in a security-tooling OSS repo
+  # alongside an explicit OSS-licence statement; the strings here are
+  # PATTERN definitions, not content samples.
+  - rule_id: rule-image-keyword-deny
+    name: Image prompt contains explicit forbidden keywords
+    rule_type: regex
+    conditions:
+      field: parameters.prompt
+      operator: regex
+      value: '(?i)\b(child\s+(porn|sex)|csam|nude\s+child|underage\s+nude|deepfake\s+(of\s+)?(president|politician|celebrity))\b'
+    effect: deny
+    effect_config:
+      severity: critical
+      suggested_response: >
+        The prompt names a category we do not generate. This decision
+        is final at the policy layer.
+    citation:
+      document_id: doc-content-policy
+      section: "1.1"
+      excerpt: >
+        Explicit-keyword denylist for prompts that name CSAM or named
+        public-figure deepfakes. Deterministic, runs before the LLM
+        classifier to bound cost.
+
+  # ── 2. Semantic classifier — Gemma 4 reads the prompt ───────────
+  # The classifier is asked to label the prompt against the closed
+  # set below. Any non-"safe" label fires the rule. Confidence below
+  # 0.6 is treated as "ambiguous" → fail-closed deny.
+  - rule_id: rule-image-llm-classify
+    name: Gemma 4 classifies the image prompt as forbidden content
+    rule_type: llm_classify
+    conditions:
+      llm_classify:
+        prompt_field: parameters.prompt
+        # For image-edit / inpaint tools we also have a source
+        # image — letting Gemma SEE the image catches steganographic
+        # / hidden-prompt attempts that text alone misses.
+        image_url_field: parameters.source_image_url
+        model: gemma4:e4b
+        # Default ollama_url is http://localhost:11434. Container
+        # deployments override via the env file.
+        timeout_seconds: 30
+        forbidden:
+          - csam
+          - real_person_likeness
+          - weapons
+          - self_harm
+          - copyrighted_style
+          - extremist_content
+    effect: deny
+    effect_config:
+      severity: critical
+      suggested_response: >
+        The image generator is bounded by a content policy. The
+        prompt's intent matches a forbidden category. Review and
+        resubmit if you believe this was a false positive.
+    citation:
+      document_id: doc-content-policy
+      section: "1.2"
+      excerpt: >
+        Semantic gate via a local Gemma 4 vision model. Catches
+        paraphrased and image-conditioned attacks the regex layer
+        cannot. Hybrid evaluation — fast deterministic checks first,
+        LLM verdict second.
+
+  # ── 3. Output-size cap escalation ───────────────────────────────
+  # Generating thousands of images in one call is a velocity attack
+  # (cost runaway, batched CSAM probing). Cap per-call count.
+  - rule_id: rule-image-batch-size
+    name: Image batch size over 16 requires approval
+    rule_type: threshold
+    conditions:
+      field: parameters.num_images
+      operator: gt
+      value: 16
+    effect: escalate
+    effect_config:
+      severity: medium
+      escalate_to: approver
+      timeout_minutes: 30
+    citation:
+      document_id: doc-content-policy
+      section: "1.3"
+      excerpt: >
+        Per-call batch size caps bound the cost of a runaway prompt
+        and reduce the data point an attacker gets from a single
+        probe.

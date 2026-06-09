@@ -1,0 +1,65 @@
+version: 2
+updates:
+  # Go modules — direct deps weekly, security alerts immediately.
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "go"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    groups:
+      # Group golang.org/x/* updates so we don't get a flood of
+      # separate PRs every week.
+      golang-x:
+        patterns:
+          - "golang.org/x/*"
+      # Group all modernc.org/* indirects (parser internals).
+      modernc:
+        patterns:
+          - "modernc.org/*"
+
+  # GitHub Actions versions in our workflows.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "ci"
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+
+  # Container base images (Dockerfile + examples Dockerfiles).
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 2
+    labels:
+      - "dependencies"
+      - "docker"
+    commit-message:
+      prefix: "docker"
+      include: "scope"
+
+  - package-ecosystem: "docker"
+    directory: "/examples/content-gen/tools"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 1
+    labels:
+      - "dependencies"
+      - "docker"
+    commit-message:
+      prefix: "docker"
+      include: "scope"

@@ -1,0 +1,98 @@
+# End-to-end content-gen demo stack.
+#
+# Three services:
+#   - tg-proxy     : Tool Guard policy firewall (the thing under test)
+#   - tools        : mock image/audio/text generators (the "tool" side)
+#   - ollama       : local Ollama running gemma4:e4b for llm_classify
+#
+# Bring up:
+#
+#   ollama pull gemma4:e4b       # on the host or run via the ollama service
+#   docker compose up --build
+#
+# Then in another shell:
+#
+#   PROXY=http://127.0.0.1:19091/evaluate bash test-policies.sh
+#
+# The point of the stack: prove that Tool Guard intercepts and denies
+# generative-AI tool calls BEFORE they reach the (mock) generator. The
+# tools service logs every call it actually received — if Tool Guard
+# is working, denied calls do NOT appear in that log.
+
+services:
+  ollama:
+    # Pulled from the official image. The first run pulls gemma4:e4b
+    # into a named volume so subsequent restarts are cold-start-fast.
+    image: ollama/ollama:latest
+    container_name: contentgen-ollama
+    volumes:
+      - ollama-models:/root/.ollama
+    ports:
+      - "11435:11434"
+    # Allocate GPU if available; falls back to CPU otherwise. The
+    # `gpus: all` works on Linux with the NVIDIA container toolkit.
+    # Remove this block on CPU-only hosts.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  ollama-pull-model:
+    # One-shot init container that ensures gemma4:e4b is present
+    # before tg-proxy starts evaluating. Exits 0 once the pull is done.
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - "OLLAMA_HOST=http://ollama:11434 ollama pull gemma4:e4b"
+    restart: "no"
+
+  tg-proxy:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: contentgen-tg-proxy
+    user: "0"
+    depends_on:
+      ollama-pull-model:
+        condition: service_completed_successfully
+    command:
+      - "-listen=:9090"
+      - "-policy-dir=/policies"
+      - "-audit-log=/var/lib/tg/decisions.jsonl"
+      - "-fail-closed=true"
+      - "-unknown-tools-deny=true"
+      - "-audit-sync-mode=interval"
+      - "-audit-sync-every=10"
+    volumes:
+      # policies-docker/ contains the same three policies as policies/
+      # but with ollama_url pointing at the docker-internal hostname
+      # `http://ollama:11434`. The local-Ollama path uses ./policies/.
+      - ./policies-docker:/policies:ro
+      - ./audit:/var/lib/tg
+    ports:
+      - "19091:9090"
+
+  tools:
+    build:
+      context: ../..
+      dockerfile: examples/content-gen/tools/Dockerfile
+    container_name: contentgen-tools
+    command:
+      - "-listen=:18091"
+    ports:
+      - "18091:18091"
+
+volumes:
+  ollama-models:
+    driver: local
