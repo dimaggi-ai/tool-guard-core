@@ -1,0 +1,15 @@
+{
+  "_comment": "Install at ~/.gemini/config/hooks.json (user) or .agents/hooks.json (workspace). Replace __HOOK_DIR__ with the absolute path to examples/coding-agent-guard/hooks. `install.sh antigravity` does this for you. Antigravity's shell tool is named run_command and it reads the decision from stdout, so it uses antigravity-hook.sh.",
+  "toolguard-coding-agent-guard": {
+    "PreToolUse": [
+      {
+        "matcher": "run_command",
+        "hooks": [
+          {
+            "command": "__HOOK_DIR__/antigravity-hook.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

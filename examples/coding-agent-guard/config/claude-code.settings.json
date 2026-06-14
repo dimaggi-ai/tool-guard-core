@@ -1,0 +1,16 @@
+{
+  "_comment": "Merge this PreToolUse block into ~/.claude/settings.json (or .claude/settings.json in a project). Replace __HOOK_DIR__ with the absolute path to examples/coding-agent-guard/hooks. `install.sh claude` does this for you.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__HOOK_DIR__/anthropic-hook.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

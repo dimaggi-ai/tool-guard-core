@@ -1,0 +1,84 @@
+# coding-agent-guard — a runtime firewall for the shell commands that AI
+# coding agents (Claude Code, OpenAI Codex, Google Antigravity) try to run.
+#
+# Tool Guard Core evaluates every `Bash` / `run_command` tool call against
+# these rules BEFORE the agent executes it. The four engine effects map onto
+# each agent's native hook decision:
+#
+#   deny     -> never run (Claude/Codex: exit 2 | Antigravity: "deny")
+#   escalate -> hold for a human         (... exit 2 | ... "ask")
+#   allow    -> let it run               (... exit 0 | ... "allow")
+#
+# DESIGN NOTE — defense in depth, never fail to "allow":
+# Rather than one fragile mega-regex, each rule is an AND/OR tree of small,
+# independent regexes (the engine supports `and`/`or`/`not`). The escalate
+# rule fires on ANY recursive-or-force `rm`, so even a delete shape the deny
+# rule's target matcher does not recognize still gets HELD for a human — it is
+# never silently allowed. The deny rule is the stricter overlay for deletes
+# rooted at `/`, a top-level system dir, or $HOME/~ (deny outranks escalate).
+# This is why `rm -rf /`, `rm -r -f /`, `rm --recursive --force /`, and
+# `rm -fR /home` are all caught — bundled, separated, long-form, or uppercase.
+policy_id: pol-coding-agent-guard
+status: approved
+mode: enforcement
+scope:
+  # The shell-execution tool is named differently per agent; the adapters
+  # normalize to `bash`, but we list them all so the policy reads honestly.
+  tool_names: [bash, shell, run_command]
+  # Also scope by group so a sibling shell tool can't slip the rule by using
+  # a name we didn't enumerate (the adapters tag every call tool_group: shell).
+  tool_groups: [shell]
+rules:
+  # DENY — a recursive `rm` whose target is the filesystem root, a top-level
+  # system directory, or the user's home. Catastrophic; never auto-run.
+  # Matches: rm -rf /  |  rm -r -f /  |  rm --recursive --force /  |
+  #          rm -fR /home  |  rm -rf "/"  |  rm -rf /etc  |  rm -rf $HOME  |
+  #          rm -rf ~  |  /bin/rm -rf /  |  rm -rf /*
+  - rule_id: rule-deny-rm-recursive-root
+    rule_type: regex
+    conditions:
+      and:
+        - field: parameters.command
+          operator: regex
+          value: '(^|[\s;&|(])(\S+/)?rm(\s|$)'
+        - field: parameters.command
+          operator: regex
+          value: '(--recursive|-[a-zA-Z]*[rR])'
+        - field: parameters.command
+          operator: regex
+          value: '(\s|["''=])(/\*?|/(bin|boot|dev|etc|home|lib|lib64|opt|proc|root|sbin|srv|sys|usr|var)/?|\$\{?HOME\}?|~)(\s|["'';&|]|$)'
+    effect: deny
+    citation:
+      excerpt: "Recursive delete of / a system directory or HOME is never permitted."
+
+  # ESCALATE — any other recursive OR force `rm`. The safety net: a destructive
+  # delete the deny rule's target matcher did not flag still gets held for a
+  # human, never silently allowed.
+  - rule_id: rule-escalate-rm
+    rule_type: regex
+    conditions:
+      and:
+        - field: parameters.command
+          operator: regex
+          value: '(^|[\s;&|(])(\S+/)?rm(\s|$)'
+        - or:
+            - field: parameters.command
+              operator: regex
+              value: '(--recursive|-[a-zA-Z]*[rR])'
+            - field: parameters.command
+              operator: regex
+              value: '(--force|-[a-zA-Z]*f)'
+    effect: escalate
+    citation:
+      excerpt: "A recursive or forced rm requires manual review before it runs."
+
+  # ESCALATE — history-rewriting or outbound git actions; hold for a human.
+  - rule_id: rule-escalate-git-mutations
+    rule_type: regex
+    conditions:
+      field: parameters.command
+      operator: regex
+      value: '\bgit\s+(push\b|reset\s+--hard|clean\b[^|;&]*\s-[a-zA-Z]*f|rebase\b|filter-repo|filter-branch|update-ref\s+-d|branch\s+-D)'
+    effect: escalate
+    citation:
+      excerpt: "Outbound or history-rewriting git actions require manual approval."

@@ -160,6 +160,14 @@ the audit chain offline, demonstrating it is tamper-evident.
   figures, copyrighted style, weapons / self-harm / extremist
   prompts. 16 deterministic assertions against real Gemma 4 e4b
   (~600 ms per call). Requires Ollama with `gemma4:e4b` pulled.
+- [`examples/coding-agent-guard/`](examples/coding-agent-guard/README.md) —
+  **one policy gating three AI coding agents** at the hook layer:
+  Claude Code, OpenAI Codex, and Google Antigravity (`agy`). The same
+  `policy.yaml` decides which shell commands each agent may run
+  (`rm -rf /` denied, `git push` / `reset --hard` held for a human, the
+  rest allowed). `./run.sh` proves it offline for all three; `./install.sh`
+  wires the PreToolUse hooks into whichever agents you have. No LLM, no
+  Docker.
 
 Requires Go 1.25+. The default binary is pure Go — no cgo, no
 database, no network services — and links one runtime library,
@@ -425,6 +433,12 @@ examples/mcp-server/      MCP (Model Context Protocol) bridge — a
                           gated tools to any MCP client (Claude
                           Desktop, Continue.dev, MCP-rs). Every
                           tools/call goes through tg-proxy /evaluate.
+
+examples/coding-agent-guard/  PreToolUse hooks that gate shell commands
+                          for Claude Code, OpenAI Codex, and Google
+                          Antigravity from one policy.yaml. `./run.sh`
+                          shows all three offline; `./install.sh` wires
+                          the hooks into the agents you have installed.
 ```
 
 The engine package has zero I/O and zero external dependencies beyond
