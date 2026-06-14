@@ -39,7 +39,7 @@ rules:
 ```
 
 `tg lint -policy <file>` validates the shape and runs eight
-checks — warnings and errors (see [`tg lint` heuristics](#tg-lint-heuristics)).
+checks - warnings and errors (see [`tg lint` heuristics](#tg-lint-heuristics)).
 A policy that lints with `error`-severity findings will be REFUSED
 by `tg-proxy` at load.
 
@@ -48,7 +48,7 @@ by `tg-proxy` at load.
 `scope.tool_names` and `scope.tool_groups` are independently
 matched: either the envelope's `tool_name` is in `tool_names`, OR
 its `tool_group` is in `tool_groups`. A policy with empty scope
-matches every envelope — `tg lint` warns about this as
+matches every envelope - `tg lint` warns about this as
 `policy-scope-leak`.
 
 The recommended pattern is BOTH a `tool_names` allowlist AND a
@@ -58,8 +58,8 @@ tool in the same group).
 
 ## Modes
 
-- `enforcement` — the decision returned to the agent is applied.
-- `shadow` — the decision is computed and audited but the agent is
+- `enforcement` - the decision returned to the agent is applied.
+- `shadow` - the decision is computed and audited but the agent is
   always told `allowed`. Useful for rolling out a new rule and
   watching how it would have behaved against real traffic.
 
@@ -78,7 +78,7 @@ operating in and what the "would-be" decision would have been.
 Severity hierarchy: `deny` > `escalate` > `flag` > `allow`. When
 multiple rules fire, the strongest effect wins.
 
-## Conditions — the leaf shapes
+## Conditions - the leaf shapes
 
 ### Field comparison
 
@@ -214,8 +214,8 @@ conditions:
 
 `not:` may wrap a leaf condition (as above) but **not** a classifier
 (`sql_classify` / `path_classify` / `shell_classify` / `llm_classify`).
-Classifiers are fail-closed — they fire on malformed or adversarial input
-so a deny rule trips — and negating one inverts that into fail-OPEN.
+Classifiers are fail-closed - they fire on malformed or adversarial input
+so a deny rule trips - and negating one inverts that into fail-OPEN.
 `ValidatePolicy` rejects any classifier under a `not:` node; express the
 allowed set positively (e.g. `require.top_level_kinds: [SELECT]`) instead.
 
@@ -226,7 +226,7 @@ allowed set positively (e.g. `require.top_level_kinds: [SELECT]`) instead.
 
 | Rule | Severity | Catches |
 |---|---|---|
-| `policy-scope-leak` | warn | Empty scope — policy matches every call |
+| `policy-scope-leak` | warn | Empty scope - policy matches every call |
 | `scope-no-tool-group` | warn | Tool-substitution bypass surface |
 | `amount-without-semantic-check` | warn | Free-text amount fragmentation; suppressed when a compiling regex / contains rule on a non-amount free-text field is present |
 | `rule-missing-citation` | warn | Auditor traceability gap |
@@ -264,7 +264,7 @@ citation:
     $10,000 require written CFO approval before submission.
 ```
 
-This is what the auditor sees on the trace — the WHY behind the
+This is what the auditor sees on the trace - the WHY behind the
 decision. `tg lint` warns on rules with missing citations.
 
 ## Example policy bundles

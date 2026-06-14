@@ -1,4 +1,4 @@
-# Escalation flow — human-in-the-loop approvals
+# Escalation flow - human-in-the-loop approvals
 
 Tool Guard supports policy-driven escalation: a rule's `effect:
 escalate` registers the call as a pending decision and returns
@@ -50,7 +50,7 @@ tg-proxy -approver-token=<strong-random-string>
 ```
 
 When `-approver-token` is empty (default), the mutating endpoints
-return 401 — escalation lives in the audit log but cannot be
+return 401 - escalation lives in the audit log but cannot be
 resolved. Set the flag to enable the flow.
 
 The token is a single shared bearer string. For per-operator identity,
@@ -116,7 +116,7 @@ def call_with_approval(envelope):
     r = requests.post(PROXY + "/evaluate", json=envelope)
     body = r.json()
     if body["action_taken"] != "escalated":
-        return body  # allow or deny — done
+        return body  # allow or deny - done
 
     poll_url = PROXY + body["poll_url"]
     deadline = time.time() + 30 * 60  # 30 min
@@ -124,7 +124,7 @@ def call_with_approval(envelope):
         time.sleep(15)
         e = requests.get(poll_url).json()
         if e["state"] == "approved":
-            # Approval IS the authorization — call the tool now.
+            # Approval IS the authorization - call the tool now.
             # Do NOT re-POST the same envelope to /evaluate: the proxy
             # rejects a re-used envelope_id (collision guard, below).
             return {"action_taken": "allowed", "via": "human-approval"}
@@ -137,7 +137,7 @@ def call_with_approval(envelope):
 
 The `envelope_id` is the escalation's identity. Once an escalation for
 an `envelope_id` exists, a second `/evaluate` carrying the same
-`envelope_id` is **rejected** rather than re-evaluated — this guards
+`envelope_id` is **rejected** rather than re-evaluated - this guards
 against an authorization-confusion bypass where a caller reuses a
 known-approved `envelope_id` with a fresh payload. So a poll that
 returns `approved` IS the authorization to proceed: call the tool,
@@ -147,7 +147,7 @@ don't re-evaluate. Use a fresh `envelope_id` for every new tool call.
 
 If a stricter policy (`effect: deny`) and the escalation policy
 (`effect: escalate`) both match the same envelope, the proxy returns
-the strictest result — deny wins. The escalation rule only takes
+the strictest result - deny wins. The escalation rule only takes
 effect when no deny rule fires for the same call.
 
 Scope escalation policies to a specific tool name, agent_id, or
@@ -159,15 +159,15 @@ audit context.
 ## Audit chain
 
 Every transition (`create`, `approve`, `deny`, `expire`) emits a new
-hash-chained entry. `tg verify` walks the full chain — including
-rotated files — and surfaces the lifecycle as a sequence of linked
+hash-chained entry. `tg verify` walks the full chain - including
+rotated files - and surfaces the lifecycle as a sequence of linked
 records.
 
 ## Storage
 
 The pending-escalation store is in-memory for v0.1.0, bounded
 (`defaultEscalationMaxEntries = 10_000`) with LRU eviction of the
-oldest **resolved** entries — pending requests are never silently
+oldest **resolved** entries - pending requests are never silently
 dropped, only ones already approved or denied. A proxy restart
 discards all pending entries (the agent's poll returns 404, which the
 client treats as expired). File-backed persistence so restarts

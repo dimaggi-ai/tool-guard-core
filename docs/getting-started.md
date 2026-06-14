@@ -1,7 +1,7 @@
 # Getting Started
 
 Tool Guard Core is a single Go binary plus a YAML policy file. From a
-clean checkout, the path to a working policy firewall is five
+clean checkout, the path to a working policy decision endpoint is five
 commands.
 
 ## Prerequisites
@@ -36,7 +36,7 @@ The default build is pure Go, statically linked, ~10 MB. No cgo.
 ./bin/tg lint -policy policies/refund_cap.yaml
 ```
 
-You will see two warnings — `scope-no-tool-group` and
+You will see two warnings - `scope-no-tool-group` and
 `amount-without-semantic-check`. Both are intentional in this
 quick-start file; they showcase how `tg lint` catches real bypass
 classes before policies reach production. The `policies/refund_cap_strict.yaml`
@@ -108,7 +108,7 @@ Output:
 }
 ```
 
-Flip one byte in the file and re-verify — `tg verify` reports the
+Flip one byte in the file and re-verify - `tg verify` reports the
 exact line where the chain broke and exits 5.
 
 ## Next steps

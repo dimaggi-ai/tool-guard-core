@@ -5,11 +5,11 @@ Tool Guard Core ships in two shapes: a **runtime HTTP service**
 `pkg/domain`). Pick the shape that matches how your agent is built; the
 underlying engine is identical and produces the same audit traces.
 
-- **Runtime service** — your agent talks to `tg-proxy` over HTTP.
+- **Runtime service** - your agent talks to `tg-proxy` over HTTP.
   Easiest to drop in, language-agnostic, lets you scale Tool Guard
   independently of your agent. This is what
   [`examples/sample-app/`](../examples/sample-app/) demonstrates.
-- **Embedded library** — your Go agent calls `engine.Evaluator.Evaluate`
+- **Embedded library** - your Go agent calls `engine.Evaluator.Evaluate`
   directly. Zero network hop, you own the lifecycle. Best when the
   agent is already a Go service.
 
@@ -88,7 +88,7 @@ Response (`HTTP 200`):
 
 In your agent code: call the tool when `action_taken` is `allowed`
 (enforcement), `allowed_shadow` (shadow), or `flagged`. A `flag` effect
-is a recorded near-miss — the call still proceeds, but the decision is
+is a recorded near-miss - the call still proceeds, but the decision is
 logged for review. `denied` means do not call the tool; `escalated`
 means wait for human approval (see [escalation.md](escalation.md))
 before calling it.
@@ -237,7 +237,7 @@ func NewGuard(policies []domain.Policy, logPath string) (*Guard, error) {
 func (g *Guard) Check(ctx context.Context, env *domain.ActionEnvelope) (bool, *domain.EvaluationResult) {
     result := g.eval.Evaluate(env, g.policies, domain.PolicyModeEnforcement)
     // Append to the audit chain. Use the CANONICAL hash
-    // (ComputeCanonicalTraceHash) — it covers the decision and the
+    // (ComputeCanonicalTraceHash) - it covers the decision and the
     // fields that produce it (the exact set is canonicalTraceV1 in
     // pkg/audit/canonical.go) and is what `tg verify` recomputes. The
     // legacy ComputeTraceHash covers only six identity fields and will
@@ -265,7 +265,7 @@ func (g *Guard) Check(ctx context.Context, env *domain.ActionEnvelope) (bool, *d
     _ = g.auditEnc.Encode(trace)
     g.lastHash = trace.TraceHash
 
-    // A `flag` effect is a recorded near-miss — the call still proceeds.
+    // A `flag` effect is a recorded near-miss - the call still proceeds.
     return result.ActionTaken == domain.ActionAllowed ||
            result.ActionTaken == domain.ActionAllowedShadow ||
            result.ActionTaken == domain.ActionFlagged, result
@@ -281,7 +281,7 @@ if !ok {
     // model so it knows what to say to the user.
     return result.SuggestedResponse, nil
 }
-// Allowed — call the real tool.
+// Allowed - call the real tool.
 return realTool.Execute(ctx, envelope)
 ```
 

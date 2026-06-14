@@ -14,7 +14,7 @@ read-only.
 ```ini
 # /etc/systemd/system/tg-proxy.service
 [Unit]
-Description=Tool Guard Policy Firewall
+Description=Tool Guard Core policy decision service
 After=network-online.target
 
 [Service]
@@ -87,7 +87,7 @@ returns `200 OK` with `decision: allowed` to pass-through, `200`
 with `denied`, or `202 Accepted` with a `poll_url` for escalations.
 
 The proxy is stateless beyond its in-memory escalation store and
-the on-disk audit chain. It scales horizontally — N proxies
+the on-disk audit chain. It scales horizontally - N proxies
 sharing the same policy directory and writing to N independent
 audit logs. Each log is its own hash chain: run `tg verify` against
 each file separately. There is no tooling to merge or cross-link
@@ -205,8 +205,8 @@ unreachable) log to stderr and increment the corresponding
 ### Authoring
 
 1. Write the policy YAML.
-2. `tg lint -policy <file>` — fix any error-severity findings.
-3. `tg evaluate -policy <file> -call <envelope.json>` — sanity
+2. `tg lint -policy <file>` - fix any error-severity findings.
+3. `tg evaluate -policy <file> -call <envelope.json>` - sanity
    check against representative tool calls.
 4. Stage in shadow mode (`mode: shadow` in YAML) for a week and
    read the near-miss column on each trace to verify the policy
@@ -235,17 +235,17 @@ it.
 The audit log is the legal record. Treat it like any other
 append-only ledger:
 
-- **Storage** — on a filesystem with atomic writes
+- **Storage** - on a filesystem with atomic writes
   (ext4, xfs, zfs, btrfs all fine). The proxy uses `O_APPEND`
   which is atomic at the page level.
-- **Rotation** — `-audit-rotate-bytes` rotates the active file
+- **Rotation** - `-audit-rotate-bytes` rotates the active file
   when it crosses the cap. Rotated files are named
   `<auditPath>.1`, `<auditPath>.2`, ... `tg verify` reads the
   rotation set in order.
-- **Off-host backup** — `cron` an rsync to a separate host every
+- **Off-host backup** - `cron` an rsync to a separate host every
   hour. The hash chain links across rotations, so `tg verify` on
   the backup is the same operation as on the live host.
-- **Verification cadence** — `tg verify` once a day at minimum. If
+- **Verification cadence** - `tg verify` once a day at minimum. If
   it returns `intact: false` with `exit 5`, you have an
   on-disk-tamper or a corrupted write. Stop the proxy (`tg-proxy`
   refuses to start with a tampered tail anyway) and triage.
@@ -256,7 +256,7 @@ If the audit log is destroyed or corrupted past the tail:
 
 1. Stop `tg-proxy` (it refuses to start without a verifiable tail).
 2. Restore the most recent verified backup.
-3. Start `tg-proxy` — it resumes the chain from the restored tail.
+3. Start `tg-proxy` - it resumes the chain from the restored tail.
 4. The gap between the restored tail and the destroyed live tail is
    PERMANENTLY lost from the audit record. There is no way to
    reconstruct decisions made between the restore point and the

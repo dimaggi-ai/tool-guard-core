@@ -8,29 +8,67 @@
 [![Release](https://img.shields.io/github/v/release/dimaggi-ai/tool-guard-core?include_prereleases)](https://github.com/dimaggi-ai/tool-guard-core/releases)
 [![Container](https://img.shields.io/badge/container-ghcr.io%2Fdimaggi--ai%2Ftool--guard--core-blue)](https://github.com/dimaggi-ai/tool-guard-core/pkgs/container/tool-guard-core)
 
-**The runtime policy firewall for AI agents.** Apache-2.0.
+**The policy decision point for AI agents.** Apache-2.0.
 
-Tool Guard sits between your AI agents and the tools they call. Every tool
-call is evaluated against your policies *before* it executes, and the
-decision is hash-chained into a tamper-evident audit ledger.
+Tool Guard Core is the decision engine for AI agent actions. Send it a
+tool call — `POST /evaluate` with a JSON `ActionEnvelope`, or call the
+Go library in-process — and it returns **allow / deny / escalate**, the
+exact rule that fired, and the reason, in microseconds. Every decision
+is appended to a SHA-256 hash-chained audit log you can verify offline
+with `tg verify`.
 
-This repo is the complete open-source engine: the deterministic
-policy engine, the audit chain, a single-binary CLI, and a local-LLM
-content classifier (Gemma 4 via Ollama). Nothing in the engine is
-gated. A separate commercial management platform, **Tool Guard
-Enterprise**, exists on top of it ([dimaggi.ai/products](https://dimaggi.ai/products));
-this repo does not depend on it.
+Core decides and records; your tool-execution layer enforces. When the
+answer is `deny`, you don't run the call — one `if` statement at the
+point where your agent executes tools, with working patterns for MCP,
+LangChain, AutoGen, and native Anthropic/OpenAI tool-use loops in
+[docs/integration.md](docs/integration.md). This repo is the complete
+engine: policy evaluation, the SQL / path / shell / LLM classifiers,
+the `/evaluate` service, the Go library, and the audit primitive.
+Nothing in it is gated.
 
 ## Why this exists
 
-Model-layer guardrails (prompt & response filters, output validators, and content classifiers) govern what a model *says*. Tool Guard governs what an agent *does*. Refund over $500, export PII, transfer funds, drop a table — these are policy decisions, not language decisions. They should be enforced at the tool call, before the API executes, with a tamper-evident, offline-verifiable record of who decided what and why.
+Model-layer guardrails govern what a model *says*. Tool Guard governs
+what an agent *does*. Refund over $500, export PII, transfer funds,
+drop a table — these are policy decisions, not language decisions, and
+they need a dedicated decision point: evaluated before the API
+executes, with a tamper-evident, offline-verifiable record of who
+decided what and why. Core is that decision point.
+
+## What Core decides
+
+Every envelope is evaluated against operator-authored YAML policies:
+deterministic rules (thresholds, regex, scope, condition trees) plus
+four semantic classifiers — SQL (postgres / mysql / sqlite / mssql),
+path (traversal, symlink, shell-meta), shell (env-rewrap, argv
+resolution), and a local-LLM content classifier (Gemma 4 via Ollama,
+fail-closed). The strongest effect wins; the result is the decision,
+the rule, the reason, and a citation back to the source document the
+rule came from. Stage policies in shadow mode against live traffic,
+then promote to enforcement without redeploying agents.
+
+## Where Enterprise begins
+
+Core is the decision point. **Tool Guard Enterprise**
+([dimaggi.ai/products](https://dimaggi.ai/products)) is the enforcement
+point: an MCP gateway your agents connect to as their single access
+point. It fronts your MCP servers and tools, calls this engine on every
+tool call, forwards allowed calls upstream and blocks denied ones —
+enforcement the agent cannot route around. Enterprise also adds the
+management plane: audit dashboard and signed Evidence Packs
+(Postgres-backed), per-agent identity + RBAC, schema-driven PII
+redaction, and policy lifecycle approvals. The decision engine, the
+classifiers, and the audit primitive (hash-chained JSONL + offline
+`tg verify`) live in this repo under Apache-2.0 with no usage limits;
+Enterprise consumes them — it does not replace them, and this repo does
+not depend on it.
 
 ## Scope
 
 **Ships in this repo:**
 
 - Deterministic policy evaluation (thresholds, regex, scope, condition trees)
-- Shadow (observe-only) and enforcement modes — stage a policy against live traffic, then promote it to blocking without redeploying agents
+- Shadow (observe-only) and enforcement modes — stage a policy against live traffic, then promote it to returning real deny/escalate decisions for your tool layer to act on, without redeploying agents
 - SHA-256 hash-chained audit log — a portable JSONL file you download, verify offline with `tg verify`, and use as source evidence in an audit workflow
 - Policy lint warnings (`tg lint`)
 - `tg-proxy` HTTP service with policy reload, rate limit, escalation
@@ -41,9 +79,13 @@ Model-layer guardrails (prompt & response filters, output validators, and conten
 - Battle-test harness (`cmd/battle-test`)
 
 **Not in this repo — ships in Tool Guard Enterprise** (the
-commercial, self-hosted management platform; see
+commercial, self-hosted enforcement gateway + management product; see
 [dimaggi.ai/products](https://dimaggi.ai/products)):
 
+- **MCP gateway / single point of access** — agents connect to one endpoint;
+  Enterprise calls Core on every tool call and forwards allowed calls upstream,
+  blocking denied ones before they reach the tool (turnkey, unavoidable
+  enforcement — the agent has no other path)
 - Management dashboard with policy lifecycle, RBAC + per-agent API
   keys, HMAC-signed decisions, schema-driven PII redaction, signed
   Evidence Pack export (HIPAA §164.312 control mapping — not a
@@ -98,8 +140,9 @@ the audit chain offline, demonstrating it is tamper-evident.
 - [`examples/postgres-attack/`](examples/postgres-attack/README.md) —
   five-container compose: a Postgres instance, a db-tool, an os-tool, `tg-proxy`,
   and a Gemma 4 agent with an aggressive prompt that tries to drop
-  production tables. The proxy denies the destructive call and
-  the database is untouched. SQL / shell / path classifiers in action.
+  production tables. tg-proxy returns a deny decision, the db-tool
+  wrapper refuses to run the call, and the database is untouched.
+  SQL / shell / path classifiers in action.
 - [`examples/finance-cfo/`](examples/finance-cfo/README.md) — CFO
   control plane: purchase-order, wire-transfer, and expense-velocity
   policies covering per-action caps, cumulative spend ceilings,
@@ -360,8 +403,9 @@ cmd/example-chain/ Tiny generator for examples/decisions_chain.jsonl.
 examples/sample-app/      Hand-coded end-to-end demo. `make sample`.
 
 examples/ollama-agent/    Real-LLM end-to-end demo: Gemma 4 (via Ollama)
-                          emits tool calls, tg-proxy enforces, the model
-                          adapts when blocked. `make sample-ollama`.
+                          emits tool calls, tg-proxy returns the decision,
+                          the demo wrapper blocks denied calls and the
+                          model adapts. `make sample-ollama`.
 
 examples/postgres-attack/ Dockerized demo: real Postgres, real db-tool,
                           tg-proxy with sql_classify / path_classify /
@@ -409,7 +453,8 @@ policy loading.
   arguments and detects env-rewrap escapes
   (`env`/`sudo`/`nice`/`ionice`/`chroot`/`doas`).
 - **Sample app:** `make sample` runs a refund-tool + tg-proxy + agent
-  end-to-end, with the firewall blocking calls.
+  end-to-end — tg-proxy returns deny and the sample wrapper does not
+  execute the call.
 - **End-to-end policy correctness:** `make test-postgres-full` brings up the
   full docker stack and runs 28 deterministic assertions plus 45-case
   and 56-case adversarial bruteforce suites — all pass with zero
