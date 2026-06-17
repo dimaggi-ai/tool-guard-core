@@ -26,6 +26,30 @@ engine: policy evaluation, the SQL / path / shell / LLM classifiers,
 the `/evaluate` service, the Go library, and the audit primitive.
 Nothing in it is gated.
 
+## Guard a coding agent in 60 seconds
+
+Run AI coding agents (Claude Code, OpenAI Codex, Google Antigravity)? One
+policy gates the shell commands all of them try to run — `rm -rf /` denied,
+`git push` / `reset --hard` escalated (blocked on Claude Code & Codex, an
+interactive "ask" on Antigravity), the rest allowed:
+
+```bash
+git clone https://github.com/dimaggi-ai/tool-guard-core
+cd tool-guard-core/examples/coding-agent-guard
+./run.sh                 # offline proof, no agent/network (builds tg; needs Go + jq)
+./install.sh             # wire the PreToolUse hook into whichever of these agents you have
+```
+
+It matches the *shape* of a destructive command (an `rm` + a recursive/force
+flag in any spelling + a root/home target), not one brittle string, so common
+flag-spelling variants don't slip past. Scope is honest: it gates `rm` on shell
+tools (`bash` / `run_command`) — a delete via another tool or a script's
+`os.remove()` needs its own rule. Full per-agent mapping in
+[`examples/coding-agent-guard/`](examples/coding-agent-guard/README.md). Want a
+different rule? Edit the `policy.yaml`, or browse the
+[example bundles](#examples-included) for ready-made guards (money, database,
+customer-data export, content safety).
+
 ## Why this exists
 
 Model-layer guardrails govern what a model *says*. Tool Guard governs
@@ -161,13 +185,9 @@ the audit chain offline, demonstrating it is tamper-evident.
   prompts. 16 deterministic assertions against real Gemma 4 e4b
   (~600 ms per call). Requires Ollama with `gemma4:e4b` pulled.
 - [`examples/coding-agent-guard/`](examples/coding-agent-guard/README.md) —
-  **one policy gating three AI coding agents** at the hook layer:
-  Claude Code, OpenAI Codex, and Google Antigravity (`agy`). The same
-  `policy.yaml` decides which shell commands each agent may run
-  (`rm -rf /` denied, `git push` / `reset --hard` held for a human, the
-  rest allowed). `./run.sh` proves it offline for all three; `./install.sh`
-  wires the PreToolUse hooks into whichever agents you have. No LLM, no
-  Docker.
+  one policy gating Claude Code, OpenAI Codex, and Google Antigravity at the
+  hook layer. No LLM, no Docker — see [Guard a coding agent in 60
+  seconds](#guard-a-coding-agent-in-60-seconds) above for the one-liner.
 
 Requires Go 1.25+. The default binary is pure Go — no cgo, no
 database, no network services — and links one runtime library,
@@ -241,7 +261,7 @@ Exit codes: 0 allow/pass, 1 internal/load/parse error, 2 usage error, 3 deny,
 ```
 
 Both warnings correspond to **real bypass classes that Gemma 4 found in
-the battle test** — see results doc.
+the battle test** — see [`docs/battle-test-results.md`](docs/battle-test-results.md).
 
 **4. Verify an audit log offline:**
 
@@ -285,13 +305,13 @@ go run ./cmd/example-chain > examples/decisions_chain.jsonl
 
 ## Examples included
 
-### Quick-start policies (in `policies/`)
+### Quick-start policies & sample calls
+
+The three starter policies live in [`policies/`](policies/README.md) (indexed
+there). The sample tool calls and audit chain to exercise them:
 
 | File | Use |
 |---|---|
-| `policies/refund_cap.yaml` | Intentionally narrow scope; lints with two warnings to demonstrate `scope-no-tool-group` + `amount-without-semantic-check`. |
-| `policies/refund_cap_strict.yaml` | Same intent, lints clean. Adds the tool_group scope and a regex tripwire on the reason field. |
-| `policies/llm_token_spend_guard.yaml` | Per-agent LLM cost ceilings (escalate $50/h, deny $300/day, flag 10M+ tokens/day). |
 | `examples/call_under_cap.json` | Allowed $85 refund. |
 | `examples/call_over_cap.json` | Denied $1000 refund. |
 | `examples/decisions_chain.jsonl` | Real 3-record SHA-256 hash-chained audit log for `tg verify`. |
