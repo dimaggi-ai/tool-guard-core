@@ -6,7 +6,8 @@ The quick-start policies that ship in this directory:
 |------|--------------|
 | [`refund_cap.yaml`](refund_cap.yaml) | Refund over the cap → deny. Narrow scope on purpose — `tg lint` flags the tool-substitution gap. |
 | [`refund_cap_strict.yaml`](refund_cap_strict.yaml) | Same cap, lint-clean (adds tool-group scope + a reason-field tripwire). |
-| [`llm_token_spend_guard.yaml`](llm_token_spend_guard.yaml) | Per-agent LLM cost ceilings (escalate $50/h, deny $300/day). Reads `agent_velocity.*` from the call context — **you supply the running totals**; Core is stateless and does not track spend over time. |
+| [`refund_velocity_cap.yaml`](refund_velocity_cap.yaml) | Rolling **1h refund total** cap + 24h count ceiling — closes the amount-fragmentation bypass (many small refunds under a per-call cap). Run `tg-proxy -velocity-track` to have the proxy compute the windows, or supply your own `agent_velocity.*` totals. |
+| [`llm_token_spend_guard.yaml`](llm_token_spend_guard.yaml) | Per-agent LLM cost ceilings (escalate $50/h, deny $300/day). Reads `agent_velocity.*` from the call context. Core does not track *token/cost* spend over time — **you supply those running totals**; only the monetary window is proxy-computable (via `-velocity-track`). |
 
 Run or check one — from the repo root, after `make build`:
 

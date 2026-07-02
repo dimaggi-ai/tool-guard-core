@@ -46,7 +46,7 @@ func validateOperatorValue(op domain.Operator, value interface{}, ctx string) er
 		}
 		return nil
 
-	case domain.OpIn:
+	case domain.OpIn, domain.OpNotIn:
 		switch value.(type) {
 		case []interface{}, []string, []int, []int64, []float64:
 			return nil
@@ -59,11 +59,20 @@ func validateOperatorValue(op domain.Operator, value interface{}, ctx string) er
 		}
 		return nil
 
-	case domain.OpContains:
+	case domain.OpContains, domain.OpNotContains, domain.OpStartsWith, domain.OpEndsWith:
 		if _, ok := value.(string); !ok {
-			return fmt.Errorf("%s: operator %q requires a string substring, got %T", ctx, op, value)
+			return fmt.Errorf("%s: operator %q requires a string value, got %T", ctx, op, value)
 		}
 		return nil
+
+	case domain.OpExists:
+		// value is optional; when present it must be a bool (true=must
+		// exist, false=must be absent). A non-bool is a fat-finger.
+		switch value.(type) {
+		case nil, bool:
+			return nil
+		}
+		return fmt.Errorf("%s: operator %q requires a bool value (or none), got %T", ctx, op, value)
 	}
 	// Eq/Neq accept any typed value, but nil is almost always a typo
 	// (`compareEq(x, nil)` will return false for every real envelope,

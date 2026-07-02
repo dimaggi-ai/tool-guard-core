@@ -111,6 +111,36 @@ Output:
 Flip one byte in the file and re-verify - `tg verify` reports the
 exact line where the chain broke and exits 5.
 
+## 5. Dry-run a policy set over a batch of calls
+
+Before deploying a policy change, see what it would do to real traffic.
+`tg simulate` runs the whole policy set against a JSONL file of envelopes
+(one per line) and prints the decision breakdown plus per-rule fire counts:
+
+```sh
+./bin/tg simulate -policy-dir policies -calls yesterdays-calls.jsonl
+```
+
+```
+Tool Guard simulate — 3 policies, 1000 calls
+────────────────────────────────────────────────
+  allowed        942   94.2%
+  flagged          6    0.6%
+  escalated       21    2.1%
+  denied          31    3.1%
+             e.g. env-8831, env-9002, env-9114
+────────────────────────────────────────────────
+  rule fires (by rule_id):
+    rule-amount-cap               22  [deny]
+    rule-refund-1h-sum             9  [deny]
+    ...
+```
+
+It uses the exact same engine as `tg evaluate` and the proxy, so a
+simulate verdict can't diverge from a live one. Add `-fail-on-deny` to
+exit 3 when any call denies (gate a policy change in CI), `-json` for
+machine-readable output, or `-calls -` to read from stdin.
+
 ## Next steps
 
 - Read [creating-policies.md](creating-policies.md) for the full YAML

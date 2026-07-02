@@ -212,8 +212,30 @@ func allReadOnlyKinds(kinds []string) bool {
 // evalLeaf evaluates a single field comparison.
 func evalLeaf(field string, op domain.Operator, value interface{}, fields map[string]interface{}) bool {
 	fieldVal, exists := resolveField(field, fields)
+
+	// Presence operator is decided purely by existence. value=true fires
+	// when the field is present; value=false fires when it is absent.
+	// A missing/non-bool value defaults to "must exist" (the common case:
+	// `operator: exists` with no value means "field must be present").
+	if op == domain.OpExists {
+		want := true
+		if b, ok := value.(bool); ok {
+			want = b
+		}
+		return exists == want
+	}
+
 	if !exists {
-		return false
+		// Negative operators fail CLOSED on a missing field: an absent
+		// value is trivially "not in the list" / "does not contain X",
+		// so a deny rule fires instead of silently allowing. Positive
+		// operators keep the historical no-fire-on-missing behaviour.
+		switch op {
+		case domain.OpNotIn, domain.OpNotContains:
+			return true
+		default:
+			return false
+		}
 	}
 
 	switch op {
@@ -235,8 +257,16 @@ func evalLeaf(field string, op domain.Operator, value interface{}, fields map[st
 		return !ok || cmp <= 0
 	case domain.OpIn:
 		return compareIn(fieldVal, value)
+	case domain.OpNotIn:
+		return !compareIn(fieldVal, value)
 	case domain.OpContains:
 		return compareContains(fieldVal, value)
+	case domain.OpNotContains:
+		return !compareContains(fieldVal, value)
+	case domain.OpStartsWith:
+		return compareAffix(fieldVal, value, true)
+	case domain.OpEndsWith:
+		return compareAffix(fieldVal, value, false)
 	case domain.OpRegex:
 		return compareRegex(fieldVal, value)
 	case domain.OpGtField:
@@ -358,6 +388,18 @@ func compareContains(fieldVal, value interface{}) bool {
 	fs := fmt.Sprintf("%v", fieldVal)
 	vs := fmt.Sprintf("%v", value)
 	return strings.Contains(fs, vs)
+}
+
+// compareAffix checks a string prefix (starts_with) or suffix
+// (ends_with). Both operands are stringified the same way compareContains
+// does, so numeric fields compare by their decimal form.
+func compareAffix(fieldVal, value interface{}, prefix bool) bool {
+	fs := fmt.Sprintf("%v", fieldVal)
+	vs := fmt.Sprintf("%v", value)
+	if prefix {
+		return strings.HasPrefix(fs, vs)
+	}
+	return strings.HasSuffix(fs, vs)
 }
 
 // compareRegex checks if a string field matches a regex. The compile

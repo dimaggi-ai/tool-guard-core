@@ -31,6 +31,7 @@ ExecStart=/usr/local/bin/tg-proxy \
   -unknown-tools-deny=true \
   -rate-limit-rps 20 \
   -rate-limit-burst 100 \
+  -velocity-track \
   -audit-sync-mode interval \
   -audit-sync-every 10 \
   -audit-rotate-bytes 104857600 \
@@ -53,6 +54,37 @@ After `systemctl daemon-reload && systemctl enable --now tg-proxy`,
 the proxy reads `/etc/tg-proxy/policies/*.yaml`, fail-closes if any
 policy file is malformed, and writes the audit log to
 `/var/lib/tg-proxy/audit/`.
+
+### Velocity tracking (amount fragmentation)
+
+`-velocity-track` makes the proxy maintain a per-key sliding window of
+monetary actions and inject the trailing 1h/24h sum and count into
+`context.verified.agent_velocity.*` before evaluation. A policy then
+closes the amount-fragmentation bypass with an ordinary threshold rule
+(see [`policies/refund_velocity_cap.yaml`](../policies/refund_velocity_cap.yaml)):
+
+```yaml
+conditions:
+  field: context.verified.agent_velocity.monetary_sum_1h
+  operator: gt
+  value: 5000        # deny once the 1h refund total would cross $5k
+```
+
+Notes:
+
+- The injected sum **includes the prospective call**, so a `> cap` rule
+  denies the call that crosses the line. Only calls that actually proceed
+  (allow / flag) are recorded into the window — denied attempts never
+  inflate it.
+- The proxy **never overwrites** a caller-supplied `agent_velocity`
+  block. If you already compute rolling totals from a ledger, keep
+  sending them and leave `-velocity-track` off; the two are mutually
+  exclusive per request.
+- State is in-memory, keyed by `-velocity-key-by` (agent_id by default),
+  bounded (100k keys, 30-min idle eviction) exactly like the rate
+  limiter. It does **not** survive a restart — for durable cross-restart
+  aggregates, supply the totals yourself. `tg_proxy_velocity_keys` in
+  `/metrics` reports the live key count.
 
 ### Docker / Kubernetes
 
@@ -138,6 +170,14 @@ The full flag list, copied from `tg-proxy -help`:
     per-agent burst capacity used when rate-limit-rps > 0 (default 50)
 -rate-limit-key-by string
     envelope field to key the limiter on: agent_id | session_id | org_id
+    (default "agent_id")
+-velocity-track
+    compute a sliding-window monetary velocity (1h/24h sum + count) per key
+    and inject it into context.verified.agent_velocity before evaluation —
+    closes the amount-fragmentation bypass. Never overwrites a caller-supplied
+    agent_velocity block (a real ledger stays authoritative).
+-velocity-key-by string
+    envelope field to key velocity windows on: agent_id | session_id | org_id
     (default "agent_id")
 -tools-yaml string
     path to a tools.yaml function classification registry

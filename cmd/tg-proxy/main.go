@@ -78,6 +78,8 @@ type proxy struct {
 	auditCurrentBytes    int64
 	rateLimit            *rateLimiter // nil if disabled
 	rateLimitKeyBy       string
+	velocity             *velocityTracker // nil if disabled
+	velocityKeyBy        string
 	escalations          *escalationStore
 	approverToken        string
 	escalationDefaultMin int
@@ -123,6 +125,8 @@ func main() {
 		rateLimitRPS      = flag.Float64("rate-limit-rps", 0, "per-agent steady-state limit (req/s); 0 disables rate limiting")
 		rateLimitBurst    = flag.Float64("rate-limit-burst", 50, "per-agent burst capacity used when -rate-limit-rps > 0")
 		rateLimitKeyBy    = flag.String("rate-limit-key-by", "agent_id", "envelope field to key the limiter on: agent_id | session_id | org_id")
+		velocityTrack     = flag.Bool("velocity-track", false, "compute sliding-window monetary velocity (1h/24h sum+count) per key and inject it into context.verified.agent_velocity — closes the amount-fragmentation bypass; never overwrites a caller-supplied agent_velocity block")
+		velocityKeyBy     = flag.String("velocity-key-by", "agent_id", "envelope field to key velocity windows on: agent_id | session_id | org_id")
 		toolsYAML         = flag.String("tools-yaml", "", "path to a tools.yaml function classification registry (enables sql_classify {denied,allowed}_function_classes)")
 		approverToken     = flag.String("approver-token", "", "static bearer token required on POST /escalations/<id>/{approve,deny}; empty disables the endpoints")
 		approverTokenFile = flag.String("approver-token-file", "", "read the approver token from this file instead of the command line (keeps it out of /proc cmdline); mutually exclusive with -approver-token")
@@ -195,6 +199,16 @@ func main() {
 		log.Fatalf("tg-proxy: invalid -rate-limit-key-by=%q (want agent_id|session_id|org_id)", *rateLimitKeyBy)
 	}
 
+	var vt *velocityTracker
+	if *velocityTrack {
+		vt = newVelocityTracker()
+	}
+	switch *velocityKeyBy {
+	case "agent_id", "session_id", "org_id":
+	default:
+		log.Fatalf("tg-proxy: invalid -velocity-key-by=%q (want agent_id|session_id|org_id)", *velocityKeyBy)
+	}
+
 	if *toolsYAML != "" {
 		reg, err := sqlguard.LoadRegistryFile(*toolsYAML)
 		if err != nil {
@@ -219,6 +233,8 @@ func main() {
 		auditRotateBytes:     *auditRotateBytes,
 		rateLimit:            rl,
 		rateLimitKeyBy:       *rateLimitKeyBy,
+		velocity:             vt,
+		velocityKeyBy:        *velocityKeyBy,
 		escalations:          newEscalationStore(),
 		approverToken:        resolvedApproverToken,
 		escalationDefaultMin: *escalationTimeout,

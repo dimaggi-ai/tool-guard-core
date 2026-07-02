@@ -23,9 +23,23 @@ func TestLint_AcceptsAllKnownOperators(t *testing.T) {
 		domain.OpGt, domain.OpGte, domain.OpLt, domain.OpLte,
 		domain.OpIn, domain.OpContains, domain.OpRegex,
 		domain.OpGtField, domain.OpLtField,
+		domain.OpNotIn, domain.OpNotContains,
+		domain.OpStartsWith, domain.OpEndsWith, domain.OpExists,
 	}
 	for _, op := range operators {
 		t.Run(string(op), func(t *testing.T) {
+			// Pick an operand shape the validator accepts for this op so
+			// the test isolates the unknown-operator lint (not operand-shape).
+			var val interface{} = float64(1)
+			switch op {
+			case domain.OpIn, domain.OpNotIn:
+				val = []interface{}{float64(1)}
+			case domain.OpContains, domain.OpNotContains, domain.OpStartsWith, domain.OpEndsWith,
+				domain.OpRegex, domain.OpGtField, domain.OpLtField:
+				val = "x"
+			case domain.OpExists:
+				val = true
+			}
 			p := domain.Policy{
 				Scope: domain.PolicyScope{
 					ToolNames:  []string{"issue_refund"},
@@ -37,7 +51,7 @@ func TestLint_AcceptsAllKnownOperators(t *testing.T) {
 						Conditions: domain.Condition{
 							Field:    "amount",
 							Operator: op,
-							Value:    float64(1),
+							Value:    val,
 						},
 						Effect: domain.EffectDeny,
 						Citation: domain.Citation{

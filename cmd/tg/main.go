@@ -43,6 +43,7 @@ const usage = `tg — Tool Guard Core CLI
 
 Usage:
   tg evaluate  -policy POLICY.yaml -call CALL.json [-mode shadow|enforcement]
+  tg simulate  (-policy-dir DIR | -policy POLICY.yaml) -calls CALLS.jsonl
   tg verify    -file DECISIONS.jsonl
   tg lint      -policy POLICY.yaml
   tg benchmark [-trials N]
@@ -94,6 +95,8 @@ func main() {
 	switch verb {
 	case "evaluate":
 		os.Exit(cmdEvaluate(args))
+	case "simulate":
+		os.Exit(cmdSimulate(args))
 	case "verify":
 		os.Exit(cmdVerify(args))
 	case "lint":
@@ -502,6 +505,9 @@ var knownOperators = map[string]struct{}{
 	"gt": {}, "gte": {}, "lt": {}, "lte": {},
 	"in": {}, "contains": {}, "regex": {},
 	"gt_field": {}, "lt_field": {},
+	// v0.2.0 negative / presence operators
+	"not_in": {}, "not_contains": {},
+	"starts_with": {}, "ends_with": {}, "exists": {},
 }
 
 // collectUnknownOperators walks a condition tree and returns operator

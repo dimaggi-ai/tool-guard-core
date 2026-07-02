@@ -79,6 +79,7 @@ func (p *proxy) metrics(w http.ResponseWriter, _ *http.Request) {
 	fmt.Fprintf(w, "tg_proxy_audit_appends_total %d\n", auditAppends)
 	fmt.Fprintf(w, "tg_proxy_regex_cache_size %d\n", engine.CachedRegexCount())
 	fmt.Fprintf(w, "tg_proxy_rate_limit_keys %d\n", p.rateLimit.stats())
+	fmt.Fprintf(w, "tg_proxy_velocity_keys %d\n", p.velocity.stats())
 }
 
 func (p *proxy) reloadHandler(w http.ResponseWriter, r *http.Request) {
@@ -180,6 +181,36 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, `{"error":"unknown mode (must be shadow|enforcement)"}`, http.StatusBadRequest)
 		return
+	}
+
+	// Velocity injection. Compute the trailing 1h/24h monetary window
+	// for this key and, unless the caller already supplied an
+	// agent_velocity block (authoritative ledger), inject the aggregates
+	// INCLUDING this prospective call so a `monetary_sum_1h > cap` rule
+	// fires on the call that crosses the line. We record the call into
+	// the window only if the final decision lets it proceed (below), so
+	// denied attempts never inflate the window.
+	var velWindow *velocityWindow
+	var velAmount float64
+	var velHasAmount bool
+	if p.velocity != nil {
+		velWindow = p.velocity.windowFor(velocityKey(&env, p.velocityKeyBy))
+		if amt, aErr := env.Amount(); aErr == nil && amt > 0 {
+			velAmount, velHasAmount = amt, true
+		}
+		if env.Context.Verified.AgentVelocity == nil {
+			s1, c1, s24, c24 := velWindow.aggregate(env.Timestamp.UTC())
+			pCount := 0
+			if velHasAmount {
+				pCount = 1
+			}
+			env.Context.Verified.AgentVelocity = &domain.AgentVelocityContext{
+				MonetarySum1h:    s1 + velAmount,
+				MonetaryCount1h:  c1 + pCount,
+				MonetarySum24h:   s24 + velAmount,
+				MonetaryCount24h: c24 + pCount,
+			}
+		}
 	}
 
 	p.mu.RLock()
@@ -298,6 +329,15 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 		p.escalateCount.Add(1)
 	case domain.DecisionFlagged:
 		p.flagCount.Add(1)
+	}
+
+	// Record this monetary action into its velocity window only when the
+	// call actually proceeds (allow or flag). Denied and escalated calls
+	// did not execute, so counting them would let a rejected attempt
+	// inflate the window and deny the next legitimate call.
+	if velWindow != nil && velHasAmount &&
+		(result.Decision == domain.DecisionAllowed || result.Decision == domain.DecisionFlagged) {
+		velWindow.record(env.Timestamp.UTC(), velAmount)
 	}
 
 	if result.Decision == domain.DecisionEscalated {

@@ -96,9 +96,18 @@ Operators:
 | `eq`, `neq` | Equality; nil values are rejected at load time. |
 | `gt`, `gte`, `lt`, `lte` | Numeric comparison. String values that parse as numbers are coerced. |
 | `gt_field`, `lt_field` | Compare against another field of the envelope. |
-| `in` | Value is a list; field's value must be a member. |
-| `contains` | Substring match. |
+| `in`, `not_in` | Value is a list; `in` fires when the field is a member, `not_in` when it is not. |
+| `contains`, `not_contains` | Substring match / its negation. |
+| `starts_with`, `ends_with` | String prefix / suffix match. |
+| `exists` | Field presence. `value: true` fires when the field is present, `value: false` (or `not:`) when it is absent — e.g. "deny if no justification was supplied". |
 | `regex` | Go RE2; pattern compiled at policy load. No backreferences / lookaround. |
+
+> **Missing-field contract:** `not_in` and `not_contains` fail **closed** — an
+> absent field is trivially "not in the allowlist" / "does not contain X", so a
+> deny rule using them fires rather than silently allowing. The positive
+> operators (`eq`, `in`, `contains`, `starts_with`, `ends_with`, `gt` …) do
+> **not** fire on a missing field. Pick the operator whose failure mode matches
+> your intent: for a deny-if-not-allowlisted rule, use `not_in`.
 
 ### SQL classifier
 

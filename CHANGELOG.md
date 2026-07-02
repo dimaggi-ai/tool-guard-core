@@ -8,6 +8,85 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 Nothing yet.
 
+## [0.2.0] — 2026-07-02
+
+Adds a rolling-window velocity mitigation for the one attack class the
+0.1.0 battle-test left open (amount fragmentation), five new deterministic
+operators, and a batch policy-simulation verb. No breaking changes — every
+0.1.0 policy and audit chain evaluates and verifies identically. The
+Enterprise boundary is unchanged: no signing, no PII redaction, no semantic
+classification beyond the existing opt-in `llm_classify`.
+
+### Velocity tracking — closes amount fragmentation (`tg-proxy`)
+
+- New `-velocity-track` flag makes `tg-proxy` maintain a per-key sliding
+  window of monetary actions and inject the trailing 1h/24h sum + count
+  into `context.verified.agent_velocity.*` before evaluation. A policy
+  then closes the bypass with an ordinary threshold rule
+  (`field: context.verified.agent_velocity.monetary_sum_1h, operator: gt`),
+  so **no new condition type or engine change** was needed — the schema
+  already carried these fields; nothing computed them until now.
+- The injected sum **includes the prospective call**, so a `> cap` rule
+  denies the call that crosses the line. Only calls that actually proceed
+  (allow / flag) are recorded into the window; denied and escalated
+  attempts never inflate it.
+- The proxy **never overwrites** a caller-supplied `agent_velocity` block
+  — a deployment with a real ledger stays authoritative. `-velocity-track`
+  is the out-of-the-box default for deployments that have none.
+- `-velocity-key-by agent_id|session_id|org_id` (default `agent_id`).
+  State is in-memory, bounded (100k keys, 30-min idle eviction) exactly
+  like the rate limiter, and does not survive a restart. New
+  `tg_proxy_velocity_keys` metric.
+- This is the mitigation the 0.1.0 battle-test flagged as missing
+  (`docs/battle-test-results.md`: amount fragmentation, "no shipped
+  mitigation"). New example policy `policies/refund_velocity_cap.yaml`
+  (1h $ cap + 24h count ceiling, lint-clean). End-to-end integration test
+  proves 10×$500 refunds allow to exactly $5,000 then deny, with
+  independent per-agent windows and caller-supplied ledgers honored.
+
+### New deterministic operators — `pkg/engine`
+
+- `not_in`, `not_contains`, `starts_with`, `ends_with`, `exists`.
+- `not_in` / `not_contains` fail **closed** on a missing field (an absent
+  value is trivially "not in the allowlist" / "does not contain X"), so a
+  deny rule cannot be dodged by omitting the field. Positive operators keep
+  the historical no-fire-on-missing behavior. `exists` decides purely by
+  presence (`value: true` = must exist, `false` = must be absent).
+- Lets policies express a tool-substitution allowlist
+  (`tool_name not_in [approved…] → deny`) or a required-justification gate
+  (`parameters.reason exists false → deny`) without regex gymnastics.
+- Registered across all four coupling points (domain constant, engine
+  eval, load-time operand validation, CLI `unknown-operator` allowlist);
+  the existing AST-coupling test guarantees none were missed.
+
+### `tg simulate` — batch policy dry-run (CLI)
+
+- `tg simulate (-policy-dir DIR | -policy FILE) -calls CALLS.jsonl` runs a
+  whole policy set against a JSONL stream of envelopes and reports the
+  decision breakdown, per-rule fire counts, and example envelope_ids per
+  non-allow decision. Answers "what would this policy set do to yesterday's
+  traffic?" before deploying, using the exact `engine.Evaluate` the proxy
+  and `tg evaluate` use — so a simulate verdict cannot diverge from a live
+  one.
+- `-json` for machine-readable output, `-mode shadow|enforcement`,
+  `-examples N`, and `-fail-on-deny` (exit 3 if any call denies — lets CI
+  gate a policy change that would start denying real traffic). Malformed
+  input lines are counted and skipped, never fatal. Reads stdin with
+  `-calls -`.
+
+### Tests
+
+- `pkg/engine/operators_v2_test.go` — every new operator incl. the
+  missing-field contract and a composite tool-substitution guard.
+- `cmd/tg-proxy/velocity_test.go` — window aggregation, 24h pruning, hard
+  per-key cap, keyed bounding/eviction.
+- `cmd/tg-proxy/velocity_integration_test.go` — amount-fragmentation
+  blocked end-to-end; independent windows; caller-supplied velocity
+  honored.
+- `cmd/tg/simulate_test.go` — decision/rule counting, exit-code contract,
+  policy-dir loading, validation of a bad policy.
+- Full suite green under `-race -count=1`, including the integration tag.
+
 ## [0.1.0] — 2026-06-09
 
 Initial public release.
@@ -278,5 +357,6 @@ Lint heuristics shipped (8):
   documented battle-test catalogue; the strict variants are for
   operators who already accept those build-time costs.
 
-[Unreleased]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/dimaggi-ai/tool-guard-core/releases/tag/v0.1.0
