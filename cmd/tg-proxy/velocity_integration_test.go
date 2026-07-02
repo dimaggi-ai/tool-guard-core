@@ -133,6 +133,33 @@ func TestVelocity_BlocksAmountFragmentation(t *testing.T) {
 	}
 }
 
+func TestVelocity_IgnoresClientTimestamp(t *testing.T) {
+	url, stop := startVelocityProxy(t)
+	defer stop()
+
+	// A hostile agent controls the envelope, including its timestamp. If
+	// velocity aggregated on the CLIENT timestamp, spreading each fragmented
+	// call into a different fake hour would keep every 1h window at $500 and
+	// dodge the cap. The window must use SERVER time, so these still
+	// accumulate and deny after $5,000 — same as the no-timestamp case.
+	allowed, denied := 0, 0
+	for i := 1; i <= 12; i++ {
+		env := refundEnvelope("ts-agent", 500)
+		// Each call claims to be i hours apart, back in 2020.
+		env["timestamp"] = fmt.Sprintf("2020-01-01T%02d:00:00Z", i)
+		_, out := postTo(t, url, env)
+		switch out["decision"] {
+		case "allowed":
+			allowed++
+		case "denied":
+			denied++
+		}
+	}
+	if allowed != 10 || denied != 2 {
+		t.Errorf("client-timestamp spreading must not dodge the window: got allowed=%d denied=%d, want 10/2", allowed, denied)
+	}
+}
+
 func TestVelocity_DoesNotOverrideCallerSupplied(t *testing.T) {
 	url, stop := startVelocityProxy(t)
 	defer stop()

@@ -281,13 +281,6 @@ func emitHookDecisionTo(w io.Writer, decision, reason string) {
 	_ = json.NewEncoder(w).Encode(out)
 }
 
-// emitHookDecision is the os.Stdout-bound variant kept for any callers
-// outside runHook (currently none, but exported as a convenience so
-// future shell-adapter helpers can use it without threading a writer).
-func emitHookDecision(decision, reason string) {
-	emitHookDecisionTo(os.Stdout, decision, reason)
-}
-
 // csvSet parses a comma list into a lowercased set.
 func csvSet(s string) map[string]bool {
 	out := map[string]bool{}

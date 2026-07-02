@@ -213,13 +213,20 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 	var velWindow *velocityWindow
 	var velAmount float64
 	var velHasAmount bool
+	var velNow time.Time
 	if p.velocity != nil {
+		// Velocity is a security control against an agent that CONTROLS the
+		// envelope. env.Timestamp is client-supplied, so aggregating on it
+		// would let an attacker spread fragmented calls across fake hours and
+		// dodge the 1h window entirely. Use trusted SERVER wall-clock instead;
+		// env.Timestamp still stamps the audit trace (what the client claimed).
+		velNow = time.Now().UTC()
 		velWindow = p.velocity.windowFor(velocityKey(&env, p.velocityKeyBy))
 		if amt, aErr := env.Amount(); aErr == nil && amt > 0 {
 			velAmount, velHasAmount = amt, true
 		}
 		if env.Context.Verified.AgentVelocity == nil {
-			s1, c1, s24, c24 := velWindow.aggregate(env.Timestamp.UTC())
+			s1, c1, s24, c24 := velWindow.aggregate(velNow)
 			pCount := 0
 			if velHasAmount {
 				pCount = 1
@@ -357,7 +364,7 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 	// inflate the window and deny the next legitimate call.
 	if velWindow != nil && velHasAmount &&
 		(result.Decision == domain.DecisionAllowed || result.Decision == domain.DecisionFlagged) {
-		velWindow.record(env.Timestamp.UTC(), velAmount)
+		velWindow.record(velNow, velAmount)
 	}
 
 	if result.Decision == domain.DecisionEscalated {

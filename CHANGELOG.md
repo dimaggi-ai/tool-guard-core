@@ -136,6 +136,10 @@ reliable self-protection is outside the policy, at operator-flag level.
   State is in-memory, bounded (100k keys, 30-min idle eviction) exactly
   like the rate limiter, and does not survive a restart. New
   `tg_proxy_velocity_keys` metric.
+- The window aggregates on **server wall-clock time, not the client-supplied
+  envelope timestamp** — an agent controls the envelope, so timing off it
+  would let fragmented calls claim fake far-apart timestamps and dodge the 1h
+  window. (Regression: `TestVelocity_IgnoresClientTimestamp`.)
 - This is the mitigation the 0.1.0 battle-test flagged as missing
   (`docs/battle-test-results.md`: amount fragmentation, "no shipped
   mitigation"). New example policy `policies/refund_velocity_cap.yaml`
