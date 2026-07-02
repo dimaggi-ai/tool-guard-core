@@ -172,7 +172,8 @@ release:
 
     The runtime policy firewall for AI agents — Apache 2.0.
 
-    See [CHANGELOG.md](https://github.com/dimaggi-ai/tool-guard-core/blob/main/CHANGELOG.md) for the full release notes.
+    **Highlights & upgrade notes:** [docs/release-notes-{{ .Version }}.md](https://github.com/dimaggi-ai/tool-guard-core/blob/main/docs/release-notes-{{ .Version }}.md)
+    · full change log in [CHANGELOG.md](https://github.com/dimaggi-ai/tool-guard-core/blob/main/CHANGELOG.md).
   footer: |
     ## Container image
 
