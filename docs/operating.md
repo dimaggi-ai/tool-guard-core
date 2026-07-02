@@ -93,12 +93,12 @@ The shipped `Dockerfile` produces a distroless-nonroot image with
 ~10 MB statically linked.
 
 ```sh
-docker build -t ghcr.io/dimaggi-ai/tool-guard-core:0.1.0 .
+docker build -t ghcr.io/dimaggi-ai/tool-guard-core:0.2.0 .
 docker run --rm \
   -p 9090:9090 \
   -v "$(pwd)/policies:/policies:ro" \
   -v "$(pwd)/audit:/var/lib/tg" \
-  ghcr.io/dimaggi-ai/tool-guard-core:0.1.0 \
+  ghcr.io/dimaggi-ai/tool-guard-core:0.2.0 \
   -policy-dir /policies \
   -audit-log /var/lib/tg/decisions.jsonl \
   -listen :9090

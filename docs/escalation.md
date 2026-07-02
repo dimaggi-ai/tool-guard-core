@@ -165,7 +165,7 @@ records.
 
 ## Storage
 
-The pending-escalation store is in-memory for v0.1.0, bounded
+The pending-escalation store is in-memory (bounded)
 (`defaultEscalationMaxEntries = 10_000`) with LRU eviction of the
 oldest **resolved** entries - pending requests are never silently
 dropped, only ones already approved or denied. A proxy restart
