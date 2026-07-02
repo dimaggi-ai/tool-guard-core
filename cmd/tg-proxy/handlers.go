@@ -183,6 +183,26 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Protected-path guard (-protect-paths / -protect-self). Runs BEFORE
+	// policy evaluation and is unconditional — a policy cannot disable it
+	// because the agent could just edit the policy. A write-capable tool
+	// call targeting a protected prefix is denied here, audited via the
+	// same boundary-deny path as rate-limit/fail-closed, and never reaches
+	// the engine.
+	if len(p.protectPaths) > 0 {
+		if violated, reason := engine.ViolatesProtectedPaths(&env, p.protectPaths); violated {
+			p.emitBoundaryDeny(&env, reason, mode)
+			p.denyCount.Add(1)
+			writeJSON(w, http.StatusForbidden, map[string]any{
+				"decision":        "denied",
+				"action_taken":    "denied",
+				"decision_reason": reason,
+				"effective_mode":  mode,
+			})
+			return
+		}
+	}
+
 	// Velocity injection. Compute the trailing 1h/24h monetary window
 	// for this key and, unless the caller already supplied an
 	// agent_velocity block (authoritative ledger), inject the aggregates

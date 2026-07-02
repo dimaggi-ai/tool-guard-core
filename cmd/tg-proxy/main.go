@@ -33,6 +33,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -86,6 +87,12 @@ type proxy struct {
 	policyDir            string
 	auditPath            string
 
+	// protectPaths is the resolved, unconditional protected-path prefix
+	// list (from -protect-paths and -protect-self). A write-capable tool
+	// call targeting one of these is denied BEFORE policy evaluation and
+	// no policy can turn it off. Empty = disabled.
+	protectPaths []string
+
 	eval *engine.Evaluator
 
 	startedAt time.Time
@@ -131,6 +138,8 @@ func main() {
 		approverToken     = flag.String("approver-token", "", "static bearer token required on POST /escalations/<id>/{approve,deny}; empty disables the endpoints")
 		approverTokenFile = flag.String("approver-token-file", "", "read the approver token from this file instead of the command line (keeps it out of /proc cmdline); mutually exclusive with -approver-token")
 		escalationTimeout = flag.Int("escalation-default-timeout-min", 15, "default timeout (minutes) for an escalation that doesn't specify one")
+		protectPaths      = flag.String("protect-paths", "", "comma list of path prefixes; a write-capable tool targeting one is denied BEFORE policy eval, unconditionally (self-protection that a policy cannot disable)")
+		protectSelf       = flag.Bool("protect-self", false, "also protect the -policy-dir, the -audit-log path, and the running binary's directory from writes (prepends them to -protect-paths)")
 		version           = flag.Bool("version", false, "print build version and exit")
 	)
 	flag.Parse()
@@ -222,8 +231,31 @@ func main() {
 		log.Printf("tg-proxy: tools.yaml registered %d function classes", classes)
 	}
 
+	// Resolve the protected-path list. -protect-self prepends the policy
+	// dir, the audit-log path, and the running binary's directory so an
+	// agent under the proxy cannot rewrite the very policies/audit/binary
+	// enforcing it. These are enforced BEFORE policy eval and unconditionally.
+	protectList := splitCommaPaths(*protectPaths)
+	if *protectSelf {
+		var self []string
+		if *policyDir != "" {
+			self = append(self, *policyDir)
+		}
+		if *auditPath != "" {
+			self = append(self, *auditPath)
+		}
+		if exe, err := os.Executable(); err == nil {
+			self = append(self, filepath.Dir(exe))
+		}
+		protectList = append(self, protectList...)
+	}
+	if len(protectList) > 0 {
+		log.Printf("tg-proxy: protected paths (unconditional deny before eval): %v", protectList)
+	}
+
 	p := &proxy{
 		eval:                 engine.NewEvaluator(),
+		protectPaths:         protectList,
 		defaultMode:          domain.PolicyModeEnforcement,
 		failClosed:           *failClosed,
 		unknownToolsDeny:     *unknownToolsDeny,
