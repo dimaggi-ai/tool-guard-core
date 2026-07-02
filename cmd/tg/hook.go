@@ -62,7 +62,7 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	parseErr := fs.Parse(args)
 
 	failTools := csvSet(*failClosedTools)
-	// failDecide picks the on-error decision for a given tool name.
+	// failDecide picks the on-error decision for a KNOWN tool name.
 	failDecide := func(tool string) (string, string) {
 		if len(failTools) > 0 {
 			if failTools[strings.ToLower(tool)] {
@@ -75,28 +75,53 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 		}
 		return "allow", ""
 	}
+	// failUnattributable is the on-error decision when we CANNOT identify the
+	// tool (unreadable / oversized / malformed stdin, or a flag parse error).
+	// If ANY fail-closed mode is engaged, deny: an unparseable PreToolUse
+	// payload cannot be proven non-destructive, and the operator explicitly
+	// asked for destructive calls to fail closed. Pure default (no fail-closed
+	// flags) still fails open so a transient glitch never wedges the agent.
+	failUnattributable := func(why string) (string, string) {
+		if *failClosed || len(failTools) > 0 {
+			return "deny", fmt.Sprintf("Tool Guard hook could not read/parse the tool call (%s); failing closed (fail-closed engaged)", why)
+		}
+		return "allow", ""
+	}
 
 	if parseErr != nil {
 		// A flag misconfiguration (or -h) can't be evaluated. -h prints a
-		// short usage; anything else fails open so a broken invocation never
-		// wedges the agent.
+		// short usage; anything else is an unattributable error.
 		if errors.Is(parseErr, flag.ErrHelp) {
 			fmt.Fprint(os.Stderr, hookUsage)
 			return 0
 		}
-		d, reason := failDecide("")
+		d, reason := failUnattributable("flag parse error")
 		emitHookDecisionTo(stdout, d, reason)
 		return 0
 	}
 
-	raw, _ := io.ReadAll(stdin)
+	// Cap stdin (a PreToolUse payload is small; an oversized one is either a
+	// bug or an attempt to exhaust memory) and surface read errors instead of
+	// silently treating a partial read as valid.
+	const maxHookStdin = 1 << 20 // 1 MiB
+	raw, rerr := io.ReadAll(io.LimitReader(stdin, maxHookStdin+1))
+	if rerr != nil {
+		d, reason := failUnattributable("stdin read error")
+		emitHookDecisionTo(stdout, d, reason)
+		return 0
+	}
+	if len(raw) > maxHookStdin {
+		d, reason := failUnattributable("oversized stdin")
+		emitHookDecisionTo(stdout, d, reason)
+		return 0
+	}
 
 	var in hookInput
 	if err := json.Unmarshal(raw, &in); err != nil {
-		// Unparseable stdin: we don't know the tool, so -fail-closed-tools
-		// can't match — that intentionally fails open (don't wedge on a
-		// glitch we can't attribute to a destructive tool).
-		d, reason := failDecide("")
+		// Unparseable stdin: we don't know the tool. Fail closed if any
+		// fail-closed mode is engaged (can't prove it's non-destructive),
+		// else fail open.
+		d, reason := failUnattributable("malformed JSON")
 		emitHookDecisionTo(stdout, d, reason)
 		return 0
 	}
@@ -175,31 +200,26 @@ func hookReason(r *domain.EvaluationResult) string {
 	return r.DecisionReason
 }
 
-// hookInput is the PreToolUse stdin object. Only the fields the engine maps
-// are decoded; extra fields are ignored.
+// hookInput is the PreToolUse stdin object. tool_input is kept raw so the
+// FULL parameter set (command, file_path, path, and any arrays / nested edit
+// objects) flows into the envelope — cherry-picking three fields would let an
+// array-of-paths write slip past protected-path checks.
 type hookInput struct {
-	ToolName  string `json:"tool_name"`
-	ToolInput struct {
-		Command  string `json:"command"`
-		FilePath string `json:"file_path"`
-		Path     string `json:"path"`
-	} `json:"tool_input"`
+	ToolName  string          `json:"tool_name"`
+	ToolInput json.RawMessage `json:"tool_input"`
 }
 
-// hookEnvelope maps a PreToolUse object onto an ActionEnvelope. Parameters
-// carry only the non-empty {command, file_path, path} fields.
+// hookEnvelope maps a PreToolUse object onto an ActionEnvelope, forwarding the
+// entire tool_input as parameters. Falls back to an empty object when
+// tool_input is absent or not a JSON object.
 func hookEnvelope(tool string, in hookInput, agentID string) *domain.ActionEnvelope {
-	params := map[string]string{}
-	if in.ToolInput.Command != "" {
-		params["command"] = in.ToolInput.Command
+	params := json.RawMessage(`{}`)
+	if len(in.ToolInput) > 0 {
+		var probe map[string]interface{}
+		if json.Unmarshal(in.ToolInput, &probe) == nil {
+			params = in.ToolInput
+		}
 	}
-	if in.ToolInput.FilePath != "" {
-		params["file_path"] = in.ToolInput.FilePath
-	}
-	if in.ToolInput.Path != "" {
-		params["path"] = in.ToolInput.Path
-	}
-	pj, _ := json.Marshal(params)
 
 	return &domain.ActionEnvelope{
 		EnvelopeID: fmt.Sprintf("hook-%d", time.Now().UnixNano()),
@@ -209,7 +229,7 @@ func hookEnvelope(tool string, in hookInput, agentID string) *domain.ActionEnvel
 		OrgID:      "local",
 		ToolName:   tool,
 		ToolGroup:  hookToolGroup(tool),
-		Parameters: pj,
+		Parameters: params,
 	}
 }
 

@@ -37,8 +37,15 @@ classification beyond the existing opt-in `llm_classify`.
 - **Fail-open by default** (`-fail-closed` flips to deny globally;
   `-fail-closed-tools bash,write,edit,notebookedit` denies only for the
   named tools on error — the careful-operator default for coding agents).
-  Malformed stdin always fails open because the tool cannot be attributed to
-  a destructive action.
+  **Unattributable input** (malformed / oversized / unreadable stdin, where
+  the tool can't be identified) fails **closed** whenever any fail-closed mode
+  is engaged — an unparseable PreToolUse payload can't be proven
+  non-destructive; only the pure default (no fail-closed flags) fails open on
+  such input. stdin is capped at 1 MiB and read errors are surfaced, not
+  silently treated as an empty call.
+- The full `tool_input` is forwarded as parameters (not just three
+  cherry-picked fields), so a write hidden in an array/nested-edit param is
+  still seen by protected-path checks and policies.
 - `-protect-paths` / `-protect-self` are wired here as well (see next
   section); they fire before policy evaluation.
 - Usage:
@@ -58,6 +65,14 @@ reliable self-protection is outside the policy, at operator-flag level.
   it applies an unconditional pre-policy deny when a write-capable tool
   targets any of the supplied path prefixes. Runs before (and independently
   of) policy evaluation — a policy cannot disable it.
+- **Canonicalization (hardened via adversarial review):** both the candidate
+  path and every protected prefix are made absolute (relative paths resolve
+  against the process CWD) and symlink-resolved on their longest existing
+  ancestor, then matched in every combination. This closes the relative-path
+  (`file_path: "policy.yaml"`) and symlink-traversal (`/tmp/link/x` where
+  `/tmp/link → /protected`) bypasses. Array and one-level-nested edit params
+  are extracted, not just flat `file_path`/`path`. (Byte-exact matching —
+  case-insensitive filesystems and percent-encoded forms are out of scope.)
 - **Write-capable tools** covered: `write`, `edit`, `notebookedit`,
   `multiedit`, `create`, and any unknown tool carrying a `file_path` / `path`
   parameter.  **Read-only tools** (`read`, `glob`, `grep`, `ls`, …) are

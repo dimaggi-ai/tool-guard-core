@@ -3,6 +3,7 @@ package engine
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -25,11 +26,29 @@ import (
 //
 // Matching semantics reuse matchPathPrefix from path_classify.go: exact
 // path match, component-boundary prefix match, and "*"/"**" wildcards.
+//
+// Canonicalization (hardened after adversarial review): both the candidate
+// path and every protected prefix are made absolute (relative paths resolve
+// against the process CWD) and symlink-resolved on their longest existing
+// ancestor, then matched in every combination. This closes the relative-path
+// (`file_path: "policy.yaml"`) and symlink-traversal (`/tmp/link/x` where
+// /tmp/link -> /protected) bypasses.
+//
+// TRUST MODEL: the read-only tool exclusion (read/grep/…) trusts that
+// env.ToolName is set by the agent RUNTIME / tool adapter, not chosen by the
+// model. Unknown tools default to write-capable (fail-safe), so the only way
+// a "read" name reaches a write is if the runtime itself mislabels a writing
+// tool as "read" — out of scope for this primitive. If ToolName is
+// model-controlled in your deployment, do not rely on the exclusion; scope
+// writers explicitly instead.
+//
+// OUT OF SCOPE: case-insensitive / Unicode-normalizing filesystems (matching
+// is byte-exact; Linux is case-sensitive) and percent-encoded path forms.
 func ViolatesProtectedPaths(env *domain.ActionEnvelope, prefixes []string) (bool, string) {
 	if env == nil || len(prefixes) == 0 {
 		return false, ""
 	}
-	clean := cleanPrefixes(prefixes)
+	clean := expandPrefixes(prefixes)
 	if len(clean) == 0 {
 		return false, ""
 	}
@@ -38,14 +57,18 @@ func ViolatesProtectedPaths(env *domain.ActionEnvelope, prefixes []string) (bool
 	tool := strings.ToLower(strings.TrimSpace(env.ToolName))
 
 	// File-target tools: write / edit / notebookedit and any tool whose
-	// params carry a file_path / path. Known read-only tools (read, glob,
-	// grep, ...) are excluded so the guard protects against WRITES without
-	// breaking a legitimate read of the policy dir.
-	if fp := firstString(params, "file_path", "path"); fp != "" && isFileWriteTool(tool) {
-		cleaned := filepath.Clean(fp)
-		for _, prefix := range clean {
-			if matchPathPrefix(cleaned, prefix) {
-				return true, fmt.Sprintf("protected path: write to %s denied by -protect-paths", cleaned)
+	// params carry a file_path / path (including arrays and one level of
+	// nested edit objects). Known read-only tools (read, glob, grep, ...)
+	// are excluded so the guard protects against WRITES without breaking a
+	// legitimate read of the policy dir.
+	if isFileWriteTool(tool) {
+		for _, fp := range collectFilePaths(params) {
+			for _, cand := range canonicalCandidates(fp) {
+				for _, prefix := range clean {
+					if matchPathPrefix(cand, prefix) {
+						return true, fmt.Sprintf("protected path: write to %s denied by -protect-paths", cand)
+					}
+				}
 			}
 		}
 	}
@@ -67,15 +90,119 @@ func ViolatesProtectedPaths(env *domain.ActionEnvelope, prefixes []string) (bool
 	return false, ""
 }
 
-// cleanPrefixes trims, drops empties, and filepath.Clean's each prefix.
-func cleanPrefixes(prefixes []string) []string {
+// expandPrefixes trims, drops empties, and produces the canonical forms of
+// each prefix: absolute-cleaned plus (when different) symlink-resolved. A
+// prefix that is itself a symlink or a relative path is thus matched against
+// the equally-canonicalized candidate paths.
+func expandPrefixes(prefixes []string) []string {
+	seen := map[string]bool{}
 	out := make([]string, 0, len(prefixes))
 	for _, p := range prefixes {
 		p = strings.TrimSpace(p)
 		if p == "" {
 			continue
 		}
-		out = append(out, filepath.Clean(p))
+		for _, c := range canonicalCandidates(p) {
+			if !seen[c] {
+				seen[c] = true
+				out = append(out, c)
+			}
+		}
+	}
+	return out
+}
+
+// canonicalCandidates returns the canonical path forms to match: the
+// absolute-cleaned path and, when it differs, the symlink-resolved path.
+// Relative inputs resolve against the process CWD. Both forms are returned
+// so a symlink can neither add a match (traversal) nor remove one (the
+// textual form is always tested, so resolution failure never fails open).
+func canonicalCandidates(p string) []string {
+	abs := p
+	if !filepath.IsAbs(abs) {
+		if wd, err := os.Getwd(); err == nil {
+			abs = filepath.Join(wd, abs)
+		}
+	}
+	abs = filepath.Clean(abs)
+	out := []string{abs}
+	if resolved := resolveSymlinksBestEffort(abs); resolved != "" && resolved != abs {
+		out = append(out, resolved)
+	}
+	return out
+}
+
+// resolveSymlinksBestEffort resolves symlinks on the longest existing
+// ancestor of an absolute path and re-appends the remaining (possibly
+// not-yet-created) components. Write targets often don't exist yet, so a
+// plain EvalSymlinks would fail; walking up to the deepest existing ancestor
+// still catches `/tmp/link/newfile` where /tmp/link is a symlink. Returns ""
+// when nothing resolves (caller keeps the textual form).
+func resolveSymlinksBestEffort(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return filepath.Clean(r)
+	}
+	parent := p
+	suffix := ""
+	for {
+		np := filepath.Dir(parent)
+		if np == parent { // reached root with nothing resolvable
+			return ""
+		}
+		if suffix == "" {
+			suffix = filepath.Base(parent)
+		} else {
+			suffix = filepath.Join(filepath.Base(parent), suffix)
+		}
+		parent = np
+		if r, err := filepath.EvalSymlinks(parent); err == nil {
+			return filepath.Clean(filepath.Join(r, suffix))
+		}
+	}
+}
+
+// collectFilePaths gathers path-shaped strings from the write params of a
+// tool call: the flat file_path/path/etc. keys, string arrays under
+// paths/files, and one level of nested edit objects (multiedit-style
+// edits:[{file_path:…}]). Not a general crawler — bounded to the shapes
+// coding-agent tools actually use.
+func collectFilePaths(params map[string]interface{}) []string {
+	var out []string
+	add := func(v interface{}) {
+		switch t := v.(type) {
+		case string:
+			if strings.TrimSpace(t) != "" {
+				out = append(out, t)
+			}
+		case []interface{}:
+			for _, e := range t {
+				if s, ok := e.(string); ok && strings.TrimSpace(s) != "" {
+					out = append(out, s)
+				}
+			}
+		}
+	}
+	for _, k := range []string{
+		"file_path", "path", "paths", "file", "files", "filename",
+		"dest", "destination", "target", "output", "out_path", "notebook_path",
+	} {
+		if v, ok := params[k]; ok {
+			add(v)
+		}
+	}
+	// One level of nested edit/operation objects.
+	for _, k := range []string{"edits", "files", "changes", "operations"} {
+		arr, ok := params[k].([]interface{})
+		if !ok {
+			continue
+		}
+		for _, e := range arr {
+			if m, ok := e.(map[string]interface{}); ok {
+				if s := firstString(m, "file_path", "path", "file"); s != "" {
+					out = append(out, s)
+				}
+			}
+		}
 	}
 	return out
 }
@@ -202,17 +329,19 @@ func isMutatingProg(prog string, fields []string) bool {
 	return false
 }
 
-// pathUnderAny cleans a shell token and reports whether it is under any
-// protected prefix, returning the cleaned token that matched.
+// pathUnderAny canonicalizes a shell token (absolute + symlink-resolved,
+// same as file-target matching) and reports whether any form is under a
+// protected prefix, returning the form that matched.
 func pathUnderAny(tok string, prefixes []string) (bool, string) {
 	tok = unquote(strings.TrimSpace(tok))
 	if tok == "" {
 		return false, ""
 	}
-	cleaned := filepath.Clean(tok)
-	for _, prefix := range prefixes {
-		if matchPathPrefix(cleaned, prefix) {
-			return true, cleaned
+	for _, cand := range canonicalCandidates(tok) {
+		for _, prefix := range prefixes {
+			if matchPathPrefix(cand, prefix) {
+				return true, cand
+			}
 		}
 	}
 	return false, ""
