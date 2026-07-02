@@ -5,9 +5,10 @@ authoring policies for, and operating Tool Guard Core.
 
 ## Start here
 
-- [**What's new in 0.2.0**](release-notes-0.2.0.md) - velocity / amount-
-  fragmentation mitigation, the `tg hook` coding-agent guard, self-protection
-  (`-protect-paths`), five new operators, and `tg simulate`.
+- [**Release notes**](../Release-Notes.md) - curated per-release highlights;
+  0.2.0 adds velocity / amount-fragmentation mitigation, the `tg hook`
+  coding-agent guard, self-protection (`-protect-paths`), five new operators,
+  and `tg simulate`.
 - [**Getting Started**](getting-started.md) - install, build, run
   your first policy in 5 commands.
 - [**Architecture**](architecture.md) - how the engine, the audit
@@ -50,7 +51,7 @@ authoring policies for, and operating Tool Guard Core.
 
 - [README](../README.md) - quick start + value prop.
 - [CHANGELOG](../CHANGELOG.md) - full per-release change log.
-- [Release notes: 0.2.0](release-notes-0.2.0.md) - curated highlights + upgrade notes.
+- [Release notes](../Release-Notes.md) - curated highlights + upgrade notes per release.
 - [SECURITY](../SECURITY.md) - private vulnerability disclosure.
 - [CONTRIBUTING](../CONTRIBUTING.md) - contributor guide.
 

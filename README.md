@@ -519,7 +519,7 @@ Comprehensive docs live in [`docs/`](docs/README.md):
 > **New in 0.2.0:** velocity tracking that closes the amount-fragmentation
 > bypass, the `tg hook` coding-agent guard, `-protect-paths` self-protection,
 > five new operators, and `tg simulate`. See
-> [docs/release-notes-0.2.0.md](docs/release-notes-0.2.0.md).
+> [Release-Notes.md](Release-Notes.md).
 
 Features absent from v0.2:
 
