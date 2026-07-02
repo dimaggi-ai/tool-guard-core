@@ -12,10 +12,94 @@ Nothing yet.
 
 Adds a rolling-window velocity mitigation for the one attack class the
 0.1.0 battle-test left open (amount fragmentation), five new deterministic
-operators, and a batch policy-simulation verb. No breaking changes — every
-0.1.0 policy and audit chain evaluates and verifies identically. The
+operators, a batch policy-simulation verb, a first-class coding-agent hook
+verb (`tg hook`), unconditional self-protection for policy files and audit
+logs (`-protect-paths` / `-protect-self`), and a new lint heuristic that
+flags write-scoped policies with no in-band path guard. No breaking changes —
+every 0.1.0 policy and audit chain evaluates and verifies identically. The
 Enterprise boundary is unchanged: no signing, no PII redaction, no semantic
 classification beyond the existing opt-in `llm_classify`.
+
+### `tg hook` — first-class PreToolUse guard for coding agents (`cmd/tg`)
+
+- New `tg hook` verb replaces the hand-rolled `jq` shell adapters in
+  `examples/coding-agent-guard/hooks` with a single binary that speaks the
+  hook JSON contract Claude Code, OpenAI Codex, and Antigravity share.
+- Reads one `{"tool_name":"…","tool_input":{"command":"…","file_path":"…",
+  "path":"…"}}` JSON object from stdin, evaluates it against `-policy-dir`
+  or `-policy`, and writes
+  `{"hookSpecificOutput":{"hookEventName":"PreToolUse",
+  "permissionDecision":"deny|ask|allow","permissionDecisionReason":"…"}}`
+  to stdout. **Always exits 0** — a PreToolUse hook signals via JSON, never
+  via exit code.
+- Decision mapping: engine `denied` → `deny`, `escalated` → `ask`,
+  everything else → `allow`.
+- **Fail-open by default** (`-fail-closed` flips to deny globally;
+  `-fail-closed-tools bash,write,edit,notebookedit` denies only for the
+  named tools on error — the careful-operator default for coding agents).
+  Malformed stdin always fails open because the tool cannot be attributed to
+  a destructive action.
+- `-protect-paths` / `-protect-self` are wired here as well (see next
+  section); they fire before policy evaluation.
+- Usage:
+  ```
+  tg hook (-policy-dir DIR | -policy FILE) [-mode shadow|enforcement]
+          [-agent-id NAME] [-fail-closed] [-fail-closed-tools bash,write,edit]
+          [-protect-paths P1,P2] [-protect-self]
+  ```
+
+### `-protect-paths` / `-protect-self` — self-protection outside the policy (`cmd/tg` + `cmd/tg-proxy`)
+
+An important insight from dogfooding: **any protection written inside a
+policy is useless because the agent can just edit the policy**. The only
+reliable self-protection is outside the policy, at operator-flag level.
+
+- `engine.ViolatesProtectedPaths(env, prefixes)` is the shared primitive:
+  it applies an unconditional pre-policy deny when a write-capable tool
+  targets any of the supplied path prefixes. Runs before (and independently
+  of) policy evaluation — a policy cannot disable it.
+- **Write-capable tools** covered: `write`, `edit`, `notebookedit`,
+  `multiedit`, `create`, and any unknown tool carrying a `file_path` / `path`
+  parameter.  **Read-only tools** (`read`, `glob`, `grep`, `ls`, …) are
+  explicitly excluded so protecting the policy directory does not break the
+  agent's ability to read it.
+- **Shell tools** (`bash`, `shell`, `run_command`, …) receive a
+  best-effort heuristic covering redirect targets (`echo x > /protected/f`),
+  `rm`, `tee`, `sed -i`, `dd of=`, `cp`, `mv`, and several others.
+  **Known limitation:** quoting, variable expansion (`$VAR`), and command
+  substitution (`$(…)`) are not resolved. An agent sophisticated enough to
+  exploit those forms should have bash scoped out of the write-capable policy
+  entirely, or the operator should rely on `-protect-paths` (which fires
+  unconditionally regardless of policy content).
+- `tg hook` flags:
+  - `-protect-paths P1,P2` — comma list of path prefixes to protect.
+  - `-protect-self` — automatically protects the `-policy-dir` / the
+    directory containing `-policy`, and `$HOME/.claude`.
+- `tg-proxy` flags:
+  - `-protect-paths P1,P2` — same semantics.
+  - `-protect-self` — protects `-policy-dir`, the `-audit-log` path, and the
+    running binary's directory.
+- When a violation is detected, the proxy returns **HTTP 403** with
+  `decision=denied` and records a boundary-deny trace in the hash-chained
+  audit log so `tg verify` remains intact.
+
+### `writable-scope-no-self-protection` lint heuristic (`cmd/tg lint`)
+
+- New lint heuristic (severity **warn**) fires when a policy's scope admits
+  write-capable tools (`write`, `edit`, `notebookedit`, `bash`, `shell`,
+  `run_command`, or an empty scope that matches everything) but no deny- or
+  escalate-rule in the policy uses a `path_classify` leaf.
+- The in-policy path guard is the best a policy author can do to protect
+  sensitive paths; the robust fix is operator-side (`-protect-paths` /
+  `-protect-self`) which the agent cannot edit away.  The lint heuristic is
+  advisory (not an error) because many shell policies gate by regex
+  intentionally.
+- Does **not** fire on `policies/refund_cap.yaml` or
+  `policies/refund_cap_strict.yaml` — both are scoped to `issue_refund` /
+  `process_return`, which are not write-capable tools.
+- Suppress it by adding a `path_classify` deny or escalate rule covering the
+  policy dir and audit log, or by running the proxy / hook with
+  `-protect-paths` / `-protect-self`.
 
 ### Velocity tracking — closes amount fragmentation (`tg-proxy`)
 

@@ -141,6 +141,52 @@ simulate verdict can't diverge from a live one. Add `-fail-on-deny` to
 exit 3 when any call denies (gate a policy change in CI), `-json` for
 machine-readable output, or `-calls -` to read from stdin.
 
+## 6. Guard a coding agent with `tg hook`
+
+`tg hook` is the batteries-included alternative to the hand-rolled shell
+adapters in `examples/coding-agent-guard/`. It reads one PreToolUse JSON
+object from stdin, evaluates it, and writes the hook response to stdout.
+**Always exits 0** — the hook signals via JSON, never via exit code.
+
+Add it to your Claude Code `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bin/tg hook -policy-dir /path/to/policies -protect-self -fail-closed-tools bash,write,edit,notebookedit"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Key flags:
+
+| Flag | Purpose |
+|---|---|
+| `-policy-dir DIR` | Load all `*.yaml` policies from this directory |
+| `-policy FILE` | Load a single policy file (mutually exclusive with `-policy-dir`) |
+| `-protect-self` | Unconditionally protect the policy dir and `$HOME/.claude` from writes — the agent cannot edit this away |
+| `-protect-paths P1,P2` | Additional prefixes to protect (comma-separated) |
+| `-fail-closed` | Deny on any internal error (tooling glitch, bad policy load) |
+| `-fail-closed-tools bash,write,edit,notebookedit` | Deny only these tools on error; others fail open |
+| `-mode shadow\|enforcement` | Shadow mode records decisions without blocking (default: enforcement) |
+
+`-protect-self` is the key insight: any deny rule you write inside the
+policy can be edited away by the agent. `-protect-self` runs unconditionally
+at the flag level and cannot be removed by an agent.
+
+See `examples/coding-agent-guard/README.md` for the full wiring guide
+covering Claude Code, OpenAI Codex, and Google Antigravity.
+
 ## Next steps
 
 - Read [creating-policies.md](creating-policies.md) for the full YAML

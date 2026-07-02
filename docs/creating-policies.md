@@ -239,6 +239,7 @@ allowed set positively (e.g. `require.top_level_kinds: [SELECT]`) instead.
 | `scope-no-tool-group` | warn | Tool-substitution bypass surface |
 | `amount-without-semantic-check` | warn | Free-text amount fragmentation; suppressed when a compiling regex / contains rule on a non-amount free-text field is present |
 | `rule-missing-citation` | warn | Auditor traceability gap |
+| `writable-scope-no-self-protection` | warn | Policy admits write-capable tools (`write`, `edit`, `notebookedit`, `bash`, `shell`, `run_command`) but no deny/escalate rule uses `path_classify` to guard sensitive paths |
 | `rule-id-collision` | error | Two rules share an ID |
 | `invalid-regex-syntax` | error | Regex that doesn't compile in RE2 |
 | `unknown-operator` | error | Operator the engine cannot evaluate |
@@ -246,6 +247,12 @@ allowed set positively (e.g. `require.top_level_kinds: [SELECT]`) instead.
 
 Run `tg lint -policy <file>` after every edit. The CI workflow
 includes a lint gate.
+
+> **Self-protection note:** the `writable-scope-no-self-protection` warning
+> can be suppressed by adding a `path_classify` deny/escalate rule, but the
+> robust mitigation is operator-side: run `tg-proxy` or `tg hook` with
+> `-protect-paths` / `-protect-self`. That check runs before and independent
+> of policy evaluation — the agent cannot disable it by editing the policy.
 
 ## Effect config
 

@@ -189,9 +189,52 @@ The full flag list, copied from `tg-proxy -help`:
 -escalation-default-timeout-min int
     default timeout (minutes) for an escalation that doesn't
     specify one (default 15)
+-protect-paths string
+    comma-separated list of path prefixes; a write-capable tool
+    call targeting any of them is denied BEFORE policy evaluation,
+    unconditionally — the agent cannot disable this by editing a policy
+-protect-self
+    automatically protect -policy-dir, the -audit-log path, and the
+    running binary's directory; prepended to -protect-paths
 -version
     print build version and exit
 ```
+
+### Self-protection (`-protect-paths` / `-protect-self`)
+
+Any deny rule written inside a policy can be edited away by an agent that
+has write access to the policy directory. `-protect-paths` and `-protect-self`
+close this gap at the operator-flag level, outside the policy:
+
+```
+tg-proxy \
+  -policy-dir /etc/tg-proxy/policies \
+  -audit-log   /var/lib/tg-proxy/audit/decisions.jsonl \
+  -protect-self
+```
+
+With `-protect-self`, the proxy automatically protects:
+
+- The `-policy-dir` itself (the agent cannot overwrite its own rules).
+- The `-audit-log` path (the agent cannot truncate the audit record).
+- The directory containing the running binary (prevents binary replacement).
+
+`-protect-paths P1,P2` accepts additional prefixes (comma-separated).
+
+**Matching semantics**: the same `matchPathPrefix` used by `path_classify`
+is applied after `filepath.Clean`, so `..`, `.`, and `//` in a file path
+are resolved before matching. The guard fires on writes (tools carrying
+`file_path` or `path` parameters, plus shell redirection, `rm`, `tee`,
+`sed -i`, `dd of=`, and similar mutating commands). Read-only tools
+(`read`, `glob`, `grep`, `ls`, …) are explicitly excluded.
+
+**Shell limitation**: quoting, variable expansion, and command substitution
+in `bash` / `run_command` commands are not resolved. Use `-protect-paths`
+for the policy and audit paths; keep `bash` out of the write-capable policy
+scope if you need stronger shell containment.
+
+When the guard fires, the proxy returns **HTTP 403** and records a
+boundary-deny trace in the audit chain so `tg verify` remains intact.
 
 ## Observability
 

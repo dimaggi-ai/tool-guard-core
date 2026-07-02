@@ -40,6 +40,14 @@ import (
 // deny that tg-proxy applies, BEFORE policy evaluation. A policy cannot turn
 // it off (the point: the agent can edit the policy, but not these flags).
 func cmdHook(args []string) int {
+	return runHook(args, os.Stdin, os.Stdout)
+}
+
+// runHook is the testable inner implementation of cmdHook. It accepts an
+// explicit stdin reader and stdout writer so unit tests can drive it without
+// spawning a process. cmdHook is the thin public entry point that passes
+// os.Stdin / os.Stdout.
+func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	fs := flag.NewFlagSet("hook", flag.ContinueOnError)
 	fs.SetOutput(io.Discard) // hooks stay quiet; we signal via JSON on stdout
 	policyDir := fs.String("policy-dir", "", "directory of *.yaml/*.yml policies (mutually exclusive with -policy)")
@@ -77,11 +85,11 @@ func cmdHook(args []string) int {
 			return 0
 		}
 		d, reason := failDecide("")
-		emitHookDecision(d, reason)
+		emitHookDecisionTo(stdout, d, reason)
 		return 0
 	}
 
-	raw, _ := io.ReadAll(os.Stdin)
+	raw, _ := io.ReadAll(stdin)
 
 	var in hookInput
 	if err := json.Unmarshal(raw, &in); err != nil {
@@ -89,7 +97,7 @@ func cmdHook(args []string) int {
 		// can't match — that intentionally fails open (don't wedge on a
 		// glitch we can't attribute to a destructive tool).
 		d, reason := failDecide("")
-		emitHookDecision(d, reason)
+		emitHookDecisionTo(stdout, d, reason)
 		return 0
 	}
 
@@ -106,7 +114,7 @@ func cmdHook(args []string) int {
 		protectList = append(selfProtectPaths(*policyDir, *policyFile), protectList...)
 	}
 	if violated, reason := engine.ViolatesProtectedPaths(env, protectList); violated {
-		emitHookDecision("deny", reason)
+		emitHookDecisionTo(stdout, "deny", reason)
 		return 0
 	}
 
@@ -115,7 +123,7 @@ func cmdHook(args []string) int {
 	// fail-open/closed policy applies. (Protected paths above still ran.)
 	if *policyDir == "" && *policyFile == "" {
 		d, reason := failDecide(tool)
-		emitHookDecision(d, reason)
+		emitHookDecisionTo(stdout, d, reason)
 		return 0
 	}
 
@@ -125,7 +133,7 @@ func cmdHook(args []string) int {
 	}
 
 	dec, reason := evalHook(*policyDir, *policyFile, env, mode, failDecide)
-	emitHookDecision(dec, reason)
+	emitHookDecisionTo(stdout, dec, reason)
 	return 0
 }
 
@@ -243,14 +251,21 @@ type hookOutput struct {
 	} `json:"hookSpecificOutput"`
 }
 
-// emitHookDecision writes the hook JSON to stdout. It never returns an error
+// emitHookDecisionTo writes the hook JSON to w. It never returns an error
 // to the caller — a hook must always exit 0.
-func emitHookDecision(decision, reason string) {
+func emitHookDecisionTo(w io.Writer, decision, reason string) {
 	var out hookOutput
 	out.HookSpecificOutput.HookEventName = "PreToolUse"
 	out.HookSpecificOutput.PermissionDecision = decision
 	out.HookSpecificOutput.PermissionDecisionReason = reason
-	_ = json.NewEncoder(os.Stdout).Encode(out)
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+// emitHookDecision is the os.Stdout-bound variant kept for any callers
+// outside runHook (currently none, but exported as a convenience so
+// future shell-adapter helpers can use it without threading a writer).
+func emitHookDecision(decision, reason string) {
+	emitHookDecisionTo(os.Stdout, decision, reason)
 }
 
 // csvSet parses a comma list into a lowercased set.
