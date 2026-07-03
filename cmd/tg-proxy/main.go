@@ -33,6 +33,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -78,11 +79,19 @@ type proxy struct {
 	auditCurrentBytes    int64
 	rateLimit            *rateLimiter // nil if disabled
 	rateLimitKeyBy       string
+	velocity             *velocityTracker // nil if disabled
+	velocityKeyBy        string
 	escalations          *escalationStore
 	approverToken        string
 	escalationDefaultMin int
 	policyDir            string
 	auditPath            string
+
+	// protectPaths is the resolved, unconditional protected-path prefix
+	// list (from -protect-paths and -protect-self). A write-capable tool
+	// call targeting one of these is denied BEFORE policy evaluation and
+	// no policy can turn it off. Empty = disabled.
+	protectPaths []string
 
 	eval *engine.Evaluator
 
@@ -123,10 +132,14 @@ func main() {
 		rateLimitRPS      = flag.Float64("rate-limit-rps", 0, "per-agent steady-state limit (req/s); 0 disables rate limiting")
 		rateLimitBurst    = flag.Float64("rate-limit-burst", 50, "per-agent burst capacity used when -rate-limit-rps > 0")
 		rateLimitKeyBy    = flag.String("rate-limit-key-by", "agent_id", "envelope field to key the limiter on: agent_id | session_id | org_id")
+		velocityTrack     = flag.Bool("velocity-track", false, "compute sliding-window monetary velocity (1h/24h sum+count) per key and inject it into context.verified.agent_velocity — closes the amount-fragmentation bypass; never overwrites a caller-supplied agent_velocity block")
+		velocityKeyBy     = flag.String("velocity-key-by", "agent_id", "envelope field to key velocity windows on: agent_id | session_id | org_id")
 		toolsYAML         = flag.String("tools-yaml", "", "path to a tools.yaml function classification registry (enables sql_classify {denied,allowed}_function_classes)")
 		approverToken     = flag.String("approver-token", "", "static bearer token required on POST /escalations/<id>/{approve,deny}; empty disables the endpoints")
 		approverTokenFile = flag.String("approver-token-file", "", "read the approver token from this file instead of the command line (keeps it out of /proc cmdline); mutually exclusive with -approver-token")
 		escalationTimeout = flag.Int("escalation-default-timeout-min", 15, "default timeout (minutes) for an escalation that doesn't specify one")
+		protectPaths      = flag.String("protect-paths", "", "comma list of path prefixes; a write-capable tool targeting one is denied BEFORE policy eval, unconditionally (self-protection that a policy cannot disable)")
+		protectSelf       = flag.Bool("protect-self", false, "also protect the -policy-dir, the -audit-log path, and the running binary's directory from writes (prepends them to -protect-paths)")
 		version           = flag.Bool("version", false, "print build version and exit")
 	)
 	flag.Parse()
@@ -195,6 +208,16 @@ func main() {
 		log.Fatalf("tg-proxy: invalid -rate-limit-key-by=%q (want agent_id|session_id|org_id)", *rateLimitKeyBy)
 	}
 
+	var vt *velocityTracker
+	if *velocityTrack {
+		vt = newVelocityTracker()
+	}
+	switch *velocityKeyBy {
+	case "agent_id", "session_id", "org_id":
+	default:
+		log.Fatalf("tg-proxy: invalid -velocity-key-by=%q (want agent_id|session_id|org_id)", *velocityKeyBy)
+	}
+
 	if *toolsYAML != "" {
 		reg, err := sqlguard.LoadRegistryFile(*toolsYAML)
 		if err != nil {
@@ -208,8 +231,31 @@ func main() {
 		log.Printf("tg-proxy: tools.yaml registered %d function classes", classes)
 	}
 
+	// Resolve the protected-path list. -protect-self prepends the policy
+	// dir, the audit-log path, and the running binary's directory so an
+	// agent under the proxy cannot rewrite the very policies/audit/binary
+	// enforcing it. These are enforced BEFORE policy eval and unconditionally.
+	protectList := splitCommaPaths(*protectPaths)
+	if *protectSelf {
+		var self []string
+		if *policyDir != "" {
+			self = append(self, *policyDir)
+		}
+		if *auditPath != "" {
+			self = append(self, *auditPath)
+		}
+		if exe, err := os.Executable(); err == nil {
+			self = append(self, filepath.Dir(exe))
+		}
+		protectList = append(self, protectList...)
+	}
+	if len(protectList) > 0 {
+		log.Printf("tg-proxy: protected paths (unconditional deny before eval): %v", protectList)
+	}
+
 	p := &proxy{
 		eval:                 engine.NewEvaluator(),
+		protectPaths:         protectList,
 		defaultMode:          domain.PolicyModeEnforcement,
 		failClosed:           *failClosed,
 		unknownToolsDeny:     *unknownToolsDeny,
@@ -219,6 +265,8 @@ func main() {
 		auditRotateBytes:     *auditRotateBytes,
 		rateLimit:            rl,
 		rateLimitKeyBy:       *rateLimitKeyBy,
+		velocity:             vt,
+		velocityKeyBy:        *velocityKeyBy,
 		escalations:          newEscalationStore(),
 		approverToken:        resolvedApproverToken,
 		escalationDefaultMin: *escalationTimeout,

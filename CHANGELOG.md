@@ -8,6 +8,188 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 Nothing yet.
 
+## [0.2.0] — 2026-07-02
+
+Adds a rolling-window velocity mitigation for the one attack class the
+0.1.0 battle-test left open (amount fragmentation), five new deterministic
+operators, a batch policy-simulation verb, a first-class coding-agent hook
+verb (`tg hook`), unconditional self-protection for policy files and audit
+logs (`-protect-paths` / `-protect-self`), and a new lint heuristic that
+flags write-scoped policies with no in-band path guard. No breaking changes —
+every 0.1.0 policy and audit chain evaluates and verifies identically. The
+Enterprise boundary is unchanged: no signing, no PII redaction, no semantic
+classification beyond the existing opt-in `llm_classify`.
+
+### `tg hook` — first-class PreToolUse guard for coding agents (`cmd/tg`)
+
+- New `tg hook` verb replaces the hand-rolled `jq` shell adapters in
+  `examples/coding-agent-guard/hooks` with a single binary that speaks the
+  hook JSON contract Claude Code, OpenAI Codex, and Antigravity share.
+- Reads one `{"tool_name":"…","tool_input":{"command":"…","file_path":"…",
+  "path":"…"}}` JSON object from stdin, evaluates it against `-policy-dir`
+  or `-policy`, and writes
+  `{"hookSpecificOutput":{"hookEventName":"PreToolUse",
+  "permissionDecision":"deny|ask|allow","permissionDecisionReason":"…"}}`
+  to stdout. **Always exits 0** — a PreToolUse hook signals via JSON, never
+  via exit code.
+- Decision mapping: engine `denied` → `deny`, `escalated` → `ask`,
+  everything else → `allow`.
+- **Fail-open by default** (`-fail-closed` flips to deny globally;
+  `-fail-closed-tools bash,write,edit,notebookedit` denies only for the
+  named tools on error — the careful-operator default for coding agents).
+  **Unattributable input** (malformed / oversized / unreadable stdin, where
+  the tool can't be identified) fails **closed** whenever any fail-closed mode
+  is engaged — an unparseable PreToolUse payload can't be proven
+  non-destructive; only the pure default (no fail-closed flags) fails open on
+  such input. stdin is capped at 1 MiB and read errors are surfaced, not
+  silently treated as an empty call.
+- The full `tool_input` is forwarded as parameters (not just three
+  cherry-picked fields), so a write hidden in an array/nested-edit param is
+  still seen by protected-path checks and policies.
+- `-protect-paths` / `-protect-self` are wired here as well (see next
+  section); they fire before policy evaluation.
+- Usage:
+  ```
+  tg hook (-policy-dir DIR | -policy FILE) [-mode shadow|enforcement]
+          [-agent-id NAME] [-fail-closed] [-fail-closed-tools bash,write,edit]
+          [-protect-paths P1,P2] [-protect-self]
+  ```
+
+### `-protect-paths` / `-protect-self` — self-protection outside the policy (`cmd/tg` + `cmd/tg-proxy`)
+
+An important insight from dogfooding: **any protection written inside a
+policy is useless because the agent can just edit the policy**. The only
+reliable self-protection is outside the policy, at operator-flag level.
+
+- `engine.ViolatesProtectedPaths(env, prefixes)` is the shared primitive:
+  it applies an unconditional pre-policy deny when a write-capable tool
+  targets any of the supplied path prefixes. Runs before (and independently
+  of) policy evaluation — a policy cannot disable it.
+- **Canonicalization (hardened via adversarial review):** both the candidate
+  path and every protected prefix are made absolute (relative paths resolve
+  against the process CWD) and symlink-resolved on their longest existing
+  ancestor, then matched in every combination. This closes the relative-path
+  (`file_path: "policy.yaml"`) and symlink-traversal (`/tmp/link/x` where
+  `/tmp/link → /protected`) bypasses. Array and one-level-nested edit params
+  are extracted, not just flat `file_path`/`path`. (Byte-exact matching —
+  case-insensitive filesystems and percent-encoded forms are out of scope.)
+- **Write-capable tools** covered: `write`, `edit`, `notebookedit`,
+  `multiedit`, `create`, and any unknown tool carrying a `file_path` / `path`
+  parameter.  **Read-only tools** (`read`, `glob`, `grep`, `ls`, …) are
+  explicitly excluded so protecting the policy directory does not break the
+  agent's ability to read it.
+- **Shell tools** (`bash`, `shell`, `run_command`, …) receive a
+  best-effort heuristic covering redirect targets (`echo x > /protected/f`),
+  `rm`, `tee`, `sed -i`, `dd of=`, `cp`, `mv`, and several others.
+  **Known limitation:** quoting, variable expansion (`$VAR`), and command
+  substitution (`$(…)`) are not resolved. An agent sophisticated enough to
+  exploit those forms should have bash scoped out of the write-capable policy
+  entirely, or the operator should rely on `-protect-paths` (which fires
+  unconditionally regardless of policy content).
+- `tg hook` flags:
+  - `-protect-paths P1,P2` — comma list of path prefixes to protect.
+  - `-protect-self` — automatically protects the `-policy-dir` / the
+    directory containing `-policy`, and `$HOME/.claude`.
+- `tg-proxy` flags:
+  - `-protect-paths P1,P2` — same semantics.
+  - `-protect-self` — protects `-policy-dir`, the `-audit-log` path, and the
+    running binary's directory.
+- When a violation is detected, the proxy returns **HTTP 403** with
+  `decision=denied` and records a boundary-deny trace in the hash-chained
+  audit log so `tg verify` remains intact.
+
+### `writable-scope-no-self-protection` lint heuristic (`cmd/tg lint`)
+
+- New lint heuristic (severity **warn**) fires when a policy's scope admits
+  write-capable tools (`write`, `edit`, `notebookedit`, `bash`, `shell`,
+  `run_command`, or an empty scope that matches everything) but no deny- or
+  escalate-rule in the policy uses a `path_classify` leaf.
+- The in-policy path guard is the best a policy author can do to protect
+  sensitive paths; the robust fix is operator-side (`-protect-paths` /
+  `-protect-self`) which the agent cannot edit away.  The lint heuristic is
+  advisory (not an error) because many shell policies gate by regex
+  intentionally.
+- Does **not** fire on `policies/refund_cap.yaml` or
+  `policies/refund_cap_strict.yaml` — both are scoped to `issue_refund` /
+  `process_return`, which are not write-capable tools.
+- Suppress it by adding a `path_classify` deny or escalate rule covering the
+  policy dir and audit log, or by running the proxy / hook with
+  `-protect-paths` / `-protect-self`.
+
+### Velocity tracking — closes amount fragmentation (`tg-proxy`)
+
+- New `-velocity-track` flag makes `tg-proxy` maintain a per-key sliding
+  window of monetary actions and inject the trailing 1h/24h sum + count
+  into `context.verified.agent_velocity.*` before evaluation. A policy
+  then closes the bypass with an ordinary threshold rule
+  (`field: context.verified.agent_velocity.monetary_sum_1h, operator: gt`),
+  so **no new condition type or engine change** was needed — the schema
+  already carried these fields; nothing computed them until now.
+- The injected sum **includes the prospective call**, so a `> cap` rule
+  denies the call that crosses the line. Only calls that actually proceed
+  (allow / flag) are recorded into the window; denied and escalated
+  attempts never inflate it.
+- The proxy **never overwrites** a caller-supplied `agent_velocity` block
+  — a deployment with a real ledger stays authoritative. `-velocity-track`
+  is the out-of-the-box default for deployments that have none.
+- `-velocity-key-by agent_id|session_id|org_id` (default `agent_id`).
+  State is in-memory, bounded (100k keys, 30-min idle eviction) exactly
+  like the rate limiter, and does not survive a restart. New
+  `tg_proxy_velocity_keys` metric.
+- The window aggregates on **server wall-clock time, not the client-supplied
+  envelope timestamp** — an agent controls the envelope, so timing off it
+  would let fragmented calls claim fake far-apart timestamps and dodge the 1h
+  window. (Regression: `TestVelocity_IgnoresClientTimestamp`.)
+- This is the mitigation the 0.1.0 battle-test flagged as missing
+  (`docs/battle-test-results.md`: amount fragmentation, "no shipped
+  mitigation"). New example policy `policies/refund_velocity_cap.yaml`
+  (1h $ cap + 24h count ceiling, lint-clean). End-to-end integration test
+  proves 10×$500 refunds allow to exactly $5,000 then deny, with
+  independent per-agent windows and caller-supplied ledgers honored.
+
+### New deterministic operators — `pkg/engine`
+
+- `not_in`, `not_contains`, `starts_with`, `ends_with`, `exists`.
+- `not_in` / `not_contains` fail **closed** on a missing field (an absent
+  value is trivially "not in the allowlist" / "does not contain X"), so a
+  deny rule cannot be dodged by omitting the field. Positive operators keep
+  the historical no-fire-on-missing behavior. `exists` decides purely by
+  presence (`value: true` = must exist, `false` = must be absent).
+- Lets policies express a tool-substitution allowlist
+  (`tool_name not_in [approved…] → deny`) or a required-justification gate
+  (`parameters.reason exists false → deny`) without regex gymnastics.
+- Registered across all four coupling points (domain constant, engine
+  eval, load-time operand validation, CLI `unknown-operator` allowlist);
+  the existing AST-coupling test guarantees none were missed.
+
+### `tg simulate` — batch policy dry-run (CLI)
+
+- `tg simulate (-policy-dir DIR | -policy FILE) -calls CALLS.jsonl` runs a
+  whole policy set against a JSONL stream of envelopes and reports the
+  decision breakdown, per-rule fire counts, and example envelope_ids per
+  non-allow decision. Answers "what would this policy set do to yesterday's
+  traffic?" before deploying, using the exact `engine.Evaluate` the proxy
+  and `tg evaluate` use — so a simulate verdict cannot diverge from a live
+  one.
+- `-json` for machine-readable output, `-mode shadow|enforcement`,
+  `-examples N`, and `-fail-on-deny` (exit 3 if any call denies — lets CI
+  gate a policy change that would start denying real traffic). Malformed
+  input lines are counted and skipped, never fatal. Reads stdin with
+  `-calls -`.
+
+### Tests
+
+- `pkg/engine/operators_v2_test.go` — every new operator incl. the
+  missing-field contract and a composite tool-substitution guard.
+- `cmd/tg-proxy/velocity_test.go` — window aggregation, 24h pruning, hard
+  per-key cap, keyed bounding/eviction.
+- `cmd/tg-proxy/velocity_integration_test.go` — amount-fragmentation
+  blocked end-to-end; independent windows; caller-supplied velocity
+  honored.
+- `cmd/tg/simulate_test.go` — decision/rule counting, exit-code contract,
+  policy-dir loading, validation of a bad policy.
+- Full suite green under `-race -count=1`, including the integration tag.
+
 ## [0.1.0] — 2026-06-09
 
 Initial public release.
@@ -278,5 +460,6 @@ Lint heuristics shipped (8):
   documented battle-test catalogue; the strict variants are for
   operators who already accept those build-time costs.
 
-[Unreleased]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/dimaggi-ai/tool-guard-core/releases/tag/v0.1.0

@@ -43,6 +43,8 @@ const usage = `tg — Tool Guard Core CLI
 
 Usage:
   tg evaluate  -policy POLICY.yaml -call CALL.json [-mode shadow|enforcement]
+  tg simulate  (-policy-dir DIR | -policy POLICY.yaml) -calls CALLS.jsonl
+  tg hook      (-policy-dir DIR | -policy POLICY.yaml) [-protect-self] [-fail-closed-tools ...]
   tg verify    -file DECISIONS.jsonl
   tg lint      -policy POLICY.yaml
   tg benchmark [-trials N]
@@ -94,6 +96,10 @@ func main() {
 	switch verb {
 	case "evaluate":
 		os.Exit(cmdEvaluate(args))
+	case "simulate":
+		os.Exit(cmdSimulate(args))
+	case "hook":
+		os.Exit(cmdHook(args))
 	case "verify":
 		os.Exit(cmdVerify(args))
 	case "lint":
@@ -484,7 +490,88 @@ func lintPolicy(p domain.Policy) []LintFinding {
 		}
 	}
 
+	// Heuristic 7: writable scope without self-protection. A policy that
+	// admits write-capable tools (write/edit/notebookedit or a shell tool)
+	// can, by construction, edit files — including its own YAML and the
+	// audit log. If no rule uses a path_classify deny/escalate leaf, the
+	// policy has no in-band tripwire against writes to sensitive paths. The
+	// robust fix is operator-side (tg-proxy / tg hook -protect-paths /
+	// -protect-self), which a policy cannot disable; a path_classify rule is
+	// the in-policy mitigation. WARNING only — many shell policies gate by
+	// regex intentionally, so this is advisory, not an error.
+	if admits := writableToolsInScope(p.Scope); len(admits) > 0 && !policyHasPathProtection(p) {
+		out = append(out, LintFinding{
+			Rule:     "writable-scope-no-self-protection",
+			Severity: "warn",
+			Message:  fmt.Sprintf("policy grants write-capable tools (%s) but no rule uses path_classify to protect sensitive paths; a policy that can edit files should protect its own config — add a path_classify deny rule or run tg-proxy/tg hook with -protect-paths", strings.Join(admits, ", ")),
+			Suggest:  "add a path_classify deny/escalate rule covering the policy dir + audit log, or run the proxy/hook with -protect-paths / -protect-self (unconditional, cannot be edited away by the agent)",
+		})
+	}
+
 	return out
+}
+
+// writableToolCatalog is the closed set of tool names the
+// writable-scope-no-self-protection heuristic treats as write-capable
+// (file mutators + shell executors). Matched case-insensitively so the
+// coding-agent forms (Bash, Write, Edit, NotebookEdit) are caught.
+var writableToolCatalog = map[string]struct{}{
+	"write": {}, "edit": {}, "notebookedit": {},
+	"bash": {}, "shell": {}, "run_command": {},
+}
+
+// writableToolsInScope returns the write-capable tool names a policy's scope
+// admits. An empty scope (no tool_names AND no tool_groups) matches every
+// tool, so it admits the whole catalog. Otherwise only the explicitly-listed
+// tool_names are considered (a tool_groups-only scope names no concrete
+// write tool, so it does not trip this heuristic).
+func writableToolsInScope(scope domain.PolicyScope) []string {
+	if len(scope.ToolNames) == 0 && len(scope.ToolGroups) == 0 {
+		return []string{"empty scope — all tools"}
+	}
+	var out []string
+	for _, n := range scope.ToolNames {
+		if _, ok := writableToolCatalog[strings.ToLower(strings.TrimSpace(n))]; ok {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// policyHasPathProtection reports whether any deny/escalate rule uses a
+// path_classify leaf anywhere in its condition tree — the in-policy
+// tripwire the writable-scope heuristic looks for.
+func policyHasPathProtection(p domain.Policy) bool {
+	for _, r := range p.Rules {
+		if r.Effect != domain.EffectDeny && r.Effect != domain.EffectEscalate {
+			continue
+		}
+		if conditionHasPathClassify(r.Conditions) {
+			return true
+		}
+	}
+	return false
+}
+
+// conditionHasPathClassify walks a condition tree for a PathClassify leaf.
+func conditionHasPathClassify(c domain.Condition) bool {
+	if c.PathClassify != nil {
+		return true
+	}
+	for _, ch := range c.And {
+		if conditionHasPathClassify(ch) {
+			return true
+		}
+	}
+	for _, ch := range c.Or {
+		if conditionHasPathClassify(ch) {
+			return true
+		}
+	}
+	if c.Not != nil {
+		return conditionHasPathClassify(*c.Not)
+	}
+	return false
 }
 
 // knownOperators is the closed set the engine's condition.evalLeaf knows
@@ -502,6 +589,9 @@ var knownOperators = map[string]struct{}{
 	"gt": {}, "gte": {}, "lt": {}, "lte": {},
 	"in": {}, "contains": {}, "regex": {},
 	"gt_field": {}, "lt_field": {},
+	// v0.2.0 negative / presence operators
+	"not_in": {}, "not_contains": {},
+	"starts_with": {}, "ends_with": {}, "exists": {},
 }
 
 // collectUnknownOperators walks a condition tree and returns operator

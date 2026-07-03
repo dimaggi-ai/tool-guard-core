@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
@@ -180,6 +181,19 @@ func (p *proxy) emitEscalationResolution(e *Escalation, approved bool) {
 		log.Printf("tg-proxy: emitEscalationResolution audit: %v", err)
 		p.auditFailureCount.Add(1)
 	}
+}
+
+// splitCommaPaths parses a comma-separated path list into a slice, trimming
+// blanks. Values are left as-is; engine.ViolatesProtectedPaths cleans them.
+func splitCommaPaths(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 // short truncates a hash for log output.

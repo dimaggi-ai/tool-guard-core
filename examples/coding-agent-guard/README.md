@@ -153,6 +153,37 @@ If you would rather a tooling glitch never wedge your agent, set `TG_FAIL=open`
 to allow-on-error instead. Both adapters honor `TG_FAIL`, `TG_BIN`, and
 `TG_POLICY`.
 
+## Batteries-included alternative: `tg hook`
+
+The hand-rolled shell adapters in `hooks/` exist to show how the hook
+protocol works. For a new deployment, `tg hook` (the built-in hook verb
+added in v0.2.0) is the simpler choice — one binary, no `jq` dependency,
+and `-protect-self` built in:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bin/tg hook -policy-dir hooks/../ -protect-self -fail-closed-tools bash,write,edit,notebookedit"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+`tg hook` reads one PreToolUse JSON from stdin, evaluates it, and writes the
+`hookSpecificOutput` JSON to stdout. Always exits 0. The shell adapters in
+this directory remain as a reference implementation showing how to translate
+the engine's output into each agent's native signal if you need the extra
+flexibility.
+
 ## Why hooks (and how this relates to the proxy)
 
 Tool Guard Core has two front doors to the same engine:

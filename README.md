@@ -514,9 +514,14 @@ Comprehensive docs live in [`docs/`](docs/README.md):
 - [Battle-test results](docs/battle-test-results.md) — real Gemma 4 vs the engine
 - [Core vs Enterprise](docs/oss-vs-enterprise.md) — the precise boundary: what ships here, what the Enterprise platform adds, what exists in neither
 
-## Known limitations (v0.1)
+## Known limitations (v0.2)
 
-Features absent from v0.1:
+> **New in 0.2.0:** velocity tracking that closes the amount-fragmentation
+> bypass, the `tg hook` coding-agent guard, `-protect-paths` self-protection,
+> five new operators, and `tg simulate`. See
+> [Release-Notes.md](Release-Notes.md).
+
+Features absent from v0.2:
 
 - **Single-model classifier.** The semantic classifier is one local
   Gemma. A single model can be bypassed by adversarial paraphrases —

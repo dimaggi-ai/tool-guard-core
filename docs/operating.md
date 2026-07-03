@@ -31,6 +31,7 @@ ExecStart=/usr/local/bin/tg-proxy \
   -unknown-tools-deny=true \
   -rate-limit-rps 20 \
   -rate-limit-burst 100 \
+  -velocity-track \
   -audit-sync-mode interval \
   -audit-sync-every 10 \
   -audit-rotate-bytes 104857600 \
@@ -54,6 +55,37 @@ the proxy reads `/etc/tg-proxy/policies/*.yaml`, fail-closes if any
 policy file is malformed, and writes the audit log to
 `/var/lib/tg-proxy/audit/`.
 
+### Velocity tracking (amount fragmentation)
+
+`-velocity-track` makes the proxy maintain a per-key sliding window of
+monetary actions and inject the trailing 1h/24h sum and count into
+`context.verified.agent_velocity.*` before evaluation. A policy then
+closes the amount-fragmentation bypass with an ordinary threshold rule
+(see [`policies/refund_velocity_cap.yaml`](../policies/refund_velocity_cap.yaml)):
+
+```yaml
+conditions:
+  field: context.verified.agent_velocity.monetary_sum_1h
+  operator: gt
+  value: 5000        # deny once the 1h refund total would cross $5k
+```
+
+Notes:
+
+- The injected sum **includes the prospective call**, so a `> cap` rule
+  denies the call that crosses the line. Only calls that actually proceed
+  (allow / flag) are recorded into the window — denied attempts never
+  inflate it.
+- The proxy **never overwrites** a caller-supplied `agent_velocity`
+  block. If you already compute rolling totals from a ledger, keep
+  sending them and leave `-velocity-track` off; the two are mutually
+  exclusive per request.
+- State is in-memory, keyed by `-velocity-key-by` (agent_id by default),
+  bounded (100k keys, 30-min idle eviction) exactly like the rate
+  limiter. It does **not** survive a restart — for durable cross-restart
+  aggregates, supply the totals yourself. `tg_proxy_velocity_keys` in
+  `/metrics` reports the live key count.
+
 ### Docker / Kubernetes
 
 The shipped `Dockerfile` produces a distroless-nonroot image with
@@ -61,12 +93,12 @@ The shipped `Dockerfile` produces a distroless-nonroot image with
 ~10 MB statically linked.
 
 ```sh
-docker build -t ghcr.io/dimaggi-ai/tool-guard-core:0.1.0 .
+docker build -t ghcr.io/dimaggi-ai/tool-guard-core:0.2.0 .
 docker run --rm \
   -p 9090:9090 \
   -v "$(pwd)/policies:/policies:ro" \
   -v "$(pwd)/audit:/var/lib/tg" \
-  ghcr.io/dimaggi-ai/tool-guard-core:0.1.0 \
+  ghcr.io/dimaggi-ai/tool-guard-core:0.2.0 \
   -policy-dir /policies \
   -audit-log /var/lib/tg/decisions.jsonl \
   -listen :9090
@@ -139,6 +171,14 @@ The full flag list, copied from `tg-proxy -help`:
 -rate-limit-key-by string
     envelope field to key the limiter on: agent_id | session_id | org_id
     (default "agent_id")
+-velocity-track
+    compute a sliding-window monetary velocity (1h/24h sum + count) per key
+    and inject it into context.verified.agent_velocity before evaluation —
+    closes the amount-fragmentation bypass. Never overwrites a caller-supplied
+    agent_velocity block (a real ledger stays authoritative).
+-velocity-key-by string
+    envelope field to key velocity windows on: agent_id | session_id | org_id
+    (default "agent_id")
 -tools-yaml string
     path to a tools.yaml function classification registry
 -approver-token string
@@ -149,9 +189,52 @@ The full flag list, copied from `tg-proxy -help`:
 -escalation-default-timeout-min int
     default timeout (minutes) for an escalation that doesn't
     specify one (default 15)
+-protect-paths string
+    comma-separated list of path prefixes; a write-capable tool
+    call targeting any of them is denied BEFORE policy evaluation,
+    unconditionally — the agent cannot disable this by editing a policy
+-protect-self
+    automatically protect -policy-dir, the -audit-log path, and the
+    running binary's directory; prepended to -protect-paths
 -version
     print build version and exit
 ```
+
+### Self-protection (`-protect-paths` / `-protect-self`)
+
+Any deny rule written inside a policy can be edited away by an agent that
+has write access to the policy directory. `-protect-paths` and `-protect-self`
+close this gap at the operator-flag level, outside the policy:
+
+```
+tg-proxy \
+  -policy-dir /etc/tg-proxy/policies \
+  -audit-log   /var/lib/tg-proxy/audit/decisions.jsonl \
+  -protect-self
+```
+
+With `-protect-self`, the proxy automatically protects:
+
+- The `-policy-dir` itself (the agent cannot overwrite its own rules).
+- The `-audit-log` path (the agent cannot truncate the audit record).
+- The directory containing the running binary (prevents binary replacement).
+
+`-protect-paths P1,P2` accepts additional prefixes (comma-separated).
+
+**Matching semantics**: the same `matchPathPrefix` used by `path_classify`
+is applied after `filepath.Clean`, so `..`, `.`, and `//` in a file path
+are resolved before matching. The guard fires on writes (tools carrying
+`file_path` or `path` parameters, plus shell redirection, `rm`, `tee`,
+`sed -i`, `dd of=`, and similar mutating commands). Read-only tools
+(`read`, `glob`, `grep`, `ls`, …) are explicitly excluded.
+
+**Shell limitation**: quoting, variable expansion, and command substitution
+in `bash` / `run_command` commands are not resolved. Use `-protect-paths`
+for the policy and audit paths; keep `bash` out of the write-capable policy
+scope if you need stronger shell containment.
+
+When the guard fires, the proxy returns **HTTP 403** and records a
+boundary-deny trace in the audit chain so `tg verify` remains intact.
 
 ## Observability
 

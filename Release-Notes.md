@@ -1,0 +1,194 @@
+# Tool Guard Core — Release Notes
+
+Curated highlights and upgrade notes per release. For the exhaustive,
+per-change record see [CHANGELOG.md](CHANGELOG.md).
+
+---
+
+## 0.2.0 — 2026-07-02
+
+Closes the one attack class 0.1.0's own battle-test left open, adds a
+first-class way to guard coding agents, and makes the guard able to protect
+itself. **No breaking changes** — every 0.1.0 policy and audit chain evaluates
+and verifies identically, and every new behavior is opt-in.
+
+The Enterprise boundary is unchanged: no cryptographic signing, no PII
+redaction, no semantic classification beyond the existing opt-in
+`llm_classify`. Everything below is deterministic and dependency-free.
+
+### Highlights
+
+- **Amount fragmentation is now mitigated.** `tg-proxy -velocity-track`
+  computes rolling 1h/24h monetary windows so a policy can stop an agent that
+  splits one large action into many small ones — the bypass 0.1.0 flagged as
+  having "no shipped mitigation."
+- **`tg hook`** — a single binary that guards Claude Code / Codex / Antigravity
+  tool calls, replacing hand-rolled `jq` shell adapters.
+- **`-protect-paths` / `-protect-self`** — self-protection that lives in
+  operator flags, *outside* the editable policy, so an agent can't disable it
+  by rewriting the rules. Adversarially reviewed and hardened.
+- **Five new operators** and **`tg simulate`** for expressing and testing
+  policies.
+
+### 1. Velocity tracking — closes amount fragmentation
+
+`tg-proxy -velocity-track` maintains a per-key sliding window of monetary
+actions and injects the trailing 1h/24h sum + count into
+`context.verified.agent_velocity.*` before evaluation. A policy then closes
+the bypass with an ordinary threshold rule — no new condition type needed:
+
+```yaml
+conditions:
+  field: context.verified.agent_velocity.monetary_sum_1h
+  operator: gt
+  value: 5000        # deny once the 1h refund total would cross $5k
+```
+
+- The injected sum **includes the prospective call**, so the rule denies the
+  call that crosses the line; only calls that actually proceed are recorded.
+- The proxy **never overwrites** a caller-supplied `agent_velocity` block — a
+  real ledger stays authoritative.
+- `-velocity-key-by agent_id|session_id|org_id` (default `agent_id`).
+  Bounded, in-memory, does not survive a restart. New `tg_proxy_velocity_keys`
+  metric. Example policy: [`policies/refund_velocity_cap.yaml`](policies/refund_velocity_cap.yaml).
+
+### 2. `tg hook` — guard a coding agent
+
+A first-class PreToolUse guard that reads the hook JSON on stdin and emits a
+permission decision — no `jq` plumbing:
+
+```jsonc
+// Claude Code settings.json
+{ "hooks": { "PreToolUse": [ { "matcher": "*", "hooks": [ {
+  "type": "command",
+  "command": "tg hook -policy-dir /etc/tg/policies -protect-self -fail-closed-tools bash,write,edit,notebookedit"
+} ] } ] } }
+```
+
+- Maps `denied → deny`, `escalated → ask`, else `allow`. Always exits 0.
+- **Fail-open by default** so a glitch never wedges the agent. `-fail-closed`
+  denies globally on error; `-fail-closed-tools` denies only for named tools.
+  **Unattributable input** (malformed / oversized / unreadable stdin) fails
+  **closed** when any fail-closed mode is engaged.
+- Forwards the full `tool_input`, so array/nested path params are seen.
+
+### 3. `-protect-paths` / `-protect-self` — self-protection
+
+The insight from dogfooding: *protection written inside a policy is useless
+because the agent can edit the policy.* So this deny lives in flags and runs
+before — and independent of — policy evaluation:
+
+```sh
+tg-proxy -policy-dir /etc/tg/policies -audit-log /var/tg/audit.jsonl -protect-self
+tg hook  -policy-dir /etc/tg/policies -protect-paths /etc/tg,$HOME/.claude
+```
+
+A write-capable tool targeting a protected prefix is denied (HTTP 403 in the
+proxy, with the deny recorded in the hash-chained audit log). **Hardened after
+an adversarial review:** paths on both sides are made absolute and
+symlink-resolved, and array/nested params are extracted, closing relative-path
+and symlink-traversal bypasses. Shell coverage is best-effort by design — the
+robust control is scoping bash out or using `shell_classify`.
+
+### 4. Five new operators
+
+`not_in`, `not_contains`, `starts_with`, `ends_with`, `exists`. `not_in` /
+`not_contains` **fail closed on a missing field**, so a deny-if-not-allowlisted
+rule can't be dodged by omitting the field:
+
+```yaml
+# Deny any shell tool not on the approved list — without regex gymnastics.
+conditions:
+  and:
+    - { field: tool_group, operator: eq, value: shell }
+    - { field: tool_name, operator: not_in, value: [run_tests, build, lint] }
+effect: deny
+```
+
+### 5. `tg simulate` — batch dry-run
+
+See what a policy set would do to real traffic before deploying:
+
+```sh
+tg simulate -policy-dir policies -calls yesterdays-calls.jsonl
+# decision breakdown + per-rule fire counts; -fail-on-deny gates CI; -json for machines
+```
+
+### 6. New lint heuristic
+
+`writable-scope-no-self-protection` (warning) flags a policy whose scope admits
+write-capable tools but has no `path_classify` guard — a nudge toward
+`-protect-paths`.
+
+### Upgrade notes
+
+- **Drop-in.** No schema, CLI, or audit-format changes. Replace the binaries;
+  existing policies load and existing audit chains still `tg verify`.
+- **Everything new is opt-in.** `-velocity-track`, `-protect-paths`,
+  `-protect-self`, and `tg hook`'s `-fail-closed*` all default off / fail-open.
+  Adopt them deliberately.
+- **New lint warning** may appear on write-scoped policies — it's advisory
+  (never an error) and never blocks a load.
+
+---
+
+## 0.1.0 — 2026-06-09
+
+Initial public release: the deterministic core, the classifiers, tamper-evident
+audit, the CLI, and the runtime proxy. Apache 2.0, no usage limits.
+
+### Deterministic policy engine (`pkg/engine`)
+
+- `Evaluator.Evaluate(envelope, policies, mode)` → decision + action taken +
+  triggered rules + primary citation.
+- Operators `eq`/`neq`/`gt`/`gte`/`lt`/`lte`/`in`/`contains`/`regex` plus
+  field-to-field `gt_field`/`lt_field`; `and`/`or`/`not` condition trees;
+  effects `allow`/`flag`/`escalate`/`deny` with a deterministic severity
+  hierarchy; shadow mode; string→number coercion so a stringified amount can't
+  dodge a threshold. Zero I/O, zero external dependencies.
+
+### Deterministic classifiers — close whole bypass families
+
+- **SQL** (`pkg/sqlguard`, four dialects) — `sql_classify`: top-level kinds,
+  no-dynamic-SQL, no-program-exec, function/table allow-deny, function classes.
+  Closes CTE-hidden DML (`WITH x AS (…) DELETE …`), dollar-quote, and
+  function-exec smuggling.
+- **Path** — `path_classify`: clean, absolute-only, canonical-prefix
+  allow/deny, symlink resolution, shell-meta deny. Closes traversal and
+  hostile-symlink bypasses.
+- **Shell** — `shell_classify`: argv[0] allowlist, argv path/pattern deny,
+  env-wrap deny (`env`/`sudo`/`chroot` re-launch). Closes shell-meta and
+  env-wrap injection — the tool execs argv directly, never `sh -c`.
+- **LLM (multimodal)** — `llm_classify`: opt-in local Gemma-class classifier
+  for generative prompts (text or text+image); fail-closed on error / low
+  confidence.
+
+### Tamper-evident audit (`pkg/audit`)
+
+- SHA-256 hash-chained decision traces with a canonical, byte-stable
+  serialization; offline `tg verify` reports the first break — no database.
+  The chain resumes cleanly across proxy restarts and rotation.
+
+### CLI + runtime
+
+- **`tg`** — `evaluate`, `verify`, `lint` (8 heuristics), `benchmark`, with a
+  documented exit-code contract.
+- **`tg-proxy`** — single-binary HTTP service: `POST /evaluate` plus
+  `/healthz`, `/readyz`, `/policies`, `/metrics`, `/reload` (+ `SIGHUP`).
+  Per-agent token-bucket rate limiting, a bounded escalation store with
+  constant-time approver-token compare, audit rotation + three fsync modes,
+  `-unknown-tools-deny`, and an envelope-depth cap.
+
+### Battle-tested
+
+- `cmd/battle-test` drives a real local LLM against the engine; canonical
+  numbers in [docs/battle-test-results.md](docs/battle-test-results.md) —
+  5/5 blocked on direct semantic smuggling, with tool-substitution and
+  amount-fragmentation bypasses documented honestly (the latter is closed in
+  0.2.0 above).
+
+### Boundary from day one
+
+Enterprise-only, not in this repo: cryptographic signing, PII redaction,
+multi-model ensemble classification, and compliance evidence packs. See
+[docs/oss-vs-enterprise.md](docs/oss-vs-enterprise.md).

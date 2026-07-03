@@ -15,7 +15,7 @@
 #
 # Tagged release builds inject the version via -ldflags:
 #
-#   docker build --build-arg VERSION=v0.1.0 -t tool-guard-core:v0.1.0 .
+#   docker build --build-arg VERSION=v0.2.0 -t tool-guard-core:v0.2.0 .
 #
 # To build the strict variant explicitly:
 #

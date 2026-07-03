@@ -64,6 +64,17 @@ const (
 	OpRegex    Operator = "regex"
 	OpGtField  Operator = "gt_field"
 	OpLtField  Operator = "lt_field"
+
+	// Negative / presence operators (v0.2.0). The two "not_" operators
+	// fail CLOSED on a missing field — an absent value is trivially "not
+	// in the allowlist" / "does not contain X", so a deny rule using them
+	// fires rather than silently passing (unlike eq/in, which no-op on a
+	// missing field). See engine.evalLeaf for the missing-field contract.
+	OpNotIn       Operator = "not_in"       // fieldVal not present in the list value
+	OpNotContains Operator = "not_contains" // string field does not contain the substring
+	OpStartsWith  Operator = "starts_with"  // string field has the given prefix
+	OpEndsWith    Operator = "ends_with"    // string field has the given suffix
+	OpExists      Operator = "exists"       // field presence; value true=must exist, false=must be absent
 )
 
 // Policy represents a versioned, citation-backed policy object.
