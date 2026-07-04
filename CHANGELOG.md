@@ -25,7 +25,8 @@ Enterprise boundary is unchanged (deny-only, no redaction/inference/signing).
   match), `allowed_schemes`, `allowed_methods` / `denied_methods`,
   `allowed_ports` / `denied_ports`. Reads `parameters.url` (as `sql_classify`
   reads `parameters.sql`). Fail-closed on a missing/unparseable URL when an
-  allow-list is set. *A firewall that doesn't govern egress is an open flank.*
+  allow-list is set. Egress is one of the surfaces agents touch most and
+  policies cover least — this closes that coverage gap.
 - **`tg hook -audit-log PATH`** — the hook path now appends every decision to
   a SHA-256 hash-chained JSONL log (verify with `tg verify`), so the
   coding-agent guard leaves a tamper-evident record like `tg-proxy` does. Tail
