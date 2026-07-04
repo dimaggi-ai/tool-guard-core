@@ -58,6 +58,7 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	failClosedTools := fs.String("fail-closed-tools", "", "comma list of tool names to fail CLOSED for on internal error (others fail open); overrides -fail-closed's global behavior")
 	protectPaths := fs.String("protect-paths", "", "comma list of path prefixes; a write-capable tool targeting one is denied BEFORE policy eval, unconditionally")
 	protectSelf := fs.Bool("protect-self", false, "shorthand: also protect the policy dir/file and $HOME/.claude from writes")
+	auditLog := fs.String("audit-log", "", "append each hook decision to this SHA-256 hash-chained JSONL log (tamper-evident, verify with `tg verify`); empty disables")
 
 	parseErr := fs.Parse(args)
 
@@ -133,13 +134,23 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 
 	env := hookEnvelope(tool, in, *agentID)
 
+	// emitAudited emits the decision and, when -audit-log is set, appends it
+	// to the hash chain (best-effort — an audit failure never changes the
+	// decision). Used for every decision that has a real envelope.
+	emitAudited := func(dec, reason string) {
+		emitHookDecisionTo(stdout, dec, reason)
+		if *auditLog != "" {
+			_ = appendHookAudit(*auditLog, env, dec, reason)
+		}
+	}
+
 	// ── Protected paths (Feature B) — BEFORE policy eval, unconditional ──
 	protectList := splitCSVPaths(*protectPaths)
 	if *protectSelf {
 		protectList = append(selfProtectPaths(*policyDir, *policyFile), protectList...)
 	}
 	if violated, reason := engine.ViolatesProtectedPaths(env, protectList); violated {
-		emitHookDecisionTo(stdout, "deny", reason)
+		emitAudited("deny", reason)
 		return 0
 	}
 
@@ -148,7 +159,7 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	// fail-open/closed policy applies. (Protected paths above still ran.)
 	if *policyDir == "" && *policyFile == "" {
 		d, reason := failDecide(tool)
-		emitHookDecisionTo(stdout, d, reason)
+		emitAudited(d, reason)
 		return 0
 	}
 
@@ -158,7 +169,7 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	}
 
 	dec, reason := evalHook(*policyDir, *policyFile, env, mode, failDecide)
-	emitHookDecisionTo(stdout, dec, reason)
+	emitAudited(dec, reason)
 	return 0
 }
 

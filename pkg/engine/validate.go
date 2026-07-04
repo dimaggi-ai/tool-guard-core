@@ -135,20 +135,22 @@ func validateCondition(c *domain.Condition, ctx string, depth int, underNot bool
 	hasPathClassify := c.PathClassify != nil
 	hasShellClassify := c.ShellClassify != nil
 	hasLLMClassify := c.LLMClassify != nil
+	hasWriteClassify := c.WriteClassify != nil
+	hasHTTPClassify := c.HTTPClassify != nil
 
 	populated := 0
-	for _, b := range []bool{hasAnd, hasOr, hasNot, hasLeaf, hasSQLClassify, hasPathClassify, hasShellClassify, hasLLMClassify} {
+	for _, b := range []bool{hasAnd, hasOr, hasNot, hasLeaf, hasSQLClassify, hasPathClassify, hasShellClassify, hasLLMClassify, hasWriteClassify, hasHTTPClassify} {
 		if b {
 			populated++
 		}
 	}
 	if populated == 0 {
-		return fmt.Errorf("%s: empty condition (no and/or/not/leaf/sql_classify/path_classify/shell_classify/llm_classify) — would match every call; refuse to load", ctx)
+		return fmt.Errorf("%s: empty condition (no and/or/not/leaf/sql_classify/path_classify/shell_classify/llm_classify/write_classify/http_classify) — would match every call; refuse to load", ctx)
 	}
 	// Exactly one form should be set on a single node. Mixed nodes
 	// silently drop everything but the first branch in EvalCondition.
 	if populated > 1 {
-		return fmt.Errorf("%s: condition has multiple populated forms — exactly one of {and, or, not, leaf, sql_classify, path_classify, shell_classify, llm_classify} must be set", ctx)
+		return fmt.Errorf("%s: condition has multiple populated forms — exactly one of {and, or, not, leaf, sql_classify, path_classify, shell_classify, llm_classify, write_classify, http_classify} must be set", ctx)
 	}
 
 	// A classifier leaf is deliberately fail-CLOSED: on a parse error,
@@ -159,8 +161,8 @@ func validateCondition(c *domain.Condition, ctx string, depth int, underNot bool
 	// allowed through. Refuse any classifier that sits under a not: node
 	// (directly or transitively); express the allow-set positively instead
 	// (e.g. require.top_level_kinds) so the fail-closed direction is kept.
-	if underNot && (hasSQLClassify || hasPathClassify || hasShellClassify || hasLLMClassify) {
-		return fmt.Errorf("%s: a classifier leaf (sql_classify/path_classify/shell_classify/llm_classify) may not appear under a not: node — negating a fail-closed classifier turns it fail-OPEN; express the allowed set positively instead of negating the denied set", ctx)
+	if underNot && (hasSQLClassify || hasPathClassify || hasShellClassify || hasLLMClassify || hasWriteClassify || hasHTTPClassify) {
+		return fmt.Errorf("%s: a classifier leaf (sql_classify/path_classify/shell_classify/llm_classify/write_classify/http_classify) may not appear under a not: node — negating a fail-closed classifier turns it fail-OPEN; express the allowed set positively instead of negating the denied set", ctx)
 	}
 
 	// LLMClassify: require a prompt_field and at least one forbidden

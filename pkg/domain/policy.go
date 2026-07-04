@@ -202,6 +202,20 @@ type Condition struct {
 	// endpoint are policy-configured so operators can swap to a
 	// different local LLM without code changes.
 	LLMClassify *LLMClassify `json:"llm_classify,omitempty"`
+
+	// WriteClassify, if non-nil, governs a file-writing tool call
+	// (write/edit/notebookedit/apply_patch/multiedit): which paths it may
+	// touch, how many bytes it may write, and content patterns it may not
+	// write. A COVERAGE rule for the file-write surface — the file tools
+	// otherwise pass ungoverned. Deny-only by design (no redaction /
+	// inference; that is Enterprise's redact-and-continue). Returning true
+	// = "rule fires".
+	WriteClassify *WriteClassify `json:"write_classify,omitempty"`
+
+	// HTTPClassify, if non-nil, governs an outbound-HTTP tool call
+	// (http/fetch): the destination host, scheme, port, and method. A
+	// COVERAGE rule for the egress surface. Returning true = "rule fires".
+	HTTPClassify *HTTPClassify `json:"http_classify,omitempty"`
 }
 
 // SQLClassify is the per-rule config for a SQL-aware leaf condition.
@@ -411,10 +425,84 @@ type ShellRequire struct {
 }
 
 // IsLeaf returns true if this is a leaf condition (has a field comparison
-// or a sql/path/shell/llm classify leaf).
+// or a sql/path/shell/llm/write/http classify leaf).
 func (c *Condition) IsLeaf() bool {
 	return c.SQLClassify != nil || c.PathClassify != nil || c.ShellClassify != nil ||
-		c.LLMClassify != nil || (c.Field != "" && c.Operator != "")
+		c.LLMClassify != nil || c.WriteClassify != nil || c.HTTPClassify != nil ||
+		(c.Field != "" && c.Operator != "")
+}
+
+// WriteClassify is the per-rule config for a file-write leaf. All
+// populated Require predicates compose with AND: a write must satisfy
+// every one to PASS; any violation makes the rule fire (deny). Deny-only
+// — it never rewrites or redacts the content (that is Enterprise).
+type WriteClassify struct {
+	// PathField is the dotted envelope path to the write target. Defaults
+	// to parameters.file_path; parameters.path and array/nested edit
+	// shapes (edits:[{file_path}], paths:[...]) are also collected.
+	PathField string `json:"path_field,omitempty"`
+
+	// ContentField is the dotted path to the bytes being written.
+	// Defaults to parameters.content.
+	ContentField string `json:"content_field,omitempty"`
+
+	Require WriteRequire `json:"require"`
+}
+
+// WriteRequire enumerates the predicates a file-write must satisfy.
+// Empty/zero fields are not checked.
+type WriteRequire struct {
+	// AllowedPathPrefixes, when non-empty, requires every write target to
+	// be under one of these canonical prefixes (component-boundary +
+	// "*"/"**" wildcards, same matcher as path_classify). A target that
+	// cannot be resolved, or lands outside the set, fires the rule.
+	AllowedPathPrefixes []string `json:"allowed_path_prefixes,omitempty"`
+
+	// DeniedPathPrefixes fires the rule when any write target is under one
+	// of these prefixes (e.g. the policy dir, credential paths).
+	DeniedPathPrefixes []string `json:"denied_path_prefixes,omitempty"`
+
+	// ResolveSymlinks also tests the symlink-resolved form of each target,
+	// so a write through a symlinked directory is matched. Best-effort on
+	// the longest existing ancestor (write targets often don't exist yet).
+	ResolveSymlinks bool `json:"resolve_symlinks,omitempty"`
+
+	// MaxBytes, when > 0, fires the rule when the content is larger than
+	// this many bytes — a runaway-write / accidental-dump ceiling.
+	MaxBytes int `json:"max_bytes,omitempty"`
+
+	// DeniedContentRegex fires the rule when the content matches any of
+	// these Go RE2 patterns. Deny-only (literal detection, never
+	// redaction). Use for "don't let the agent write a known-bad marker."
+	DeniedContentRegex []string `json:"denied_content_regex,omitempty"`
+}
+
+// HTTPClassify is the per-rule config for an outbound-HTTP leaf. Governs
+// where an http/fetch tool may connect. Any violation fires the rule.
+type HTTPClassify struct {
+	// URLField is the dotted path to the request URL. Defaults to
+	// parameters.url. A missing/unparseable URL fails closed when an
+	// allow-list is set.
+	URLField string `json:"url_field,omitempty"`
+
+	// MethodField is the dotted path to the HTTP method. Defaults to
+	// parameters.method (case-insensitive; empty method skips method checks).
+	MethodField string `json:"method_field,omitempty"`
+
+	Require HTTPRequire `json:"require"`
+}
+
+// HTTPRequire enumerates egress predicates. Empty/zero fields are not
+// checked. Host entries beginning with "." are suffix matches
+// (".example.com" matches api.example.com); otherwise exact (case-insensitive).
+type HTTPRequire struct {
+	AllowedHosts   []string `json:"allowed_hosts,omitempty"`
+	DeniedHosts    []string `json:"denied_hosts,omitempty"`
+	AllowedSchemes []string `json:"allowed_schemes,omitempty"` // e.g. [https]
+	AllowedMethods []string `json:"allowed_methods,omitempty"` // e.g. [GET, POST]
+	DeniedMethods  []string `json:"denied_methods,omitempty"`
+	AllowedPorts   []int    `json:"allowed_ports,omitempty"`
+	DeniedPorts    []int    `json:"denied_ports,omitempty"`
 }
 
 // LLMClassify configures a Gemma-class content classifier for

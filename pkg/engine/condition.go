@@ -76,6 +76,14 @@ func EvalConditionWithDetail(cond domain.Condition, fields map[string]interface{
 		return evalLLMClassifyWithDetail(cond.LLMClassify, fields)
 	}
 
+	if cond.WriteClassify != nil {
+		return evalWriteClassifyWithDetail(cond.WriteClassify, fields)
+	}
+
+	if cond.HTTPClassify != nil {
+		return evalHTTPClassifyWithDetail(cond.HTTPClassify, fields)
+	}
+
 	if !cond.IsLeaf() {
 		return true, "" // empty condition matches everything
 	}

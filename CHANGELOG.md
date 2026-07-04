@@ -6,7 +6,37 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-Nothing yet.
+### 0.3.0 — govern the workload agents actually have
+
+Driven by our own machine-guard audit log (3,635 real tool calls: 67% bash,
+then file writes and http — with file-writes and egress passing *ungoverned*).
+0.3.0 extends the deterministic engine to cover them. No breaking changes; the
+Enterprise boundary is unchanged (deny-only, no redaction/inference/signing).
+
+- **`write_classify` condition leaf** — governs file-writing tools
+  (write/edit/notebookedit/apply_patch/multiedit): `allowed_path_prefixes` /
+  `denied_path_prefixes` (component-boundary + `*`/`**` wildcards, reusing the
+  0.2.0 path canonicalization — absolute + optional symlink resolution, and
+  array/nested edit shapes), `max_bytes` (runaway-write ceiling), and
+  `denied_content_regex` (literal deny, **never** redaction). Fail-closed: a
+  write whose path can't be confirmed inside the allow-list fires the rule.
+- **`http_classify` condition leaf** — governs the egress surface for
+  http/fetch tools: `allowed_hosts` / `denied_hosts` (exact or `.suffix`
+  match), `allowed_schemes`, `allowed_methods` / `denied_methods`,
+  `allowed_ports` / `denied_ports`. Reads `parameters.url` (as `sql_classify`
+  reads `parameters.sql`). Fail-closed on a missing/unparseable URL when an
+  allow-list is set. *A firewall that doesn't govern egress is an open flank.*
+- **`tg hook -audit-log PATH`** — the hook path now appends every decision to
+  a SHA-256 hash-chained JSONL log (verify with `tg verify`), so the
+  coding-agent guard leaves a tamper-evident record like `tg-proxy` does. Tail
+  read keeps appends O(1) per call. Best-effort: an audit failure never
+  changes the decision.
+- Both new leaves are fail-closed classifiers and are refused under a `not:`
+  node (negating a fail-closed check flips it fail-open), consistent with the
+  other classifiers.
+
+Deferred to a later 0.3.x: SQL-in-bash extraction (a false-negative machine
+that would create illusory safety).
 
 ## [0.2.0] — 2026-07-02
 

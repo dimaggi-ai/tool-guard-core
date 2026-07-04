@@ -170,6 +170,52 @@ treats argv[0] as the binary and argv[1:] as its arguments. Closes
 shell-meta / env-wrap / interpreter-substitution bypasses (`env`,
 `sudo`, `nice`, `chroot` re-launching arbitrary binaries).
 
+### Write classifier
+
+Governs a file-writing tool (write / edit / notebookedit / apply_patch /
+multiedit): which paths it may touch, how much it may write, and content it
+may not write. Deny-only — it never rewrites or redacts.
+
+```yaml
+conditions:
+  write_classify:
+    path_field: parameters.file_path      # optional; file_path/path + arrays/nested edits also collected
+    content_field: parameters.content     # optional; default parameters.content
+    require:
+      allowed_path_prefixes: [/home/me/project/]   # every target must be under one of these
+      denied_path_prefixes:  [/home/me/project/.git/, /etc/]
+      resolve_symlinks: true               # also test the symlink-resolved target
+      max_bytes: 1048576                    # runaway-write ceiling (0 = no cap)
+      denied_content_regex: ['(?i)BEGIN (RSA|OPENSSH) PRIVATE KEY']
+```
+
+Path matching reuses the `path_classify` canonicalization (absolute + clean +
+optional symlink resolution, component-boundary + `*`/`**` wildcards) and the
+array/nested-edit extraction. **Fail-closed:** a write whose path cannot be
+confirmed inside `allowed_path_prefixes` fires the rule.
+
+### HTTP classifier (egress)
+
+Governs where an http/fetch tool may connect.
+
+```yaml
+conditions:
+  http_classify:
+    url_field: parameters.url             # optional; default parameters.url
+    method_field: parameters.method       # optional; default parameters.method
+    require:
+      allowed_hosts: [api.internal, .githubusercontent.com]  # exact or .suffix
+      denied_hosts:  [169.254.169.254]     # e.g. cloud metadata endpoint
+      allowed_schemes: [https]
+      allowed_methods: [GET, POST]
+      denied_ports: [22, 25]
+```
+
+Host entries beginning with `.` are suffix matches (`.example.com` matches
+`api.example.com` and `example.com`); otherwise exact, case-insensitive.
+**Fail-closed:** a missing or unparseable URL fires the rule when any
+allow-list is set.
+
 ### LLM classifier (multimodal)
 
 ```yaml
