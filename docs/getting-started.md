@@ -141,6 +141,30 @@ simulate verdict can't diverge from a live one. Add `-fail-on-deny` to
 exit 3 when any call denies (gate a policy change in CI), `-json` for
 machine-readable output, or `-calls -` to read from stdin.
 
+## 5b. Measure coverage — what fraction of calls is governed at all
+
+`tg simulate` shows the *decisions*; `tg coverage` shows the *blind spots* —
+how many of your agent's tool calls have any governing policy versus pass only
+because nothing governs them. It reads envelopes **or** decision traces, so you
+can point it straight at an audit log:
+
+```sh
+./bin/tg coverage -policy-dir policies -calls audit-log.jsonl
+```
+
+```
+Tool Guard coverage — 3 policies, 3705 tool calls
+────────────────────────────────────────────────────────
+  GOVERNED     3701   99.9%
+  ungoverned      4    0.1%
+  …
+  coverage gaps (ungoverned tools, most frequent first):
+    monitor    4 calls with no governing policy
+```
+
+`-min-coverage 90` exits 3 when coverage drops below the threshold (a CI gate
+against a growing agent outrunning its policy); `-json` for machines.
+
 ## 6. Guard a coding agent with `tg hook`
 
 `tg hook` is the batteries-included alternative to the hand-rolled shell

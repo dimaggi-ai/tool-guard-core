@@ -31,6 +31,14 @@ Enterprise boundary is unchanged (deny-only, no redaction/inference/signing).
   coding-agent guard leaves a tamper-evident record like `tg-proxy` does. Tail
   read keeps appends O(1) per call. Best-effort: an audit failure never
   changes the decision.
+- **`tg coverage` verb** — measures what fraction of an agent's tool calls have
+  ANY governing policy (scope-match), versus what passes only because nothing
+  governs it. Reads a JSONL of envelopes *or* decision traces, so it runs
+  straight against an existing audit log. Reports a coverage %, a per-tool
+  breakdown, and the biggest ungoverned tools (the coverage gaps).
+  `-min-coverage PCT` exits 3 for a CI gate; `-json` for machines. This is the
+  metric the 0.3.0 spine is about — pointed at our own audit log it shows the
+  gap 0.3.0 closes (http + apply_patch went from ungoverned to governed).
 - Both new leaves are fail-closed classifiers and are refused under a `not:`
   node (negating a fail-closed check flips it fail-open), consistent with the
   other classifiers.

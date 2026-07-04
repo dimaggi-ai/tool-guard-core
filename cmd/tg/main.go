@@ -44,6 +44,7 @@ const usage = `tg — Tool Guard Core CLI
 Usage:
   tg evaluate  -policy POLICY.yaml -call CALL.json [-mode shadow|enforcement]
   tg simulate  (-policy-dir DIR | -policy POLICY.yaml) -calls CALLS.jsonl
+  tg coverage  (-policy-dir DIR | -policy POLICY.yaml) -calls CALLS.jsonl
   tg hook      (-policy-dir DIR | -policy POLICY.yaml) [-protect-self] [-fail-closed-tools ...]
   tg verify    -file DECISIONS.jsonl
   tg lint      -policy POLICY.yaml
@@ -98,6 +99,8 @@ func main() {
 		os.Exit(cmdEvaluate(args))
 	case "simulate":
 		os.Exit(cmdSimulate(args))
+	case "coverage":
+		os.Exit(cmdCoverage(args))
 	case "hook":
 		os.Exit(cmdHook(args))
 	case "verify":
