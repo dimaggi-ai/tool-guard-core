@@ -120,7 +120,7 @@ commercial, self-hosted enforcement gateway + management product; see
 
 - Multi-model ensemble voting, voice-print matching, managed
   hosting, client SDKs. See
-  [Known limitations](#known-limitations-v01) for the full
+  [Known limitations](#known-limitations-v02) for the full
   list and what each would take to build.
 
 The included `cmd/battle-test` drives a local LLM (Gemma 4 e4b via
