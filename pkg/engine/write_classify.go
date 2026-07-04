@@ -19,36 +19,34 @@ func evalWriteClassifyWithDetail(w *domain.WriteClassify, fields map[string]inte
 	req := w.Require
 
 	// ── Path predicates ──────────────────────────────────────────────
-	targets := collectWriteTargets(w, fields)
-
 	if len(req.DeniedPathPrefixes) > 0 || len(req.AllowedPathPrefixes) > 0 {
+		targets := collectWriteTargets(w, fields)
 		if len(targets) == 0 {
-			// A write we can't attribute to a path, but the policy governs
-			// paths → fail closed (can't confirm it's inside the allow-list).
-			if len(req.AllowedPathPrefixes) > 0 {
-				return true, "write_classify: no write path found but allowed_path_prefixes is set"
-			}
+			// A path predicate is set but we can't attribute a path to this
+			// write — fail closed. Can't confirm it's inside the allow-list,
+			// and can't confirm it's clear of the deny-list.
+			return true, "write_classify: a path predicate is set but no write path was found in this call"
 		}
+		// Canonicalize the prefixes too (absolute + symlink-resolved), exactly
+		// like the target paths — otherwise a relative or symlinked prefix
+		// fails open. Mirrors protect.go's expandPrefixes.
+		denied := expandPrefixes(req.DeniedPathPrefixes)
+		allowed := expandPrefixes(req.AllowedPathPrefixes)
 		for _, t := range targets {
 			cands := canonicalCandidates(t)
-			if req.ResolveSymlinks {
-				// canonicalCandidates already appends the symlink-resolved
-				// form; nothing extra needed. (Kept explicit for clarity.)
-				_ = cands
-			}
 			// Denied prefixes: any candidate under any denied prefix fires.
 			for _, cand := range cands {
-				for _, p := range req.DeniedPathPrefixes {
+				for _, p := range denied {
 					if matchPathPrefix(cand, p) {
 						return true, fmt.Sprintf("write_classify: write to %s is under denied prefix %s", cand, p)
 					}
 				}
 			}
 			// Allow list: EVERY target must be under SOME allowed prefix.
-			if len(req.AllowedPathPrefixes) > 0 {
+			if len(allowed) > 0 {
 				ok := false
 				for _, cand := range cands {
-					for _, p := range req.AllowedPathPrefixes {
+					for _, p := range allowed {
 						if matchPathPrefix(cand, p) {
 							ok = true
 						}
@@ -62,32 +60,62 @@ func evalWriteClassifyWithDetail(w *domain.WriteClassify, fields map[string]inte
 	}
 
 	// ── Content predicates ───────────────────────────────────────────
-	contentField := w.ContentField
-	if contentField == "" {
-		contentField = "parameters.content"
-	}
-	content, hasContent := resolveField(contentField, fields)
-	contentStr := ""
-	if hasContent {
-		contentStr = fmt.Sprintf("%v", content)
-	}
-
-	if req.MaxBytes > 0 && len(contentStr) > req.MaxBytes {
-		return true, fmt.Sprintf("write_classify: content is %d bytes, over the %d-byte cap", len(contentStr), req.MaxBytes)
-	}
-
-	for _, pat := range req.DeniedContentRegex {
-		re, err := compiledRegex(pat)
-		if err != nil {
-			// A bad pattern must not silently pass; fail closed.
-			return true, fmt.Sprintf("write_classify: denied_content_regex %q did not compile: %v", pat, err)
+	if req.MaxBytes > 0 || len(req.DeniedContentRegex) > 0 {
+		contentStr, ok := writeContent(w, fields)
+		if !ok {
+			// A content predicate is set but we can't see the bytes being
+			// written (wrong type, or no content field present) → fail closed.
+			return true, "write_classify: a content predicate is set but no readable content field was found in this call"
 		}
-		if re.MatchString(contentStr) {
-			return true, fmt.Sprintf("write_classify: content matches denied pattern %q", pat)
+		if req.MaxBytes > 0 && len(contentStr) > req.MaxBytes {
+			return true, fmt.Sprintf("write_classify: content is %d bytes, over the %d-byte cap", len(contentStr), req.MaxBytes)
+		}
+		for _, pat := range req.DeniedContentRegex {
+			re, err := compiledRegex(pat)
+			if err != nil {
+				return true, fmt.Sprintf("write_classify: denied_content_regex %q did not compile: %v", pat, err)
+			}
+			if re.MatchString(contentStr) {
+				return true, fmt.Sprintf("write_classify: content matches denied pattern %q", pat)
+			}
 		}
 	}
 
 	return false, ""
+}
+
+// writeContent returns the bytes being written and whether they were found as
+// a string. It reads the configured ContentField, or — when none is set — the
+// content-carrying fields real coding-agent write tools use (Write.content,
+// Edit.new_string, NotebookEdit.new_source, apply_patch.patch, …). A present
+// but non-string value returns ok=false so a content predicate fails closed
+// rather than stringifying an object it can't reason about.
+func writeContent(w *domain.WriteClassify, fields map[string]interface{}) (string, bool) {
+	var keys []string
+	if w.ContentField != "" {
+		keys = []string{w.ContentField}
+	} else {
+		for _, k := range []string{"content", "new_string", "new_str", "new_source", "contents", "text", "body", "patch"} {
+			keys = append(keys, "parameters."+k)
+		}
+	}
+	for _, k := range keys {
+		v, ok := resolveField(k, fields)
+		if !ok {
+			continue
+		}
+		switch s := v.(type) {
+		case string:
+			return s, true
+		case []byte:
+			return string(s), true
+		}
+	}
+	// A key that was present but non-string falls through to here, as does a
+	// call with no content key at all — both force fail-closed (the predicate
+	// can't be evaluated on bytes we can't see). A governed write tool is
+	// expected to carry its content in one of these fields.
+	return "", false
 }
 
 // collectWriteTargets gathers the write path(s) from the configured

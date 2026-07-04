@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -39,6 +38,16 @@ func appendHookAudit(path string, env *domain.ActionEnvelope, decision, reason s
 		DecisionReason: reason,
 	}
 
+	// Serialize concurrent hook processes: two appends that both read the same
+	// tail hash would fork the chain. A portable advisory lock (with a
+	// staleness steal so a crashed holder can't wedge future appends) covers
+	// read-tail → hash → append → sync.
+	unlock, err := acquireAuditLock(path)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
 	prev, err := lastTraceHash(path)
 	if err != nil {
 		return err
@@ -63,6 +72,27 @@ func appendHookAudit(path string, env *domain.ActionEnvelope, decision, reason s
 		return err
 	}
 	return f.Sync()
+}
+
+// acquireAuditLock takes a portable advisory lock on <path>.lock so concurrent
+// hook processes serialize their read-tail-then-append and cannot fork the
+// chain. Bounded (~200ms) with a staleness steal — a crashed holder does not
+// wedge future appends. Returns an error (not a no-op unlock) on give-up so the
+// caller skips this record rather than appending unlocked.
+func acquireAuditLock(path string) (func(), error) {
+	lock := path + ".lock"
+	for i := 0; i < 100; i++ {
+		f, err := os.OpenFile(lock, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			return func() { _ = f.Close(); _ = os.Remove(lock) }, nil
+		}
+		if fi, statErr := os.Stat(lock); statErr == nil && time.Since(fi.ModTime()) > 10*time.Second {
+			_ = os.Remove(lock) // steal a stale lock (holder likely crashed)
+			continue
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	return nil, fmt.Errorf("audit: could not acquire lock %s", lock)
 }
 
 func hookDecisionToDomain(decision string) (domain.Decision, domain.ActionTaken) {
@@ -109,14 +139,24 @@ func lastTraceHash(path string) (string, error) {
 		return "", err
 	}
 
-	// Take the last non-empty line. If we started mid-file, the first
-	// (partial) line is discarded by only ever using the LAST complete one.
+	// If we started mid-file, the first line is a partial record — drop
+	// everything up to and including the first newline. If the whole window
+	// is one giant partial line (a record larger than the tail), we can't
+	// recover a clean tail; fail rather than hash a partial.
+	if start > 0 {
+		if i := bytes.IndexByte(data, '\n'); i >= 0 {
+			data = data[i+1:]
+		} else {
+			return "", fmt.Errorf("audit tail: last record exceeds %d bytes", tail)
+		}
+	}
+
+	// Take the last non-empty complete line (the file always ends in '\n' after
+	// a successful append, so the final complete record is the last token).
 	var lastLine []byte
-	sc := bufio.NewScanner(bytes.NewReader(data))
-	sc.Buffer(make([]byte, 0, 128*1024), 4*1024*1024)
-	for sc.Scan() {
-		if b := bytes.TrimSpace(sc.Bytes()); len(b) > 0 {
-			lastLine = append(lastLine[:0], b...)
+	for _, ln := range bytes.Split(bytes.TrimRight(data, "\n"), []byte{'\n'}) {
+		if b := bytes.TrimSpace(ln); len(b) > 0 {
+			lastLine = b
 		}
 	}
 	if len(lastLine) == 0 {

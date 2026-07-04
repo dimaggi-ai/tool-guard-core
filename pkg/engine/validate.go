@@ -278,6 +278,30 @@ func validateCondition(c *domain.Condition, ctx string, depth int, underNot bool
 		}
 	}
 
+	// WriteClassify: cap ** wildcards in the path-prefix lists (same
+	// O(N^k) match cost as path_classify) and refuse a denied_content_regex
+	// that does not compile — a bad pattern fires the rule at eval time
+	// (fail-closed), which is safe but surfaces as an opaque per-call deny
+	// instead of a clear load error.
+	if hasWriteClassify {
+		req := c.WriteClassify.Require
+		for _, list := range [][]string{req.AllowedPathPrefixes, req.DeniedPathPrefixes} {
+			for _, prefix := range list {
+				if err := capWildcardCount(prefix); err != nil {
+					return fmt.Errorf("%s/write_classify: %w", ctx, err)
+				}
+			}
+		}
+		for _, pat := range req.DeniedContentRegex {
+			if _, err := compiledRegex(pat); err != nil {
+				return fmt.Errorf("%s/write_classify: denied_content_regex %q does not compile: %w", ctx, pat, err)
+			}
+		}
+		if req.MaxBytes < 0 {
+			return fmt.Errorf("%s/write_classify: max_bytes must be ≥ 0 (got %d)", ctx, req.MaxBytes)
+		}
+	}
+
 	return nil
 }
 

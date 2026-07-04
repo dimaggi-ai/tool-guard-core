@@ -77,6 +77,33 @@ func TestWriteClassify_FailsClosedWhenNoPathButAllowSet(t *testing.T) {
 	}
 }
 
+func TestWriteClassify_ContentFromAlternateKeys(t *testing.T) {
+	cond := wc(&domain.WriteClassify{Require: domain.WriteRequire{MaxBytes: 5}})
+	// Edit tools carry the bytes in new_string, not content — the cap must
+	// still see them.
+	if !EvalCondition(cond, map[string]interface{}{"parameters.new_string": "way over five"}) {
+		t.Error("oversize new_string content should fire the max_bytes cap")
+	}
+	// apply_patch carries the bytes in patch.
+	if !EvalCondition(cond, map[string]interface{}{"parameters.patch": "0123456789"}) {
+		t.Error("oversize patch content should fire the max_bytes cap")
+	}
+}
+
+func TestWriteClassify_FailsClosedWhenContentPredicateSetButNoContent(t *testing.T) {
+	// A content predicate is set but the call carries no readable content
+	// field at all → fail closed (we can't confirm the bytes are safe).
+	cond := wc(&domain.WriteClassify{Require: domain.WriteRequire{MaxBytes: 100}})
+	if !EvalCondition(cond, map[string]interface{}{"parameters.file_path": "/tmp/x"}) {
+		t.Error("content predicate set + no content field should fail closed (fire)")
+	}
+	// A non-string content value (object) is unreadable → fail closed too.
+	nonString := map[string]interface{}{"parameters.content": map[string]interface{}{"nested": 1}}
+	if !EvalCondition(cond, nonString) {
+		t.Error("non-string content should fail closed (fire)")
+	}
+}
+
 func TestWriteClassify_ArrayAndNestedTargets(t *testing.T) {
 	dir := t.TempDir()
 	protected := filepath.Join(dir, "guard")

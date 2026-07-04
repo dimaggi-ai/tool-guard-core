@@ -462,9 +462,14 @@ type WriteRequire struct {
 	// of these prefixes (e.g. the policy dir, credential paths).
 	DeniedPathPrefixes []string `json:"denied_path_prefixes,omitempty"`
 
-	// ResolveSymlinks also tests the symlink-resolved form of each target,
-	// so a write through a symlinked directory is matched. Best-effort on
-	// the longest existing ancestor (write targets often don't exist yet).
+	// ResolveSymlinks is retained for schema parity with path_classify/
+	// shell_classify. write_classify ALWAYS tests the symlink-resolved form
+	// of each target (and each prefix) in addition to the absolute-cleaned
+	// form — a write through a symlinked directory is the precise evasion
+	// this primitive must catch, so resolution is unconditional and cannot
+	// be turned off. Best-effort on the longest existing ancestor (write
+	// targets often don't exist yet); resolution failure keeps the textual
+	// form, never fails open. Setting this flag has no additional effect.
 	ResolveSymlinks bool `json:"resolve_symlinks,omitempty"`
 
 	// MaxBytes, when > 0, fires the rule when the content is larger than

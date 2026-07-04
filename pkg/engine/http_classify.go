@@ -45,9 +45,13 @@ func evalHTTPClassifyWithDetail(h *domain.HTTPClassify, fields map[string]interf
 	if err != nil || u.Host == "" {
 		return true, fmt.Sprintf("http_classify: unparseable url %q", rawURL)
 	}
-
-	host := strings.ToLower(u.Hostname())
 	scheme := strings.ToLower(u.Scheme)
+	if scheme == "" && hasAllowList {
+		// A scheme-relative URL (//host/path) has an unverifiable destination.
+		return true, fmt.Sprintf("http_classify: url %q has no scheme and an allow-list is set", rawURL)
+	}
+	// Trim a trailing root dot so example.com. cannot dodge a .example.com rule.
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
 	port := explicitPort(u)
 
 	// Method (optional field).
@@ -97,10 +101,18 @@ func evalHTTPClassifyWithDetail(h *domain.HTTPClassify, fields map[string]interf
 	if len(req.AllowedSchemes) > 0 && !containsFold(req.AllowedSchemes, scheme) {
 		return true, fmt.Sprintf("http_classify: scheme %s is not allowed", scheme)
 	}
-	if len(req.AllowedMethods) > 0 && method != "" && !containsFold(req.AllowedMethods, method) {
-		return true, fmt.Sprintf("http_classify: method %s is not allowed", method)
+	if len(req.AllowedMethods) > 0 {
+		if method == "" {
+			return true, "http_classify: allowed_methods is set but the request method is unknown"
+		}
+		if !containsFold(req.AllowedMethods, method) {
+			return true, fmt.Sprintf("http_classify: method %s is not allowed", method)
+		}
 	}
-	if len(req.AllowedPorts) > 0 && port > 0 {
+	if len(req.AllowedPorts) > 0 {
+		if port == 0 {
+			return true, "http_classify: allowed_ports is set but the port is unknown"
+		}
 		ok := false
 		for _, a := range req.AllowedPorts {
 			if port == a {
@@ -139,8 +151,8 @@ func explicitPort(u *url.URL) int {
 // api.example.com AND example.com); otherwise it's an exact match. All
 // case-insensitive.
 func hostMatches(host, entry string) bool {
-	host = strings.ToLower(strings.TrimSpace(host))
-	entry = strings.ToLower(strings.TrimSpace(entry))
+	host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+	entry = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(entry)), ".")
 	if entry == "" {
 		return false
 	}

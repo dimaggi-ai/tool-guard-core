@@ -165,9 +165,13 @@ func printCoverageTable(policyCount, total, governed, malformed int, pct float64
 		fmt.Printf(", %d malformed (skipped)", malformed)
 	}
 	fmt.Println()
+	ungovPct := 0.0
+	if total > 0 {
+		ungovPct = 100 - pct
+	}
 	fmt.Println(strings.Repeat("─", 56))
 	fmt.Printf("  GOVERNED   %6d  %5.1f%%\n", governed, pct)
-	fmt.Printf("  ungoverned %6d  %5.1f%%\n", total-governed, 100-pct)
+	fmt.Printf("  ungoverned %6d  %5.1f%%\n", total-governed, ungovPct)
 	fmt.Println(strings.Repeat("─", 56))
 	fmt.Println("  per tool (calls · governed? · policies):")
 	rows := sortedStats(stats)
