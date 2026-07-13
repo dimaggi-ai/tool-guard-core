@@ -6,7 +6,9 @@ authoring policies for, and operating Tool Guard Core.
 ## Start here
 
 - [**Release notes**](../Release-Notes.md) - curated per-release highlights;
-  0.2.0 adds velocity / amount-fragmentation mitigation, the `tg hook`
+  0.3.0 adds file-write (`write_classify`) and egress (`http_classify`)
+  governance, tamper-evident `tg hook -audit-log`, and the `tg coverage`
+  metric. 0.2.0 adds velocity / amount-fragmentation mitigation, the `tg hook`
   coding-agent guard, self-protection (`-protect-paths`), five new operators,
   and `tg simulate`.
 - [**Getting Started**](getting-started.md) - install, build, run

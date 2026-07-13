@@ -287,6 +287,16 @@ func validateCondition(c *domain.Condition, ctx string, depth int, underNot bool
 		req := c.WriteClassify.Require
 		for _, list := range [][]string{req.AllowedPathPrefixes, req.DeniedPathPrefixes} {
 			for _, prefix := range list {
+				// A blank/whitespace-only entry is silently dropped by
+				// expandPrefixes at eval time — harmless for a denied-prefix
+				// list, but for an allowed-prefix list it can silently empty
+				// the whole list, which disables the allow-list gate entirely
+				// (treated as "unset" instead of "misconfigured"). Reject it
+				// at load time so a typo'd blank entry surfaces as a clear
+				// error, not a policy that silently stops restricting writes.
+				if strings.TrimSpace(prefix) == "" {
+					return fmt.Errorf("%s/write_classify: a path prefix entry is blank/whitespace-only — remove it, or replace it with an explicit prefix", ctx)
+				}
 				if err := capWildcardCount(prefix); err != nil {
 					return fmt.Errorf("%s/write_classify: %w", ctx, err)
 				}

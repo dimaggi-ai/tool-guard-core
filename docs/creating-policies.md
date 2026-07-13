@@ -182,17 +182,21 @@ conditions:
     path_field: parameters.file_path      # optional; file_path/path + arrays/nested edits also collected
     content_field: parameters.content     # optional; default parameters.content
     require:
-      allowed_path_prefixes: [/home/me/project/]   # every target must be under one of these
+      allowed_path_prefixes: [/home/me/project/]   # every canonical form of every target must be under one of these
       denied_path_prefixes:  [/home/me/project/.git/, /etc/]
-      resolve_symlinks: true               # also test the symlink-resolved target
       max_bytes: 1048576                    # runaway-write ceiling (0 = no cap)
       denied_content_regex: ['(?i)BEGIN (RSA|OPENSSH) PRIVATE KEY']
 ```
 
 Path matching reuses the `path_classify` canonicalization (absolute + clean +
-optional symlink resolution, component-boundary + `*`/`**` wildcards) and the
-array/nested-edit extraction. **Fail-closed:** a write whose path cannot be
-confirmed inside `allowed_path_prefixes` fires the rule.
+component-boundary `*`/`**` wildcards) and the array/nested-edit extraction.
+Symlink resolution is **always on** for write_classify (a write through a
+symlinked directory is the exact evasion this primitive exists to catch, so
+it isn't configurable — the `resolve_symlinks` field exists only for schema
+parity with `path_classify`/`shell_classify` and has no effect here).
+**Fail-closed:** a write whose path cannot be confirmed inside
+`allowed_path_prefixes` fires the rule — every canonical candidate (lexical
+and symlink-resolved) must independently match an allowed prefix.
 
 ### HTTP classifier (egress)
 

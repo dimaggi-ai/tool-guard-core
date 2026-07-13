@@ -103,6 +103,61 @@ func TestHTTPClassify_UnknownMethodFailsClosed(t *testing.T) {
 	}
 }
 
+// The following tests pin deliberate scope boundaries (not bugs): a
+// deny-list checks whether a SPECIFIC observed value is on the bad list, and
+// an unresolvable/absent value simply isn't one of the specific denied
+// values — CHANGELOG.md is explicit that fail-closed applies "when an
+// allow-list is set", not unconditionally. These tests exist so a future
+// change to this behavior is a conscious decision, not an accidental one.
+
+func TestHTTPClassify_DenyOnlyDoesNotFailClosedOnMissingURL(t *testing.T) {
+	cond := hc(&domain.HTTPClassify{Require: domain.HTTPRequire{
+		DeniedHosts: []string{"evil.com"}, // deny-only, no allow-list
+	}})
+	if EvalCondition(cond, map[string]interface{}{}) {
+		t.Error("a deny-only policy must not fail closed on a missing url (no allow-list is set)")
+	}
+	if EvalCondition(cond, map[string]interface{}{"parameters.url": ""}) {
+		t.Error("a deny-only policy must not fail closed on an empty url (no allow-list is set)")
+	}
+}
+
+func TestHTTPClassify_DeniedMethodsSkippedWhenMethodUnknown(t *testing.T) {
+	cond := hc(&domain.HTTPClassify{Require: domain.HTTPRequire{
+		DeniedMethods: []string{"DELETE"}, // deny-only, no allowed_methods
+	}})
+	// Positive control: the same rule DOES fire when the denied method is
+	// actually observed — proves the no-fire case below isn't passing
+	// because denied_methods evaluation is dead code.
+	if !EvalCondition(cond, map[string]interface{}{"parameters.url": "https://ok.com/x", "parameters.method": "DELETE"}) {
+		t.Error("denied_methods must fire when the observed method is on the denied list")
+	}
+	if EvalCondition(cond, map[string]interface{}{"parameters.url": "https://ok.com/x"}) {
+		t.Error("denied_methods with no method field present must not fire — an absent method isn't the specific denied value")
+	}
+}
+
+func TestHTTPClassify_DeniedPortsSkippedWhenPortUnknown(t *testing.T) {
+	cond := hc(&domain.HTTPClassify{Require: domain.HTTPRequire{
+		DeniedPorts: []int{22}, // deny-only, no allowed_ports
+	}})
+	if EvalCondition(cond, map[string]interface{}{"parameters.url": "ftp://ok.com/x"}) {
+		t.Error("denied_ports with an unresolvable port (unknown scheme default) must not fire")
+	}
+}
+
+func TestHTTPClassify_EmptyHostnamePassesWithoutHostAllowList(t *testing.T) {
+	// A URL shaped like "https://:443" parses with a non-empty u.Host
+	// (":443") but an empty u.Hostname(). With no host allow/deny list
+	// configured, there's nothing to check the (empty) host against.
+	cond := hc(&domain.HTTPClassify{Require: domain.HTTPRequire{
+		AllowedSchemes: []string{"https"},
+	}})
+	if EvalCondition(cond, map[string]interface{}{"parameters.url": "https://:443/x"}) {
+		t.Error("an empty hostname with no host allow-list configured must not fire on that basis alone")
+	}
+}
+
 func TestHTTPClassify_FailClosed(t *testing.T) {
 	cond := hc(&domain.HTTPClassify{Require: domain.HTTPRequire{AllowedHosts: []string{"ok.com"}}})
 	// Missing URL but an allow-list is set → fail closed.

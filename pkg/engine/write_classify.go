@@ -42,18 +42,26 @@ func evalWriteClassifyWithDetail(w *domain.WriteClassify, fields map[string]inte
 					}
 				}
 			}
-			// Allow list: EVERY target must be under SOME allowed prefix.
+			// Allow list: EVERY canonical candidate must independently be under
+			// SOME allowed prefix — not just one of them. A write through a
+			// symlink that LOOKS like it's inside the allowed root (the lexical
+			// candidate matches) but RESOLVES outside it (the symlink-resolved
+			// candidate doesn't) must still fire; treating "any candidate
+			// matches" as sufficient would let the lexical form satisfy the
+			// rule while the resolved form escapes the allow-list entirely.
+			// Mirrors path_classify.go's per-variant allow-list loop.
 			if len(allowed) > 0 {
-				ok := false
 				for _, cand := range cands {
+					ok := false
 					for _, p := range allowed {
 						if matchPathPrefix(cand, p) {
 							ok = true
+							break
 						}
 					}
-				}
-				if !ok {
-					return true, fmt.Sprintf("write_classify: write to %s is not under any allowed prefix", t)
+					if !ok {
+						return true, fmt.Sprintf("write_classify: write to %s is not under any allowed prefix", cand)
+					}
 				}
 			}
 		}

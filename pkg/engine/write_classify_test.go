@@ -104,6 +104,46 @@ func TestWriteClassify_FailsClosedWhenContentPredicateSetButNoContent(t *testing
 	}
 }
 
+// TestWriteClassify_AllowListDeniesSymlinkEscape pins a pre-release fix: the
+// allow-list check used to accept a write if ANY canonical candidate matched
+// an allowed prefix, so a symlink inside the allowed workspace pointing
+// outside it (workspace/evil -> /secret) let the lexical candidate
+// ("workspace/evil/file.txt") satisfy the rule while the resolved candidate
+// ("/secret/file.txt") escaped unchecked. Every candidate must now match.
+func TestWriteClassify_AllowListDeniesSymlinkEscape(t *testing.T) {
+	base := t.TempDir()
+	workspace := filepath.Join(base, "workspace")
+	secret := filepath.Join(base, "secret")
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(secret, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(workspace, "evil")
+	if err := os.Symlink(secret, link); err != nil {
+		t.Fatal(err)
+	}
+	// The target must exist for symlink resolution to be unambiguous.
+	target := filepath.Join(link, "exfil.txt")
+	if err := os.WriteFile(filepath.Join(secret, "exfil.txt"), []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cond := wc(&domain.WriteClassify{Require: domain.WriteRequire{AllowedPathPrefixes: []string{workspace}}})
+	if !EvalCondition(cond, map[string]interface{}{"parameters.file_path": target}) {
+		t.Error("a write through an in-workspace symlink that resolves outside the allowed root must fire (deny)")
+	}
+
+	// A write that's genuinely inside the workspace (no escaping symlink)
+	// must still be allowed — the fix must not overcorrect to fail-closed
+	// on every write.
+	plain := filepath.Join(workspace, "notes.txt")
+	if EvalCondition(cond, map[string]interface{}{"parameters.file_path": plain}) {
+		t.Error("a write genuinely inside the allowed prefix must not fire")
+	}
+}
+
 func TestWriteClassify_ArrayAndNestedTargets(t *testing.T) {
 	dir := t.TempDir()
 	protected := filepath.Join(dir, "guard")

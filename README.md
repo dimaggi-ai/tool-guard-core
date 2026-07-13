@@ -63,10 +63,12 @@ decided what and why. Core is that decision point.
 
 Every envelope is evaluated against operator-authored YAML policies:
 deterministic rules (thresholds, regex, scope, condition trees) plus
-four semantic classifiers — SQL (postgres / mysql / sqlite / mssql),
+six semantic classifiers — SQL (postgres / mysql / sqlite / mssql),
 path (traversal, symlink, shell-meta), shell (env-rewrap, argv
-resolution), and a local-LLM content classifier (Gemma 4 via Ollama,
-fail-closed). The strongest effect wins; the result is the decision,
+resolution), write (file-write path/size/content governance), HTTP
+(egress host/scheme/method/port governance), and a local-LLM content
+classifier (Gemma 4 via Ollama, fail-closed). The strongest effect wins;
+the result is the decision,
 the rule, the reason, and a citation back to the source document the
 rule came from. Stage policies in shadow mode against live traffic,
 then promote to enforcement without redeploying agents.
@@ -99,7 +101,10 @@ not depend on it.
 - Four-dialect SQL classifier (postgres / mysql / sqlite / mssql)
 - Path classifier (traversal, symlink, shell-meta defence)
 - Shell classifier (env-rewrap detection, argv path resolution)
+- Write classifier (file-write path allow/deny-lists, byte ceiling, denied-content regex)
+- HTTP classifier (egress host/scheme/method/port allow/deny-lists)
 - Local LLM content classifier (Gemma 4 via Ollama — image/audio/text gen)
+- `tg coverage` — measures what fraction of an agent's tool calls have any governing policy
 - Battle-test harness (`cmd/battle-test`)
 
 **Not in this repo — ships in Tool Guard Enterprise** (the
@@ -120,7 +125,7 @@ commercial, self-hosted enforcement gateway + management product; see
 
 - Multi-model ensemble voting, voice-print matching, managed
   hosting, client SDKs. See
-  [Known limitations](#known-limitations-v02) for the full
+  [Known limitations](#known-limitations) for the full
   list and what each would take to build.
 
 The included `cmd/battle-test` drives a local LLM (Gemma 4 e4b via
@@ -478,14 +483,17 @@ policy loading.
   audit, SIGHUP policy reload, fail-closed by default, per-agent rate
   limiting, audit log rotation, integration tests assert the HTTP
   contract over a real socket.
-- **SQL / path / shell semantic classifiers:** four-dialect SQL classifier
-  (`postgres`, `mysql`, `sqlite`, `mssql`) with pure-Go default
-  tokenizer + opt-in strict variants via build tags. Closes CTE,
+- **SQL / path / shell / write / HTTP semantic classifiers:** four-dialect
+  SQL classifier (`postgres`, `mysql`, `sqlite`, `mssql`) with pure-Go
+  default tokenizer + opt-in strict variants via build tags. Closes CTE,
   dollar-quote, multi-statement, COPY-PROGRAM, and dynamic-SQL bypass
   classes. Path classifier defends against traversal / symlink
   escape / shell-meta injection. Shell classifier resolves argv path
   arguments and detects env-rewrap escapes
-  (`env`/`sudo`/`nice`/`ionice`/`chroot`/`doas`).
+  (`env`/`sudo`/`nice`/`ionice`/`chroot`/`doas`). Write classifier governs
+  file-write path/size/content, with unconditional symlink resolution so
+  a write through a symlinked directory can't escape an allow-list. HTTP
+  classifier governs egress host/scheme/method/port.
 - **Sample app:** `make sample` runs a refund-tool + tg-proxy + agent
   end-to-end — tg-proxy returns deny and the sample wrapper does not
   execute the call.
@@ -514,14 +522,15 @@ Comprehensive docs live in [`docs/`](docs/README.md):
 - [Battle-test results](docs/battle-test-results.md) — real Gemma 4 vs the engine
 - [Core vs Enterprise](docs/oss-vs-enterprise.md) — the precise boundary: what ships here, what the Enterprise platform adds, what exists in neither
 
-## Known limitations (v0.2)
+## Known limitations
 
-> **New in 0.2.0:** velocity tracking that closes the amount-fragmentation
-> bypass, the `tg hook` coding-agent guard, `-protect-paths` self-protection,
-> five new operators, and `tg simulate`. See
-> [Release-Notes.md](Release-Notes.md).
+> **New in 0.3.0:** `write_classify` and `http_classify` — file-write and
+> egress governance — plus `tg hook -audit-log` and `tg coverage`. **New in
+> 0.2.0:** velocity tracking that closes the amount-fragmentation bypass, the
+> `tg hook` coding-agent guard, `-protect-paths` self-protection, five new
+> operators, and `tg simulate`. See [Release-Notes.md](Release-Notes.md).
 
-Features absent from v0.2:
+Features absent from this repo today:
 
 - **Single-model classifier.** The semantic classifier is one local
   Gemma. A single model can be bypassed by adversarial paraphrases —

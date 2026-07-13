@@ -5,6 +5,121 @@ per-change record see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## 0.3.0 — 2026-07-12
+
+Extends the deterministic engine to the two surfaces our own machine-guard
+audit log showed passing ungoverned — file writes and outbound HTTP — plus a
+tamper-evident audit log for the coding-agent hook path and a coverage metric
+to measure the gap this closes. **No breaking changes**; the Enterprise
+boundary is unchanged (deny-only, no redaction/inference/signing).
+
+### Highlights
+
+- **`write_classify`** — governs file-writing tools (write / edit /
+  notebookedit / apply_patch / multiedit): path allow/deny-lists, a
+  runaway-write byte ceiling, and a literal-deny content regex.
+- **`http_classify`** — governs the egress surface for http/fetch tools:
+  host, scheme, method, and port allow/deny-lists.
+- **`tg hook -audit-log`** — the coding-agent hook path now leaves a
+  SHA-256 hash-chained, tamper-evident record of every decision.
+- **`tg coverage`** — measures what fraction of an agent's real tool calls
+  have any governing policy at all, with a `-min-coverage` CI gate.
+
+### 1. `write_classify` — govern the file-write surface
+
+```yaml
+conditions:
+  write_classify:
+    require:
+      allowed_path_prefixes: [/home/me/project/]
+      denied_path_prefixes:  [/home/me/project/.git/, /etc/]
+      max_bytes: 1048576
+      denied_content_regex: ['(?i)BEGIN (RSA|OPENSSH) PRIVATE KEY']
+effect: deny
+```
+
+- Reuses `path_classify`'s canonicalization (absolute + clean,
+  component-boundary `*`/`**` wildcards) and the array/nested-edit path
+  extraction, so a path buried in a batch edit or a nested `edits: [...]`
+  shape is still seen.
+- Symlink resolution is **always on** — a write through a symlinked
+  directory is exactly the evasion this primitive exists to catch, so it
+  isn't a configurable option.
+- **Fail-closed**, precisely: every canonical candidate of a write target
+  (the lexical path *and* the symlink-resolved path) must independently be
+  under an allowed prefix. A write that only *looks* like it's inside the
+  allowed root — because a symlink inside it points elsewhere — is denied,
+  not silently permitted.
+- `max_bytes` and `denied_content_regex` fail closed on any content that
+  can't be read as a string (wrong type, or no content field present at
+  all) — the predicate can't pass on bytes it can't see.
+
+### 2. `http_classify` — govern the egress surface
+
+```yaml
+conditions:
+  http_classify:
+    require:
+      allowed_hosts: [api.internal, .githubusercontent.com]
+      denied_hosts:  [169.254.169.254]   # e.g. the cloud metadata endpoint
+      allowed_schemes: [https]
+      denied_ports: [22, 25]
+effect: deny
+```
+
+- Host entries starting with `.` are suffix matches on a proper subdomain
+  boundary (`.example.com` matches `api.example.com` and bare
+  `example.com`, never `notexample.com` or `example.com.evil.test`).
+- Reads `parameters.url` by default, the same convention `sql_classify`
+  uses for `parameters.sql`.
+- **Fail-closed** on a missing or unparseable URL whenever an allow-list
+  (hosts/schemes/methods/ports) is set — an egress call whose destination
+  can't be confirmed doesn't pass by default.
+
+### 3. `tg hook -audit-log` — tamper-evident coding-agent audit
+
+The hook path (`tg hook`, the PreToolUse guard for Claude Code / Codex /
+Antigravity) now appends every decision to a SHA-256 hash-chained JSONL log,
+verifiable offline with `tg verify` — the same guarantee `tg-proxy` already
+had. Tail-read keeps each append O(1). Best-effort: an audit-write failure
+never changes the returned decision.
+
+### 4. `tg coverage` — measure what's actually governed
+
+```sh
+tg coverage -policy-dir policies -calls audit.jsonl -min-coverage 90
+# coverage %, a per-tool breakdown, and the biggest ungoverned tools
+```
+
+Reads a JSONL of envelopes *or* decision traces, so it runs straight
+against an existing audit log — no separate instrumentation. `-min-coverage
+PCT` exits 3 for a CI gate; `-json` for machines. This is the metric the
+whole release is about: pointed at our own audit log, it's what showed
+file-writes and egress passing ungoverned in the first place, and confirms
+both are governed now.
+
+### 5. `not:` refusal extended to both new leaves
+
+Both `write_classify` and `http_classify` are fail-closed classifiers and,
+consistent with the four existing ones, are refused under a `not:` node —
+negating a fail-closed check would flip it fail-open.
+
+### Deferred
+
+SQL-in-bash extraction — parsing SQL out of an opaque shell command string
+is a false-negative machine that would create illusory safety. Left for a
+later 0.3.x once there's a design that doesn't just move the bypass.
+
+### Upgrade notes
+
+- **Drop-in.** No schema, CLI, or audit-format changes to existing
+  classifiers. Replace the binaries; existing policies load and existing
+  audit chains still `tg verify`.
+- **Everything new is opt-in** — a policy that doesn't reference
+  `write_classify` or `http_classify` behaves identically to 0.2.0.
+
+---
+
 ## 0.2.0 — 2026-07-02
 
 Closes the one attack class 0.1.0's own battle-test left open, adds a

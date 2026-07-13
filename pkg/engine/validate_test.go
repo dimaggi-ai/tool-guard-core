@@ -57,6 +57,67 @@ func TestValidatePolicy_RejectsBadRegex(t *testing.T) {
 	}
 }
 
+// expandPrefixes silently drops blank/whitespace-only prefix entries at eval
+// time; for allowed_path_prefixes that can empty the whole list, which
+// disables the allow-list gate entirely (treated as "unset", not
+// "misconfigured"). ValidatePolicy refuses a blank entry at load time
+// instead.
+func TestValidatePolicy_RejectsBlankWriteClassifyPrefix(t *testing.T) {
+	p := &domain.Policy{
+		PolicyID: "test",
+		Rules: []domain.Rule{
+			{
+				RuleID: "deny-write-outside-workspace",
+				Conditions: domain.Condition{
+					WriteClassify: &domain.WriteClassify{
+						Require: domain.WriteRequire{AllowedPathPrefixes: []string{"/workspace", "  "}},
+					},
+				},
+				Effect: domain.EffectDeny,
+			},
+		},
+	}
+	err := engine.ValidatePolicy(p)
+	if err == nil {
+		t.Fatalf("expected error for a blank allowed_path_prefixes entry; got nil")
+	}
+	if !strings.Contains(err.Error(), "blank") {
+		t.Errorf("error message doesn't name the blank-prefix problem: %v", err)
+	}
+}
+
+// A nil/empty prefix list is a completely different case from a blank
+// entry inside a non-empty list: "no restriction configured" is legitimate
+// (e.g. a deny-only write_classify policy) and must load cleanly, distinct
+// from "restriction configured with a garbage entry" above.
+func TestValidatePolicy_AcceptsNilOrEmptyWriteClassifyPrefixLists(t *testing.T) {
+	cases := []struct {
+		name string
+		req  domain.WriteRequire
+	}{
+		{"nil allowed, denied set", domain.WriteRequire{DeniedPathPrefixes: []string{"/etc"}}},
+		{"empty-slice allowed, denied set", domain.WriteRequire{AllowedPathPrefixes: []string{}, DeniedPathPrefixes: []string{"/etc"}}},
+		{"nil denied, allowed set", domain.WriteRequire{AllowedPathPrefixes: []string{"/workspace"}}},
+		{"empty-slice denied, allowed set", domain.WriteRequire{AllowedPathPrefixes: []string{"/workspace"}, DeniedPathPrefixes: []string{}}},
+		{"max_bytes only, no prefixes at all", domain.WriteRequire{MaxBytes: 100}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := &domain.Policy{
+				PolicyID: "test",
+				Rules: []domain.Rule{{
+					RuleID:     "rule",
+					Conditions: domain.Condition{WriteClassify: &domain.WriteClassify{Require: c.req}},
+					Effect:     domain.EffectDeny,
+				}},
+			}
+			if err := engine.ValidatePolicy(p); err != nil {
+				t.Errorf("unset/empty prefix list must not be rejected: %v", err)
+			}
+		})
+	}
+}
+
 // A classifier leaf is fail-CLOSED: it fires on malformed/adversarial
 // input so a deny rule trips. Negating it with not: inverts that into
 // fail-OPEN — the malformed input is then allowed through. ValidatePolicy

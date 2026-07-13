@@ -6,7 +6,7 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### 0.3.0 — govern the workload agents actually have
+## [0.3.0] — 2026-07-12
 
 Driven by our own machine-guard audit log (3,635 real tool calls: 67% bash,
 then file writes and http — with file-writes and egress passing *ungoverned*).
@@ -16,10 +16,13 @@ Enterprise boundary is unchanged (deny-only, no redaction/inference/signing).
 - **`write_classify` condition leaf** — governs file-writing tools
   (write/edit/notebookedit/apply_patch/multiedit): `allowed_path_prefixes` /
   `denied_path_prefixes` (component-boundary + `*`/`**` wildcards, reusing the
-  0.2.0 path canonicalization — absolute + optional symlink resolution, and
-  array/nested edit shapes), `max_bytes` (runaway-write ceiling), and
+  0.2.0 path canonicalization — absolute + unconditional symlink resolution,
+  and array/nested edit shapes), `max_bytes` (runaway-write ceiling), and
   `denied_content_regex` (literal deny, **never** redaction). Fail-closed: a
-  write whose path can't be confirmed inside the allow-list fires the rule.
+  write whose path can't be confirmed inside the allow-list fires the rule —
+  every canonical candidate (the lexical form and the symlink-resolved form)
+  must independently match an allowed prefix, so a write through a symlink
+  that only *looks* like it's inside the allowed root cannot escape it.
 - **`http_classify` condition leaf** — governs the egress surface for
   http/fetch tools: `allowed_hosts` / `denied_hosts` (exact or `.suffix`
   match), `allowed_schemes`, `allowed_methods` / `denied_methods`,
@@ -499,6 +502,7 @@ Lint heuristics shipped (8):
   documented battle-test catalogue; the strict variants are for
   operators who already accept those build-time costs.
 
-[Unreleased]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/dimaggi-ai/tool-guard-core/releases/tag/v0.1.0
