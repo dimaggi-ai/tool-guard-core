@@ -524,6 +524,12 @@ Comprehensive docs live in [`docs/`](docs/README.md):
 
 ## Known limitations
 
+> **New in 0.5.0:** a per-request evaluator panic on `tg-proxy` now always
+> denies and audits (previously it dropped the connection with no record);
+> `tg-proxy` verifies the full audit chain on startup, not just the tail;
+> `tg hook -unknown-tools-deny`; and a real, quote-aware shell tokenizer
+> behind `-protect-paths` (the old scanner's documented quoting/
+> substitution/variable-expansion evasions are now caught or fail closed).
 > **New in 0.4.0:** correct path-prefix matching on Windows (deny-lists in
 > `path_classify`/`write_classify`/`-protect-paths` were previously silently
 > inert there). **New in 0.3.0:** `write_classify` and `http_classify` —

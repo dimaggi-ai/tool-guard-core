@@ -57,29 +57,6 @@ func validateJSONDepth(body []byte, maxDepth int) error {
 	return nil
 }
 
-// toolNameKnown reports whether toolName is explicitly declared in
-// scope.tool_names of any loaded ENFORCEMENT policy. Used by the
-// --unknown-tools-deny flag to refuse evaluation of name variants the
-// operator never authorised. Shadow-mode policies are excluded — a
-// shadow rollout that lists a tool "for observation" must NOT make the
-// unknown-tools gate pass.
-func toolNameKnown(toolName string, policies []domain.Policy) bool {
-	if toolName == "" {
-		return false
-	}
-	for _, p := range policies {
-		if p.Mode != domain.PolicyModeEnforcement {
-			continue
-		}
-		for _, n := range p.Scope.ToolNames {
-			if n == toolName {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // timeoutFromMatchedRules walks the rules that fired (and the policies
 // they came from) looking for an EffectConfig.TimeoutMinutes. First
 // non-zero value wins. Returns 0 if none set so callers can fall back

@@ -6,6 +6,81 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-07-24
+
+"The control holds" — Reliability + Accountability. Four changes that make
+error paths and the audit trail behave the way an *enforcing* deployment
+needs, not just the happy path. No breaking changes; no new required config.
+
+- **`tg-proxy` denies (and audits) a per-request evaluator panic, always.**
+  Before this, a panic inside the engine during `/evaluate` had NO recovery
+  path at all — it unwound into `net/http`'s own per-connection recover,
+  which just drops the connection: no decision, no audit trace, no counter.
+  That is worse than fail-open (there is at least a record when the engine
+  runs to completion) and directly contradicted `-fail-closed`'s promise.
+  `safeEvaluate` recovers the panic and denies unconditionally — deliberately
+  **not** gated behind `-fail-closed` the way "no policies loaded" and
+  "audit append failed" are: those are well-defined, intentional
+  configuration states an operator can reason about; a mid-evaluation panic
+  isn't a state, it's a crash, and there is no principled decision to fall
+  back to.
+- **`tg hook`'s docs and `-h` usage now explicitly recommend
+  `-fail-closed-tools` (or `-fail-closed`) for any enforcing deployment.**
+  The flag default is unchanged (still opt-in — no breaking change), but
+  without one, an internal error fails OPEN by default, which suits local
+  dev and is not what a real deployment wants.
+- **`tg-proxy`'s startup audit-chain check now walks the FULL chain, not
+  just the tail.** The existing tail check only proved the *last* record
+  was internally self-consistent; a tampered record in the *middle* of the
+  file — whose neighbors' `previous_trace_hash` links no longer line up,
+  but which itself still carries a valid hash for its own (possibly forged)
+  content — was invisible to it. Startup now replays the entire rotation
+  set, oldest file first, through the same streaming verifier `tg verify
+  -file` uses, and refuses to start if any link is broken anywhere.
+  (Append-only writes were already true via `O_APPEND`; this closes the
+  "detect tampering on restart" half of the tamper-resistance promise. An
+  "optional external ship" of audit records to a remote sink — the third
+  piece the roadmap named — is not yet implemented.)
+- **`tg hook -unknown-tools-deny`** — mirrors `tg-proxy`'s existing flag,
+  now available at the coding-agent enforcement point that didn't have it.
+  Denies any `tool_name` not declared in `scope.tool_names` of some loaded
+  ENFORCEMENT policy (shadow-mode declarations don't count — nothing is
+  actually enforcing on them yet), closing the gap where a new tool the
+  agent starts calling matches no policy and is silently ungoverned. The
+  shared check (`engine.ToolNameKnown`) moved from a `tg-proxy`-private
+  function to `pkg/engine` so both entry points can't drift apart.
+- **Real, quote-aware shell tokenizer replaces the "best-effort" scanner**
+  behind `-protect-paths`/`-protect-self`'s shell-command detection
+  (`shellTouchesProtected`). The old scanner used unquoted `strings.Fields`
+  splitting and a one-pair `unquote()`; quoting, command substitution, and
+  variable expansion all slipped through, and a quoted separator wrongly
+  split one command into two. The new tokenizer is a real POSIX-shell-like
+  grammar (quotes, backslash escapes, operators, redirections) that is a
+  strict superset of the old scanner's detection, plus:
+  - **Fails closed on unresolved expansion.** `$(...)`, `` `...` ``, `$VAR`,
+    `${VAR}` are never evaluated — this is a deterministic, offline control
+    with no access to the agent's real shell environment, so it cannot
+    know what they expand to. A word carrying an unresolved expansion that
+    lands in a redirect-target or mutating-command-argument position is
+    treated as a hit, because it cannot be proven safe.
+  - **Recurses into command substitution for side effects.** A write hidden
+    inside a substitution whose *output* is discarded or reassigned
+    (`echo $(rm /protected/f)`, `x=$(rm /protected/f)`) still executes the
+    inner `rm` — the tokenizer now catches that, depth-bounded.
+  - Found via an independent adversarial review during development (Codex
+    was unavailable; Opus reviewed instead) and fixed before landing: an
+    ANSI-C `$'...'` quote swallowing a trailing real redirect; a glued
+    path-carrying option (`cp -t/protected`, `--target-directory=/protected`)
+    bypassing literal-argument matching; and the command-substitution
+    side-effect case above.
+  - Documented, considered (not missed) limits: an unresolved `argv[0]`
+    (`$CMD ...`) is not classified as mutating (leading `NAME=val`
+    assignments ARE stripped first); `~` and glob expansion, `#` comments,
+    and heredoc bodies are not specially parsed. The robust operator-side
+    control — keep bash out of the write-capable policy scope; rely on the
+    unconditional `-protect-paths` — is unaffected by any of this and
+    still the recommended posture for anything that matters.
+
 ## [0.4.0] — 2026-07-20
 
 Windows correctness fix for the path-comparison primitive four features
@@ -539,7 +614,8 @@ Lint heuristics shipped (8):
   documented battle-test catalogue; the strict variants are for
   operators who already accept those build-time costs.
 
-[Unreleased]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.1.0...v0.2.0

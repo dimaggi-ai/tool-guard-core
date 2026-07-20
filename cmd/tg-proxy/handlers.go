@@ -258,14 +258,45 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result := p.eval.Evaluate(&env, policies, mode)
+	// safeEvaluate recovers a panic inside the deterministic engine (a bug
+	// in the engine or a malformed policy that slipped past validation) and
+	// turns it into an error instead of letting it propagate. Before this,
+	// a per-request evaluator panic had NO recovery at all: it unwound out
+	// of the handler into net/http's per-connection recover(), which just
+	// closes the connection — no response, no audit trace, no counter. That
+	// is worse than fail-open (there's at least a record when the engine
+	// runs to completion) and directly contradicts -fail-closed's promise.
+	//
+	// Deliberately NOT gated behind -fail-closed the way "no policies
+	// loaded" and "audit append failed" are: those are well-defined,
+	// intentional configuration states an operator can reason about and
+	// choose to allow through. A mid-evaluation panic isn't a state, it's a
+	// crash — there is no principled decision to fall back to, so
+	// fabricating an "allowed" result to honor -fail-closed=false would
+	// paper over a real defect with a decision we have no evidence for.
+	// Always deny; always audit; always count. This is stricter than
+	// -fail-closed=false's stated posture, and that's intentional.
+	result, evalErr := p.safeEvaluate(&env, policies, mode)
+	if evalErr != nil {
+		reason := fmt.Sprintf("policy evaluator error; failing closed (unconditional — see safeEvaluate): %v", evalErr)
+		p.emitBoundaryDeny(&env, reason, mode)
+		p.failClosedCount.Add(1)
+		p.denyCount.Add(1)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"decision":        "denied",
+			"action_taken":    "denied",
+			"decision_reason": reason,
+			"effective_mode":  mode,
+		})
+		return
+	}
 
 	// Tool-name spoof guard. When -unknown-tools-deny is set, any
 	// envelope whose tool_name is not declared in scope.tool_names of
 	// some loaded ENFORCEMENT policy is denied — even if a policy
 	// happened to match via tool_groups. This closes the family of
 	// variant names (DROP_TABLE, drop_tables, drop_table_v2).
-	if p.unknownToolsDeny && !toolNameKnown(env.ToolName, policies) {
+	if p.unknownToolsDeny && !engine.ToolNameKnown(env.ToolName, policies) {
 		// Counter increment happens once in the final switch, not
 		// here — earlier code double-counted unknown-tool denies.
 		result.Decision = domain.DecisionDenied
@@ -388,6 +419,34 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, result)
+}
+
+// safeEvaluate calls the engine and recovers a panic into an error instead
+// of letting it unwind out of the HTTP handler. Mirrors evalHook's recover
+// pattern in cmd/tg/hook.go — the same engine backs both entry points, so
+// both need the same guarantee that a bug in the engine can never silently
+// skip the audit trail or crash the caller's connection.
+func (p *proxy) safeEvaluate(env *domain.ActionEnvelope, policies []domain.Policy, mode domain.PolicyMode) (*domain.EvaluationResult, error) {
+	return recoverEvaluation(func() *domain.EvaluationResult {
+		return p.eval.Evaluate(env, policies, mode)
+	})
+}
+
+// recoverEvaluation runs fn and turns a panic into an error return instead
+// of letting it propagate. Factored out from safeEvaluate as a pure
+// function (no *proxy dependency) so the recover behavior itself is
+// directly unit-testable with an artificial panicking closure — the real
+// engine has no known reliable panic trigger to exercise this against, and
+// manufacturing one would either be flaky or require deliberately breaking
+// the engine just to prove a test fails; testing the mechanism in isolation
+// is the honest way to cover it.
+func recoverEvaluation(fn func() *domain.EvaluationResult) (result *domain.EvaluationResult, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			result, err = nil, fmt.Errorf("engine panic: %v", r)
+		}
+	}()
+	return fn(), nil
 }
 
 // withLogging is a minimal access log so operators see request volume

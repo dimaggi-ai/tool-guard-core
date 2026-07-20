@@ -13,16 +13,12 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"regexp"
 	"runtime/debug"
-	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -202,7 +198,7 @@ func cmdVerify(args []string) int {
 		return 2
 	}
 
-	files, err := rotationSet(*filePath)
+	files, err := audit.RotationSetOldestFirst(*filePath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "verify:", err)
 		return 1
@@ -247,59 +243,6 @@ func cmdVerify(args []string) int {
 		return 5
 	}
 	return 0
-}
-
-// rotationSet returns the full audit-log file list, oldest first.
-// Active file is the literal path; rotated siblings live at
-// <path>.<n> where larger n means newer. We return them ordered so a
-// single MultiReader concatenation reproduces the original chain.
-func rotationSet(activePath string) ([]string, error) {
-	dir, base := filepath.Split(activePath)
-	if dir == "" {
-		dir = "."
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, err
-	}
-	// Collect rotated indices.
-	type rot struct {
-		idx  int
-		path string
-	}
-	var rotated []rot
-	prefix := base + "."
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		if !strings.HasPrefix(name, prefix) {
-			continue
-		}
-		suffix := name[len(prefix):]
-		idx, err := strconv.Atoi(suffix)
-		if err != nil {
-			continue
-		}
-		rotated = append(rotated, rot{idx: idx, path: filepath.Join(dir, name)})
-	}
-	sort.Slice(rotated, func(i, j int) bool { return rotated[i].idx < rotated[j].idx })
-
-	out := make([]string, 0, len(rotated)+1)
-	for _, r := range rotated {
-		out = append(out, r.path)
-	}
-	// Active comes last (it carries the freshest hashes).
-	if _, err := os.Stat(activePath); err == nil {
-		out = append(out, activePath)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, err
-	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("no audit log files found (active %q absent, no rotation siblings)", activePath)
-	}
-	return out, nil
 }
 
 // ── tg lint ────────────────────────────────────────────────────────────────

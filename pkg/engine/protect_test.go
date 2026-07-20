@@ -239,48 +239,40 @@ func TestViolatesProtectedPaths_ShellReadOnly(t *testing.T) {
 	})
 }
 
-// ── A6: known-uncaught cases (documented, not bugs) ────────────────────────
+// ── A6: expansions the v0.5.0 tokenizer now FAILS CLOSED on ────────────────
 //
-// The shell scanner is deliberately NOT a full parser. The following shapes
-// evade it and are acknowledged here so a reviewer knows they were
-// considered, not missed.
-//
-//	1. Variable expansion:         rm $POLICY_DIR/rules.yaml
-//	   — $POLICY_DIR is not resolved; path won't match.
-//	2. Command substitution:       dd of=$(echo /protected/f)
-//	   — command expansion not parsed.
-//	3. Concatenated quoting:       rm '/prot'ected/f
-//	   — unquote only strips one outermost pair of quotes.
-//
-// The robust mitigation for these is operator-side: run tg-proxy / tg hook
-// with -protect-paths / -protect-self, which is unconditional and cannot be
-// edited away by the agent. The shell best-effort heuristic exists to catch
-// the obvious footgun, not to be a shell sandbox.
-
-func TestViolatesProtectedPaths_KnownUncaughtCases(t *testing.T) {
-	// Variable expansion — not caught.
-	t.Run("variable expansion not caught", func(t *testing.T) {
-		env := envCmd("bash", "rm $POLICY_DIR/rules.yaml")
-		// We are asserting the DOCUMENTED LIMITATION, not an error.
-		// The scanner does not resolve shell variables, so this will not fire
-		// (assuming POLICY_DIR is not the literal prefix string "/protected").
-		hit, _ := ViolatesProtectedPaths(env, testPrefixes)
-		if hit {
-			// This would be a surprise (false positive), not a bug in the
-			// protection. Log it but do not fail the suite.
-			t.Logf("NOTE: variable-unexpanded path happened to fire (false positive in theory, but benign here)")
-		}
-		// no t.Error — we're just documenting the behaviour, not asserting it.
-		_ = hit
-	})
-
-	// Command substitution — not caught.
-	t.Run("command substitution not caught", func(t *testing.T) {
-		env := envCmd("bash", `dd of=$(echo /protected/f)`)
-		hit, _ := ViolatesProtectedPaths(env, testPrefixes)
-		// Again: documenting, not asserting.
-		_ = hit
-	})
+// This block previously documented these shapes as "known uncaught": the old
+// best-effort scanner resolved neither quoting, variable expansion, nor command
+// substitution, so a determined agent could evade it, and this test merely
+// LOGGED the misses without asserting them. The real shell tokenizer
+// (shell_tokenize.go) changes the contract: it cannot evaluate an expansion
+// offline, so a redirect target or mutating-command argument built from one is
+// marked unresolved and FAILS CLOSED (reported as a hit) instead of silently
+// passing; concatenated quoting is resolved outright because adjacent
+// quoted/unquoted pieces now form a single word. The three cases the old
+// comment admitted to are therefore asserted here as now-caught. (Expectations
+// updated per the tokenizer rework — the old code was encoding false negatives.)
+func TestViolatesProtectedPaths_FormerlyUncaughtNowFailClosed(t *testing.T) {
+	cases := map[string]string{
+		// 1. Variable expansion — old scanner left $POLICY_DIR unresolved and
+		//    missed it; now the unresolved arg to rm fails closed.
+		"variable expansion": "rm $POLICY_DIR/rules.yaml",
+		// 2. Command substitution — old scanner did not parse $(...); now the
+		//    unresolved `dd of=` target fails closed.
+		"command substitution": `dd of=$(echo /protected/f)`,
+		// 3. Concatenated quoting — old unquote() stripped only one outer pair
+		//    and mangled the path; the tokenizer concatenates the pieces to the
+		//    real /protected/f and catches it outright.
+		"concatenated quoting": "rm '/prot'ected/f",
+	}
+	for name, cmd := range cases {
+		t.Run(name, func(t *testing.T) {
+			env := envCmd("bash", cmd)
+			if hit, reason := ViolatesProtectedPaths(env, testPrefixes); !hit {
+				t.Errorf("%q must now be caught or fail closed under the tokenizer; got no violation (reason=%q)", cmd, reason)
+			}
+		})
+	}
 }
 
 // ── A7: path tool that uses "path" key instead of "file_path" ─────────────

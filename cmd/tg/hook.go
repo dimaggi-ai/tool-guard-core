@@ -59,6 +59,7 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	protectPaths := fs.String("protect-paths", "", "comma list of path prefixes; a write-capable tool targeting one is denied BEFORE policy eval, unconditionally")
 	protectSelf := fs.Bool("protect-self", false, "shorthand: also protect the policy dir/file and $HOME/.claude from writes")
 	auditLog := fs.String("audit-log", "", "append each hook decision to this SHA-256 hash-chained JSONL log (tamper-evident, verify with `tg verify`); empty disables")
+	unknownToolsDeny := fs.Bool("unknown-tools-deny", false, "deny any tool_name not declared in scope.tool_names of some loaded ENFORCEMENT policy (closes the tool-name-spoofing/new-tool-goes-ungoverned class); mirrors tg-proxy's -unknown-tools-deny")
 
 	parseErr := fs.Parse(args)
 
@@ -168,7 +169,7 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 		mode = domain.PolicyModeShadow
 	}
 
-	dec, reason := evalHook(*policyDir, *policyFile, env, mode, failDecide)
+	dec, reason := evalHook(*policyDir, *policyFile, env, mode, failDecide, *unknownToolsDeny)
 	emitAudited(dec, reason)
 	return 0
 }
@@ -176,7 +177,7 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 // evalHook loads the policy set and evaluates env, recovering from any panic
 // so the hook can never crash the agent. On load failure or panic it returns
 // the fail-open/closed decision for env.ToolName.
-func evalHook(policyDir, policyFile string, env *domain.ActionEnvelope, mode domain.PolicyMode, failDecide func(string) (string, string)) (dec string, reason string) {
+func evalHook(policyDir, policyFile string, env *domain.ActionEnvelope, mode domain.PolicyMode, failDecide func(string) (string, string), unknownToolsDeny bool) (dec string, reason string) {
 	defer func() {
 		if r := recover(); r != nil {
 			dec, reason = failDecide(env.ToolName)
@@ -189,6 +190,16 @@ func evalHook(policyDir, policyFile string, env *domain.ActionEnvelope, mode dom
 	policies, err := loadPolicySet(policyDir, policyFile)
 	if err != nil || len(policies) == 0 {
 		return failDecide(env.ToolName)
+	}
+
+	// Tool-name spoof guard, evaluated BEFORE the engine call so a denied
+	// unknown tool never needs the engine to have matched anything — same
+	// ordering and semantics as tg-proxy's -unknown-tools-deny (see
+	// engine.ToolNameKnown's doc comment for why shadow-mode policies don't
+	// count). Closes the coverage gap where tg-proxy had this gate and tg
+	// hook — the actual coding-agent enforcement point — did not.
+	if unknownToolsDeny && !engine.ToolNameKnown(env.ToolName, policies) {
+		return "deny", fmt.Sprintf("tool_name %q is not declared in scope.tool_names of any loaded ENFORCEMENT policy (-unknown-tools-deny)", env.ToolName)
 	}
 
 	result := engine.NewEvaluator().Evaluate(env, policies, mode)
@@ -322,9 +333,16 @@ const hookUsage = `tg hook — PreToolUse guard for coding agents
 Usage:
   tg hook (-policy-dir DIR | -policy FILE) [-mode shadow|enforcement]
           [-agent-id NAME] [-fail-closed] [-fail-closed-tools bash,write,edit]
-          [-protect-paths P1,P2] [-protect-self]
+          [-protect-paths P1,P2] [-protect-self] [-unknown-tools-deny]
 
 Reads ONE PreToolUse JSON object on stdin, evaluates it, and writes a
 hookSpecificOutput permissionDecision (deny|ask|allow) to stdout. Always
 exits 0.
+
+RECOMMENDED for any enforcing deployment: pass -fail-closed-tools (or
+-fail-closed). Without one, an internal error (unparseable stdin, a policy
+load failure, an evaluator panic) fails OPEN — allow — by default, so a
+tooling glitch never wedges the agent, but that also means the error is
+never denied either. That default suits local dev; it is not what you want
+once this hook is actually enforcing policy.
 `

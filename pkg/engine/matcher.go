@@ -53,6 +53,35 @@ func matchesScope(env *domain.ActionEnvelope, scope domain.PolicyScope) bool {
 	return true
 }
 
+// ToolNameKnown reports whether toolName is explicitly declared in
+// scope.tool_names of any loaded ENFORCEMENT policy. Backs the
+// -unknown-tools-deny posture (tg-proxy and tg hook both use it) to refuse
+// evaluation of name variants the operator never authorised — e.g. a
+// tool_group-scoped write policy governs "write"/"edit"/"multiedit", but a
+// brand-new tool name the agent starts calling ("write_v2") matches no
+// tool_names anywhere and would otherwise pass ungoverned by default.
+// Shadow-mode policies are excluded — a shadow rollout that lists a tool
+// "for observation" must NOT make the unknown-tools gate pass, since
+// nothing is actually enforcing on it yet.
+//
+// Exported (moved here from cmd/tg-proxy) so both first-class enforcement
+// points share ONE definition instead of two copies that could silently
+// drift apart.
+func ToolNameKnown(toolName string, policies []domain.Policy) bool {
+	if toolName == "" {
+		return false
+	}
+	for _, p := range policies {
+		if p.Mode != domain.PolicyModeEnforcement {
+			continue
+		}
+		if containsStr(p.Scope.ToolNames, toolName) {
+			return true
+		}
+	}
+	return false
+}
+
 func containsStr(list []string, val string) bool {
 	for _, s := range list {
 		if s == val {

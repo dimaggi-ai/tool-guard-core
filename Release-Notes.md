@@ -5,6 +5,48 @@ per-change record see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## 0.5.0 — 2026-07-24
+
+"The control holds" — the release is about Reliability and Accountability,
+not new policy surface: making error paths and the audit trail behave the
+way an *enforcing* deployment actually needs. **No breaking changes.**
+
+### Highlights
+
+- **A per-request evaluator panic on `tg-proxy` now always denies and
+  audits** instead of silently dropping the connection with zero record —
+  the real gap before this release: there was no recovery around the
+  engine call at all.
+- **`tg-proxy` verifies the ENTIRE audit chain on startup, not just the
+  tail**, and refuses to start if any link anywhere is broken. The old
+  tail-only check could miss a tampered record buried mid-file whose own
+  hash was still internally valid.
+- **`tg hook -unknown-tools-deny`** — the coding-agent enforcement point
+  finally has the same "deny anything not explicitly declared" posture
+  `tg-proxy` already had.
+- **A real, quote-aware shell tokenizer** replaces the old best-effort
+  scanner behind `-protect-paths`. Quoting, command substitution, and
+  variable-expansion evasions that the old scanner's own doc comment
+  admitted to are now caught — or, where they genuinely can't be resolved
+  offline, fail closed instead of silently passing through.
+
+### Upgrade notes
+
+- **Drop-in.** No schema, CLI, or audit-format changes to existing
+  classifiers or the hook contract.
+- **New default-on behavior to know about, unlike every prior release:**
+  `tg-proxy` will now refuse to start if its existing audit log's hash
+  chain is broken *anywhere*, not only at the tail. If you're upgrading a
+  long-running deployment, this is the one thing worth checking before you
+  restart — run `tg verify -file <your-audit-log>` first if you want to
+  confirm ahead of time rather than find out at startup.
+- Everything else is either strictly additive (`-unknown-tools-deny` is
+  opt-in) or a correctness fix in the direction of catching more, never
+  less, than before (the panic recovery, the tokenizer).
+- Recommended, not required: set `-fail-closed-tools` (or `-fail-closed`)
+  on `tg hook` for any deployment meant to actually enforce policy — see
+  [docs/getting-started.md](docs/getting-started.md).
+
 ## 0.4.0 — 2026-07-20
 
 A correctness fix and a release-process fix — no new policy surface.

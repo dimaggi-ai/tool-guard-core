@@ -326,3 +326,98 @@ func TestHook_AlwaysExitsZero(t *testing.T) {
 		})
 	}
 }
+
+// ── B8: -unknown-tools-deny ───────────────────────────────────────────────
+// tg-proxy has had -unknown-tools-deny since before 0.5.0; tg hook — the
+// coding-agent enforcement point most deployments actually run — did not.
+// A new tool the agent starts calling that no policy's tool_names declares
+// (and whose tool_group, if any, also isn't scoped) previously matched no
+// policy and fell through to the default allow, completely ungoverned.
+
+func TestHook_UnknownToolsDeny_DeniesUndeclaredTool(t *testing.T) {
+	// Scoped to tool_names:[bash] + tool_groups:[shell] only — "write", a
+	// filesystem-group tool, matches neither dimension, so a normal eval
+	// matches no policy at all (default allow) whether or not the flag is
+	// set. -unknown-tools-deny must override that default and deny.
+	pol := writeHookPolicy(t, hookAllowPolicy)
+	stdin := `{"tool_name":"write","tool_input":{"file_path":"/tmp/new-file.txt","content":"x"}}`
+	out, code := runHookStr(t, stdin, "-policy", pol, "-unknown-tools-deny")
+	if code != 0 {
+		t.Errorf("hook must always exit 0, got %d", code)
+	}
+	decision, reason := hookDecisionReason(t, out)
+	if decision != "deny" {
+		t.Fatalf("expected deny for an undeclared tool_name, got %q; output=%s", decision, out)
+	}
+	if !strings.Contains(reason, "write") || !strings.Contains(reason, "unknown-tools-deny") {
+		t.Errorf("reason should name the tool and the flag, got %q", reason)
+	}
+}
+
+func TestHook_UnknownToolsDeny_OffByDefault(t *testing.T) {
+	// Same undeclared tool, same policy, but WITHOUT the flag: must fall
+	// through to the engine's default (no policy matched -> allow) exactly
+	// as before this change — proves the flag is opt-in, not a silent
+	// behavior change for existing deployments.
+	pol := writeHookPolicy(t, hookAllowPolicy)
+	stdin := `{"tool_name":"write","tool_input":{"file_path":"/tmp/new-file.txt","content":"x"}}`
+	out, code := runHookStr(t, stdin, "-policy", pol)
+	if code != 0 {
+		t.Errorf("hook must always exit 0, got %d", code)
+	}
+	if d := hookDecision(t, out); d != "allow" {
+		t.Errorf("without -unknown-tools-deny, undeclared tool should fall through to default allow, got %q; output=%s", d, out)
+	}
+}
+
+func TestHook_UnknownToolsDeny_DeclaredToolStillEvaluatesNormally(t *testing.T) {
+	// bash IS declared in tool_names, so -unknown-tools-deny must NOT block
+	// it — it should proceed to the engine, which allows here (no rule
+	// matches "go test ./...").
+	pol := writeHookPolicy(t, hookAllowPolicy)
+	stdin := `{"tool_name":"bash","tool_input":{"command":"go test ./..."}}`
+	out, code := runHookStr(t, stdin, "-policy", pol, "-unknown-tools-deny")
+	if code != 0 {
+		t.Errorf("hook must always exit 0, got %d", code)
+	}
+	if d := hookDecision(t, out); d != "allow" {
+		t.Errorf("declared tool_name should evaluate normally (allow here), got %q; output=%s", d, out)
+	}
+}
+
+func TestHook_UnknownToolsDeny_ShadowPolicyDoesNotCount(t *testing.T) {
+	// A tool_names declaration in a SHADOW-mode policy must not satisfy
+	// -unknown-tools-deny — nothing is actually enforcing on it yet, so
+	// treating it as "known" would let a real gap through silently. Mirrors
+	// engine.ToolNameKnown's documented shadow exclusion.
+	shadowPolicy := `policy_id: hook-shadow-test
+name: hook-shadow-test
+version: 1
+status: approved
+mode: shadow
+scope:
+  tool_names: [notify_slack]
+rules:
+  - rule_id: never-fires
+    conditions:
+      field: parameters.x
+      operator: eq
+      value: NEVER_MATCHES
+    effect: deny
+    citation: {document_id: d, excerpt: "unreachable"}
+`
+	pol := writeHookPolicy(t, shadowPolicy)
+	stdin := `{"tool_name":"notify_slack","tool_input":{"message":"hi"}}`
+	// Hook's own runtime -mode is left at the default (enforcement) —
+	// deliberately, so this test isolates ONE claim: a shadow-mode POLICY's
+	// tool_names declaration doesn't satisfy ToolNameKnown. The check runs
+	// before the engine either way, so the hook's runtime mode floor is not
+	// what's under test here.
+	out, code := runHookStr(t, stdin, "-policy", pol, "-unknown-tools-deny")
+	if code != 0 {
+		t.Errorf("hook must always exit 0, got %d", code)
+	}
+	if d := hookDecision(t, out); d != "deny" {
+		t.Errorf("a shadow-only tool_names declaration must not count as 'known'; expected deny, got %q; output=%s", d, out)
+	}
+}

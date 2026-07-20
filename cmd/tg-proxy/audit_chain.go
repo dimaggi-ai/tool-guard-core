@@ -143,6 +143,21 @@ func (p *proxy) openAuditLog() error {
 			)
 		}
 		p.lastHash = last.TraceHash
+
+		// The tail check above only proves the LAST record is internally
+		// self-consistent (its own hash matches its own fields) — it says
+		// nothing about a tampered record buried in the middle of the file,
+		// whose neighbors' prev_hash links would no longer line up but
+		// which itself could still carry a valid hash for its own (possibly
+		// forged) content. Walk the FULL chain across the whole rotation
+		// set, oldest to newest, the same way `tg verify` does, and refuse
+		// to start if any link is broken anywhere — a middle-of-file
+		// tamper is exactly as disqualifying as a tampered tail, and
+		// serving traffic on top of a chain an operator can no longer
+		// trust defeats the entire point of an audit log.
+		if err := p.verifyFullAuditChain(); err != nil {
+			return err
+		}
 	}
 	f, err := os.OpenFile(p.auditPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -152,6 +167,46 @@ func (p *proxy) openAuditLog() error {
 		p.auditCurrentBytes = st.Size()
 	}
 	p.auditLog = f
+	return nil
+}
+
+// verifyFullAuditChain replays the ENTIRE rotation set, oldest file first,
+// through the same streaming verifier `tg verify -file` uses, and returns
+// an error (refuse to start) if any link is broken anywhere in it — not
+// just at the tail. Concatenating the files in RotationSetOldestFirst's
+// order reproduces the original append order exactly, so the chain reads
+// as one continuous stream across rotation boundaries.
+func (p *proxy) verifyFullAuditChain() error {
+	files, err := audit.RotationSetOldestFirst(p.auditPath)
+	if err != nil {
+		return fmt.Errorf("list audit rotation set: %w", err)
+	}
+	readers := make([]io.Reader, 0, len(files))
+	closers := make([]io.Closer, 0, len(files))
+	defer func() {
+		for _, c := range closers {
+			_ = c.Close()
+		}
+	}()
+	for _, path := range files {
+		f, err := os.Open(path)
+		if err != nil {
+			return fmt.Errorf("open audit file %q for startup verification: %w", path, err)
+		}
+		readers = append(readers, f)
+		closers = append(closers, f)
+	}
+
+	report, err := audit.VerifyChainFromReader(io.MultiReader(readers...))
+	if err != nil {
+		return fmt.Errorf("startup audit chain verification: %w", err)
+	}
+	if !report.Intact {
+		return fmt.Errorf(
+			"audit chain integrity check failed at line %d across %d file(s) (%v): %s — refusing to start (run `tg verify -file %s` for the full report)",
+			report.FirstFailureAt, len(files), files, report.FailureReason, p.auditPath,
+		)
+	}
 	return nil
 }
 

@@ -73,16 +73,18 @@ func ViolatesProtectedPaths(env *domain.ActionEnvelope, prefixes []string) (bool
 		}
 	}
 
-	// Shell tools: best-effort. Robust shell protection is a non-goal — the
-	// reliable answer is to scope bash OUT of the write-capable policy, or
-	// use shell_classify with an argv allowlist. Here we only catch the
-	// obvious `echo x > /protected/file` and `rm /protected/file` shapes so
-	// a careless agent can't trivially trample a protected file. See
-	// shellTouchesProtected for the exact heuristics and their limits.
+	// Shell tools: a raw command string is tokenized with a real quote-aware
+	// shell lexer (shell_tokenize.go) and checked for output redirections and
+	// mutating commands that target a protected prefix; targets built from
+	// command substitution or unresolved variables fail closed. This is a
+	// detector, not a sandbox — the reliable control for arbitrary bash is to
+	// scope it OUT of the write-capable policy, or use shell_classify with an
+	// argv allowlist. See shellTouchesProtected for the exact shapes and the
+	// documented residual limits.
 	if isShellTool(tool) {
 		if cmd := firstString(params, "command", "cmd"); cmd != "" {
 			if hit, target := shellTouchesProtected(cmd, clean); hit {
-				return true, fmt.Sprintf("protected path: shell command targets %s denied by -protect-paths (best-effort match)", target)
+				return true, fmt.Sprintf("protected path: shell command targets %s denied by -protect-paths", target)
 			}
 		}
 	}
@@ -254,49 +256,106 @@ func isShellTool(tool string) bool {
 	return false
 }
 
-// shellTouchesProtected is the best-effort shell scanner. It fires on two
-// shapes only:
+// shellTouchesProtected reports whether a raw bash command string writes to a
+// path under any protected prefix, using the real quote-aware tokenizer in
+// shell_tokenize.go (which replaced the previous best-effort byte scanner).
+// It fires on two shapes:
 //
-//  1. a write redirection (`>` / `>>`) whose target is under a protected
-//     prefix, e.g. `echo pwned > /etc/policy.yaml`.
+//  1. an output redirection whose target is under a protected prefix
+//     (`echo pwned > /etc/policy.yaml`, plus `>>`, `>|`, `<>`, `&>`, `>&file`).
 //  2. a known mutating command (rm, cp, mv, tee, truncate, ln, install,
-//     chmod, chown, mkdir, ..., `dd of=`, `sed -i`) that carries a
-//     protected path as an argument, e.g. `rm /etc/policy.yaml`.
+//     chmod, chown, mkdir, ..., `dd of=`, `sed -i`) that carries a protected
+//     path as an argument (`rm /etc/policy.yaml`).
 //
-// It is deliberately conservative and NOT a shell parser: quoting, command
-// substitution, variable expansion, and ~ expansion are not resolved, so a
-// determined agent can evade it. That is acceptable — this exists to stop
-// the obvious footgun, not to be a shell sandbox. The robust control is to
-// keep bash out of the write-capable policy scope entirely.
+// The command is tokenized ONCE and both passes run over that token stream, so
+// quoting, backslash escapes, and adjacent-quote concatenation are handled
+// correctly and a literal separator inside a quoted string no longer splits a
+// command. Where a redirect target or a mutating-command argument is built from
+// command substitution or an unresolved variable, the token is unresolved: we
+// cannot prove it does NOT resolve to a protected path, so we FAIL CLOSED and
+// report a hit (see shell_tokenize.go for the full rationale).
+//
+// This is a strict superset of the old scanner on every real write it caught.
+// Where behavior differs it is only in removing the old scanner's FALSE
+// positives: a `>` or `;` that lived inside quotes and was never a real
+// operator (`echo '> /protected/f'`) no longer fires, and an input-redirect
+// operand (`tee /tmp/out < /protected/in`) is no longer mistaken for a write.
+// Neither removal can create a bypass — a command that performs no write to a
+// protected path has nothing to detect.
+//
+// The robust control for the residual limits (an unresolved argv[0], heredoc
+// bodies; see shell_tokenize.go) remains operator-side: keep bash out of the
+// write-capable policy scope entirely.
 func shellTouchesProtected(cmd string, prefixes []string) (bool, string) {
-	// (1) redirection targets.
-	for _, t := range redirectTargets(cmd) {
-		if hit, target := pathUnderAny(t, prefixes); hit {
+	return shellTouchesProtectedRec(cmd, prefixes, 0)
+}
+
+// maxShellSubstDepth bounds recursion into nested command substitutions so an
+// adversarially deep `$( $( $( … ) ) )` can't exhaust the stack. Each level's
+// input is a proper substring of its parent, so real commands terminate far
+// below this cap; it exists only as a guard against pathological nesting.
+const maxShellSubstDepth = 8
+
+func shellTouchesProtectedRec(cmd string, prefixes []string, depth int) (bool, string) {
+	toks := tokenizeShell(cmd)
+
+	// (1) Output-redirection targets.
+	for _, t := range redirectTargets(toks) {
+		if t.unresolved {
+			return true, shortRaw(t.raw)
+		}
+		if hit, target := matchLiteralPath(t.value, prefixes); hit {
 			return true, target
 		}
 	}
-	// (2) mutating command with a protected path argument. Split into
+
+	// (2) Mutating command carrying a protected path argument. Split into
 	// pipeline / list segments so `ls /etc && echo hi` doesn't inherit a
 	// mutating verb from a sibling segment.
-	for _, seg := range splitShellSegments(cmd) {
-		fields := strings.Fields(seg)
-		if len(fields) < 2 {
+	for _, seg := range splitShellSegments(toks) {
+		words := stripLeadingAssignments(commandWords(seg))
+		if len(words) < 2 {
 			continue
 		}
-		prog := filepath.Base(unquote(fields[0]))
-		if !isMutatingProg(prog, fields) {
+		vals := wordValues(words)
+		prog := filepath.Base(words[0].value)
+		if !isMutatingProg(prog, vals) {
 			continue
 		}
-		for _, f := range fields[1:] {
-			arg := f
-			if strings.HasPrefix(arg, "of=") { // dd of=/path
-				arg = arg[len("of="):]
+		for _, w := range words[1:] {
+			if w.unresolved {
+				return true, shortRaw(w.raw)
 			}
-			if hit, target := pathUnderAny(arg, prefixes); hit {
+			// Match the raw arg and, when it carries a glued path-option prefix
+			// (dd of=, cp/mv/ln/install -t / --target-directory=), the path it
+			// wraps. Matching both means the strip can only ADD coverage, never
+			// hide a plain path.
+			if hit, target := matchLiteralPath(w.value, prefixes); hit {
+				return true, target
+			}
+			if stripped := stripPathOption(w.value); stripped != w.value {
+				if hit, target := matchLiteralPath(stripped, prefixes); hit {
+					return true, target
+				}
+			}
+		}
+	}
+
+	// (3) A command substitution EXECUTES its inner command for side effects no
+	// matter where the captured output goes, so a write hidden inside one —
+	// `echo $(rm /protected/f)`, `x=$(rm /protected/f)`, backticks — must be
+	// caught even though the output is never used as a path. Recurse into each
+	// inner command (depth-bounded). Precise by construction: it fires only when
+	// the inner command itself writes to a protected path, so benign
+	// `echo $(date)` / `x=$(cat f)` do not fire.
+	if depth < maxShellSubstDepth {
+		for _, sub := range extractCommandSubsts(cmd) {
+			if hit, target := shellTouchesProtectedRec(sub, prefixes, depth+1); hit {
 				return true, target
 			}
 		}
 	}
+
 	return false, ""
 }
 
@@ -329,15 +388,195 @@ func isMutatingProg(prog string, fields []string) bool {
 	return false
 }
 
-// pathUnderAny canonicalizes a shell token (absolute + symlink-resolved,
-// same as file-target matching) and reports whether any form is under a
-// protected prefix, returning the form that matched.
-func pathUnderAny(tok string, prefixes []string) (bool, string) {
-	tok = unquote(strings.TrimSpace(tok))
-	if tok == "" {
+// redirTarget is a redirection operand that may be a file we write, carried
+// out of the token stream with its unresolved flag so the caller can fail
+// closed when the target was built from an unresolved expansion.
+type redirTarget struct {
+	value      string
+	raw        string
+	unresolved bool
+}
+
+// redirectTargets extracts, from a tokenized command, every redirection operand
+// that names a file we might WRITE: the operand after >, >>, >|, <>, &>, &>>,
+// and after >&/<& when that operand is not a bare file descriptor. Input
+// redirections (<, <<, <<-, <<<) are skipped — their operand is read, never
+// written — which is why `tee /tmp/out < /protected/in` no longer spuriously
+// fires on the read side. Operating on the token stream (not a raw byte scan)
+// is what makes a `>` inside quotes stop counting as a redirection.
+func redirectTargets(toks []shellToken) []redirTarget {
+	var out []redirTarget
+	for i := 0; i < len(toks); i++ {
+		t := toks[i]
+		if t.kind != tokRedirWrite && t.kind != tokRedirDup {
+			continue
+		}
+		if i+1 >= len(toks) || toks[i+1].kind != tokWord {
+			continue // malformed: operator with no word operand
+		}
+		operand := toks[i+1]
+		if t.kind == tokRedirDup && isBareFd(operand.value) {
+			continue // 2>&1, >&- : fd dup/close, not a file write
+		}
+		out = append(out, redirTarget{value: operand.value, raw: operand.raw, unresolved: operand.unresolved})
+	}
+	return out
+}
+
+// splitShellSegments groups a token stream into per-command segments, breaking
+// on the control operators (; ;; & && | || |& ( ) newline). Each segment holds
+// only that command's tokens (words plus its own redirections), so a mutating
+// verb in one segment can't be attributed to a sibling. This replaces the old
+// FieldsFunc split, which was not quote-aware and so broke `echo "a;b"` in two.
+func splitShellSegments(toks []shellToken) [][]shellToken {
+	var segs [][]shellToken
+	var cur []shellToken
+	for _, t := range toks {
+		if t.kind == tokSep {
+			if len(cur) > 0 {
+				segs = append(segs, cur)
+				cur = nil
+			}
+			continue
+		}
+		cur = append(cur, t)
+	}
+	if len(cur) > 0 {
+		segs = append(segs, cur)
+	}
+	return segs
+}
+
+// commandWords reduces one segment to just its command words, dropping every
+// redirection operator AND the operand word that follows it. Without this a
+// redirect operand (`rm x > /protected/log`) or an input file (`< in`) would be
+// mis-read as an argument to the command; write targets are checked separately
+// by redirectTargets.
+func commandWords(seg []shellToken) []shellToken {
+	var out []shellToken
+	expectOperand := false
+	for _, t := range seg {
+		if expectOperand {
+			expectOperand = false
+			if t.kind == tokWord {
+				continue // this word is the redirect operand, not a command arg
+			}
+			// otherwise fall through: t is another operator, handled below
+		}
+		switch t.kind {
+		case tokRedirWrite, tokRedirDup, tokRedirRead:
+			expectOperand = true
+		case tokWord:
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// wordValues projects the resolved literals of a word slice, for isMutatingProg
+// (which inspects flags like sed's -i and dd's of=).
+func wordValues(words []shellToken) []string {
+	vals := make([]string, len(words))
+	for i, w := range words {
+		vals[i] = w.value
+	}
+	return vals
+}
+
+// stripLeadingAssignments drops leading `NAME=value` variable-assignment words
+// so the real program is chosen as argv[0]. In POSIX these assignments are a
+// grammar production that PRECEDES the command word (`FOO=bar rm x` runs rm with
+// FOO exported), so without this a mutating command hidden behind an assignment
+// prefix would be misread as the non-command `FOO=bar` and slip through.
+//
+// Conservative on purpose: a word is treated as an assignment only when it is
+// fully resolved and unquoted (raw == value, so no expansion/quoting happened)
+// and its literal matches an unquoted NAME followed by '='. That mirrors bash —
+// a quoted or expansion-built name is NOT an assignment — and guarantees the
+// strip can only ever REVEAL the real command, never hide one (it does not
+// consume the command word itself, which never contains a leading '=').
+func stripLeadingAssignments(words []shellToken) []shellToken {
+	i := 0
+	for i < len(words) && isAssignmentWord(words[i]) {
+		i++
+	}
+	return words[i:]
+}
+
+// isAssignmentWord reports whether w is an unquoted, fully-resolved
+// `NAME=...` assignment prefix (NAME = [A-Za-z_][A-Za-z0-9_]*).
+func isAssignmentWord(w shellToken) bool {
+	if w.unresolved || w.value != w.raw {
+		return false
+	}
+	eq := strings.IndexByte(w.value, '=')
+	if eq <= 0 {
+		return false
+	}
+	name := w.value[:eq]
+	for j := 0; j < len(name); j++ {
+		c := name[j]
+		isNameOK := c == '_' || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+			(j > 0 && c >= '0' && c <= '9')
+		if !isNameOK {
+			return false
+		}
+	}
+	return true
+}
+
+// stripPathOption unwraps a glued path-carrying command-line option, returning
+// the filesystem path it embeds (or the arg unchanged when it carries none).
+// Three shapes matter for the mutating programs we classify:
+//
+//   - dd's `of=FILE`
+//   - GNU cp/mv/ln/install `--target-directory=DIR` (and any unambiguous
+//     abbreviation `--t=DIR` … `--target-dir=DIR`, which getopt_long accepts)
+//   - the glued short form `-tDIR`, including inside a short-option cluster like
+//     `-rtDIR`
+//
+// Without this the destination directory is buried inside the option word
+// (`cp secret --target-directory=/protected` writes /protected/secret) where it
+// is not absolute, so canonicalCandidates would join it onto the CWD and it
+// would never match a protected prefix. The space-separated forms
+// (`cp -t /protected …`) already surface the path as its own word. The caller
+// matches BOTH the original arg and this stripped result, so stripping can only
+// widen coverage — it can never turn a real absolute path (which starts with
+// '/', not 'of='/'-'/'--') into a miss.
+func stripPathOption(arg string) string {
+	if strings.HasPrefix(arg, "of=") {
+		return arg[len("of="):]
+	}
+	if strings.HasPrefix(arg, "--") {
+		if eq := strings.IndexByte(arg, '='); eq > 2 {
+			if name := arg[2:eq]; strings.HasPrefix("target-directory", name) {
+				return arg[eq+1:]
+			}
+		}
+		return arg
+	}
+	if len(arg) > 1 && arg[0] == '-' {
+		// -tDIR or -<flags>tDIR: the path follows the 't' in the cluster.
+		if k := strings.IndexByte(arg[1:], 't'); k >= 0 && 1+k+1 < len(arg) {
+			return arg[1+k+1:]
+		}
+	}
+	return arg
+}
+
+// matchLiteralPath reports whether a fully-resolved shell word literal is under
+// any protected prefix, returning the canonical form that matched. Unlike the
+// old pathUnderAny it does NOT unquote: the tokenizer already stripped quotes,
+// so a literal that legitimately contains a quote character (a filename with an
+// embedded `"`) is matched as-is rather than re-mangled. Reuses
+// canonicalCandidates + matchPathPrefix so shell tokens are canonicalized
+// exactly like file-target params (absolute + symlink-resolved).
+func matchLiteralPath(literal string, prefixes []string) (bool, string) {
+	literal = strings.TrimSpace(literal)
+	if literal == "" {
 		return false, ""
 	}
-	for _, cand := range canonicalCandidates(tok) {
+	for _, cand := range canonicalCandidates(literal) {
 		for _, prefix := range prefixes {
 			if matchPathPrefix(cand, prefix) {
 				return true, cand
@@ -347,66 +586,15 @@ func pathUnderAny(tok string, prefixes []string) (bool, string) {
 	return false, ""
 }
 
-// redirectTargets extracts the filename token following each `>` / `>>`.
-// It skips fd-dup forms (`>&2`) and returns the raw token (still possibly
-// quoted); pathUnderAny unquotes it.
-func redirectTargets(cmd string) []string {
-	var out []string
-	for i := 0; i < len(cmd); i++ {
-		if cmd[i] != '>' {
-			continue
-		}
-		j := i + 1
-		if j < len(cmd) && cmd[j] == '>' { // ">>"
-			j++
-		}
-		if j < len(cmd) && cmd[j] == '&' { // ">&" fd-dup, not a file
-			i = j
-			continue
-		}
-		for j < len(cmd) && (cmd[j] == ' ' || cmd[j] == '\t') {
-			j++
-		}
-		start := j
-		for j < len(cmd) && !isShellSep(cmd[j]) {
-			j++
-		}
-		if j > start {
-			out = append(out, cmd[start:j])
-		}
-		i = j
-	}
-	return out
-}
-
-// splitShellSegments splits a command line into pipeline/list segments on
-// the shell separators ; | & and newlines (covering && and || as runs).
-func splitShellSegments(cmd string) []string {
-	return strings.FieldsFunc(cmd, func(r rune) bool {
-		switch r {
-		case ';', '|', '&', '\n', '\r':
-			return true
-		}
-		return false
-	})
-}
-
-// isShellSep reports whether b terminates a shell word for the purposes of
-// redirect-target extraction.
-func isShellSep(b byte) bool {
-	switch b {
-	case ' ', '\t', '\n', '\r', ';', '|', '&', '(', ')', '<', '>':
-		return true
-	}
-	return false
-}
-
-// unquote strips a single pair of surrounding single or double quotes.
-func unquote(s string) string {
-	if len(s) >= 2 {
-		if (s[0] == '\'' && s[len(s)-1] == '\'') || (s[0] == '"' && s[len(s)-1] == '"') {
-			return s[1 : len(s)-1]
-		}
+// shortRaw bounds the raw source substring reported when a token fails closed,
+// so an audit reason can't be blown up by a pathologically long command
+// substitution. The exact text is diagnostic only; the decision (deny) does
+// not depend on it.
+func shortRaw(s string) string {
+	const max = 120
+	s = strings.TrimSpace(s)
+	if len(s) > max {
+		return s[:max] + "…"
 	}
 	return s
 }

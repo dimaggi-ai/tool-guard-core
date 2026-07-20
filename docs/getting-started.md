@@ -202,11 +202,23 @@ Key flags:
 | `-protect-paths P1,P2` | Additional prefixes to protect (comma-separated) |
 | `-fail-closed` | Deny on any internal error (tooling glitch, bad policy load) |
 | `-fail-closed-tools bash,write,edit,notebookedit` | Deny only these tools on error; others fail open |
+| `-unknown-tools-deny` | Deny any tool_name not declared in `scope.tool_names` of a loaded enforcement policy — closes the gap where a new tool the agent starts calling matches no policy and is silently ungoverned |
 | `-mode shadow\|enforcement` | Shadow mode records decisions without blocking (default: enforcement) |
 
 `-protect-self` is the key insight: any deny rule you write inside the
 policy can be edited away by the agent. `-protect-self` runs unconditionally
 at the flag level and cannot be removed by an agent.
+
+> **Recommended default for enforcing deployments: set `-fail-closed-tools`
+> (or `-fail-closed`).** Without either flag, `tg hook` fails OPEN on any
+> internal error (unparseable stdin, a policy that fails to load, an
+> evaluator panic) — an unattributable tooling glitch never wedges the
+> agent, but it also means an error silently waves the call through with no
+> deny decision at all. That default exists so a transient hiccup on a dev
+> machine doesn't block work; a deployment that's actually meant to enforce
+> policy should not run without one of these flags. The example above
+> already sets `-fail-closed-tools` for exactly this reason — treat it as
+> the baseline for any real deployment, not an optional extra.
 
 See `examples/coding-agent-guard/README.md` for the full wiring guide
 covering Claude Code, OpenAI Codex, and Google Antigravity.
