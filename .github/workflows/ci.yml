@@ -16,8 +16,18 @@ jobs:
         os:
           - ubuntu-latest
           - macos-latest
+          - windows-latest
         go:
           - "1.25.11"
+    # windows-latest's default shell is pwsh, not bash — the gofmt and
+    # coverage-threshold steps below use bash syntax ($(...), [ -n ... ],
+    # multi-line awk) that pwsh can't parse. Force bash everywhere (a no-op
+    # on ubuntu/macos, which already default to it) so every step behaves
+    # identically across the matrix. windows-latest ships Git for Windows,
+    # which provides bash/awk/gawk on PATH.
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 

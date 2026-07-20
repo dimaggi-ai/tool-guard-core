@@ -5,6 +5,37 @@ per-change record see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## 0.4.0 — 2026-07-20
+
+A correctness fix and a release-process fix — no new policy surface.
+**No breaking changes.**
+
+### Highlights
+
+- **Path-prefix matching now works correctly on Windows.** `path_classify`,
+  `write_classify`, `shell_classify`'s argv checks, and
+  `-protect-self`/`-protect-paths` all compare canonicalized runtime paths
+  against policy-authored prefixes. Before this fix, that comparison never
+  matched on Windows — an allow-list failed closed (safe, but everything
+  denied), while a **deny-list failed open, silently** (nothing it was
+  supposed to block ever fired). Fixed with a normalization step gated on
+  the operand actually looking like an absolute Windows path (drive-letter
+  or UNC), so a literal `\` in a Unix filename is never mistaken for a
+  separator. `windows-latest` is now in CI.
+- **Releases can no longer ship while `main` is behind the tag.** A new
+  `release.yml` guard refuses to publish unless the tag is reachable from
+  `main` — see the new [RELEASING.md](RELEASING.md) for why this order
+  matters and the exact required sequence.
+
+### Upgrade notes
+
+- **Drop-in.** No schema, CLI, or audit-format changes. Linux/macOS
+  behavior is unchanged; only Windows path comparisons are affected, and
+  only in the direction of correctness (deny-lists that were silently
+  inert on Windows now fire).
+
+---
+
 ## 0.3.0 — 2026-07-12
 
 Extends the deterministic engine to the two surfaces our own machine-guard

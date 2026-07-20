@@ -56,6 +56,7 @@ authoring policies for, and operating Tool Guard Core.
 - [Release notes](../Release-Notes.md) - curated highlights + upgrade notes per release.
 - [SECURITY](../SECURITY.md) - private vulnerability disclosure.
 - [CONTRIBUTING](../CONTRIBUTING.md) - contributor guide.
+- [RELEASING](../RELEASING.md) - maintainer-only: the exact tag/release order.
 
 ---
 

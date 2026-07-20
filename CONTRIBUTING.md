@@ -121,6 +121,14 @@ Areas: `engine`, `audit`, `domain`, `tg`, `battle-test`, `docs`, `ci`,
       checklist above.
 - [ ] CHANGELOG.md has an entry under `## [Unreleased]`.
 
+## Releasing
+
+Maintainers only. See [RELEASING.md](RELEASING.md) — the exact,
+required order (merge to `main` before tagging, not after). A CI
+guard in `release.yml` refuses to publish a release whose tag isn't
+reachable from `main`, but the doc explains why that order matters
+regardless.
+
 ## Reporting security issues
 
 Do not open a public issue for security vulnerabilities. See

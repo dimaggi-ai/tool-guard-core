@@ -524,11 +524,14 @@ Comprehensive docs live in [`docs/`](docs/README.md):
 
 ## Known limitations
 
-> **New in 0.3.0:** `write_classify` and `http_classify` — file-write and
-> egress governance — plus `tg hook -audit-log` and `tg coverage`. **New in
-> 0.2.0:** velocity tracking that closes the amount-fragmentation bypass, the
-> `tg hook` coding-agent guard, `-protect-paths` self-protection, five new
-> operators, and `tg simulate`. See [Release-Notes.md](Release-Notes.md).
+> **New in 0.4.0:** correct path-prefix matching on Windows (deny-lists in
+> `path_classify`/`write_classify`/`-protect-paths` were previously silently
+> inert there). **New in 0.3.0:** `write_classify` and `http_classify` —
+> file-write and egress governance — plus `tg hook -audit-log` and
+> `tg coverage`. **New in 0.2.0:** velocity tracking that closes the
+> amount-fragmentation bypass, the `tg hook` coding-agent guard,
+> `-protect-paths` self-protection, five new operators, and `tg simulate`.
+> See [Release-Notes.md](Release-Notes.md).
 
 Features absent from this repo today:
 

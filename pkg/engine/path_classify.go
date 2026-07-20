@@ -141,6 +141,37 @@ func containsShellMeta(s string, includeBackslash bool) bool {
 // "*" inside a component (e.g. "*.txt") is NOT supported — the
 // wildcard token is the entire component or nothing.
 func matchPathPrefix(path, prefix string) bool {
+	// Canonicalize Windows-shaped operands to "/"-separated form before
+	// comparing. path comes from canonicalCandidates(), which runs
+	// filepath.Clean/EvalSymlinks and so is OS-native — on Windows that's
+	// "\"-separated. prefix is human-authored policy config, conventionally
+	// written with "/" but sometimes authored with "\" on a Windows box.
+	// Without this normalization, on Windows path would never match any
+	// prefix at all: an allow-list would fail closed on everything (safe
+	// but useless), and a deny-list would fail open on everything (silently
+	// not firing) — this function backs path_classify, write_classify,
+	// shell_classify's argv path lists, and -protect-self/-protect-paths,
+	// so a single unnormalized comparison here breaks all four.
+	//
+	// The normalization is GATED on each operand independently looking like
+	// an absolute Windows path (drive letter "C:\..." or UNC "\\server\..."
+	// — the only two shapes filepath.Clean ever produces on Windows), not
+	// applied unconditionally. An earlier version of this fix did an
+	// unconditional strings.ReplaceAll(s, `\`, "/") on both operands, which
+	// is a real vulnerability on Unix: "\" IS a legal, if unusual, character
+	// in a Unix filename, so a sibling file literally named
+	// "documents\secrets.txt" would have its backslash rewritten into a
+	// path separator and be misclassified as living INSIDE an allowed
+	// "documents/" directory it never actually touches. Gating on the
+	// Windows-path shape avoids that: a plain Unix path with a literal "\"
+	// in a component name doesn't match the shape and is left untouched.
+	//
+	// Deliberately not filepath.ToSlash for the runtime candidate either:
+	// that's a no-op except when GOOS=windows, so its effect would depend
+	// on which platform compiled the binary rather than on the input, and
+	// couldn't be exercised by a test running on a non-Windows CI runner.
+	path = normalizeIfWindowsPath(path)
+	prefix = normalizeIfWindowsPath(prefix)
 	if !strings.Contains(prefix, "*") {
 		// Common case: literal prefix. Also accept exact match (so
 		// "/etc/shadow" matches both /etc/shadow and /etc/shadow/...).
@@ -161,6 +192,33 @@ func matchPathPrefix(path, prefix string) bool {
 	pParts := strings.Split(strings.TrimSuffix(prefix, "/"), "/")
 	xParts := strings.Split(path, "/")
 	return matchSegments(pParts, xParts)
+}
+
+// normalizeIfWindowsPath rewrites "\" to "/" only when s itself is shaped
+// like an absolute Windows path: drive-letter ("C:\..." or "C:/...") or UNC
+// ("\\server\share\..."). Those are the only two absolute-path shapes
+// filepath.Clean/EvalSymlinks ever produce on a real Windows build, so this
+// check is exact, not a heuristic that could miss a genuine Windows
+// candidate. Anything else — including a plain Unix path that happens to
+// contain a literal "\" in a component name — is returned unchanged, so a
+// real Unix filename's backslash is never mistaken for a path separator.
+func normalizeIfWindowsPath(s string) string {
+	if isWindowsDriveLetterPath(s) || strings.HasPrefix(s, `\\`) {
+		return strings.ReplaceAll(s, `\`, "/")
+	}
+	return s
+}
+
+// isWindowsDriveLetterPath reports whether s starts with a drive letter
+// followed by ":" and a separator, e.g. "C:\" or "C:/" — the shape of every
+// absolute non-UNC Windows path.
+func isWindowsDriveLetterPath(s string) bool {
+	if len(s) < 3 {
+		return false
+	}
+	c := s[0]
+	isLetter := (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+	return isLetter && s[1] == ':' && (s[2] == '\\' || s[2] == '/')
 }
 
 // matchSegments handles "*" (one component) and "**" (zero or more

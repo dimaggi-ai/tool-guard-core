@@ -6,6 +6,43 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-07-20
+
+Windows correctness fix for the path-comparison primitive four features
+share, plus a release-process guard against the exact failure mode that let
+v0.3.0's GitHub Release ship while `main` sat two days behind the tag. No new
+policy surface.
+
+- **`matchPathPrefix` now normalizes Windows-shaped paths before comparing.**
+  `path_classify`, `write_classify`, `shell_classify`'s argv path lists, and
+  `-protect-self`/`-protect-paths` all compare a canonicalized runtime
+  candidate (OS-native separators — `\` on Windows) against a policy-authored
+  prefix (conventionally `/`). Without normalization those never matched on
+  Windows: an allow-list failed closed on everything (safe but useless), and
+  — more seriously — a **deny-list failed open on everything, silently**.
+  The fix is gated on the operand actually being shaped like an absolute
+  Windows path (drive-letter or UNC), not an unconditional `\`→`/` rewrite:
+  `\` is a legal literal character in a Unix filename, so an unconditional
+  rewrite would misclassify a sibling file (e.g. `documents\secrets.txt`) as
+  living inside an allowed `documents/` directory it never touches. Both
+  directions are covered by new tests exercising hand-built backslash paths,
+  so the regression is caught on any CI runner, not only a Windows one.
+- **`windows-latest` added to the CI matrix.** Runs with `shell: bash`
+  forced repo-wide in the workflow (Windows' default `pwsh` can't parse the
+  bash syntax the existing gofmt/coverage steps use); `windows-latest` ships
+  Git for Windows, which provides `bash`/`awk` on PATH.
+- **`release.yml` now refuses to publish a release whose tag isn't reachable
+  from `main`.** This is the first step of the workflow, before any
+  build/publish work. It directly guards against the v0.3.0 incident: the
+  tag was cut from a long-lived `release/vX.Y.Z` branch, and nobody
+  fast-forwarded `main` to it, so the GitHub Release existed and worked while
+  `main` — and every `blob/main/...` link the Release's own body points to
+  (CHANGELOG.md, Release-Notes.md, README) — still showed the previous
+  version. See the new [RELEASING.md](RELEASING.md) for the required order.
+
+No breaking changes. Everything above is either a correctness fix
+(Linux/macOS behavior is unchanged) or process tooling.
+
 ## [0.3.0] — 2026-07-12
 
 Driven by our own machine-guard audit log (3,635 real tool calls: 67% bash,
@@ -502,7 +539,8 @@ Lint heuristics shipped (8):
   documented battle-test catalogue; the strict variants are for
   operators who already accept those build-time costs.
 
-[Unreleased]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/dimaggi-ai/tool-guard-core/releases/tag/v0.1.0

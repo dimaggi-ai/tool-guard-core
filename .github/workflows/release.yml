@@ -18,6 +18,25 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Guards against exactly the failure mode from the v0.3.0 release: the
+      # tag was cut and published from a long-lived release/vX.Y.Z branch,
+      # but nobody fast-forwarded main to it — so the GitHub Release existed
+      # and worked, while the repo's default branch, its README, and its
+      # CHANGELOG.md/Release-Notes.md (which every Release's own body links
+      # to via blob/main/...) all still showed the PREVIOUS version. Refuse
+      # to publish a release whose tag commit main doesn't already contain —
+      # this must be the very first check, before any build/publish work.
+      - name: Verify this tag is reachable from main
+        run: |
+          git fetch origin main --quiet
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+            echo "::error::Tag ${GITHUB_REF_NAME} (${GITHUB_SHA}) is not reachable from origin/main." >&2
+            echo "::error::main must be fast-forwarded (or merged) to this commit BEFORE tagging — see RELEASING.md." >&2
+            echo "::error::Fix: git checkout main && git merge --ff-only ${GITHUB_SHA} && git push origin main — then re-run this tag's release, or delete and re-push the tag once main is caught up." >&2
+            exit 1
+          fi
+          echo "OK: ${GITHUB_REF_NAME} is reachable from main."
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
