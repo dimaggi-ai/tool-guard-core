@@ -1,0 +1,12 @@
+{
+  "name": "refund_cap_allow_under_500",
+  "description": "A $100 refund is under the $500 cap on the public README's canonical example policy — must allow.",
+  "policy_file": "../../policies/refund_cap.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "issue_refund",
+    "tool_group": "monetary_outflow",
+    "parameters": {"amount": 100}
+  },
+  "expect": {"decision": "allowed", "action_taken": "allowed"}
+}

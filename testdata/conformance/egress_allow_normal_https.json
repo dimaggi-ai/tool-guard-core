@@ -1,0 +1,11 @@
+{
+  "name": "egress_allow_normal_https",
+  "description": "A normal https destination that is neither the cloud metadata endpoint nor a non-TLS scheme — must allow.",
+  "policy_file": "../../policies/coding_agent_egress.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "http",
+    "parameters": {"url": "https://api.github.com/repos/dimaggi-ai/tool-guard-core"}
+  },
+  "expect": {"decision": "allowed", "action_taken": "allowed"}
+}

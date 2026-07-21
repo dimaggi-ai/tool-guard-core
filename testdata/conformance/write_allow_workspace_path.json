@@ -1,0 +1,11 @@
+{
+  "name": "write_allow_workspace_path",
+  "description": "A normal small write inside a project working tree, no key material — must allow.",
+  "policy_file": "../../policies/coding_agent_writes.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "write",
+    "parameters": {"path": "/home/user/project/src/main.go", "content": "package main\n\nfunc main() {}\n"}
+  },
+  "expect": {"decision": "allowed", "action_taken": "allowed"}
+}

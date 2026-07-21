@@ -1,0 +1,13 @@
+{
+  "name": "llm_spend_flag_token_volume",
+  "description": "Daily token count is 12M, over the 10M flag threshold (prompt-drift signature), but cost figures stay under their own caps — must flag (near-miss, proceeds), not deny or escalate.",
+  "policy_file": "../../policies/llm_token_spend_guard.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "llm_call",
+    "tool_group": "llm_usage",
+    "parameters": {"prompt": "summarize this document"},
+    "context": {"verified": {"agent_velocity": {"llm_cost_usd_1h": 10, "llm_cost_usd_24h": 50, "token_count_24h": 12000000}}}
+  },
+  "expect": {"decision": "flagged", "action_taken": "flagged"}
+}

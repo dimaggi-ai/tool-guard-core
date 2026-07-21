@@ -1,0 +1,13 @@
+{
+  "name": "llm_spend_deny_daily_ceiling",
+  "description": "Daily LLM cost is $350, over the $300/day hard ceiling — must deny (severity critical), not just escalate, even though the hourly figure is also over its own threshold.",
+  "policy_file": "../../policies/llm_token_spend_guard.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "llm_call",
+    "tool_group": "llm_usage",
+    "parameters": {"prompt": "summarize this document"},
+    "context": {"verified": {"agent_velocity": {"llm_cost_usd_1h": 60, "llm_cost_usd_24h": 350, "token_count_24h": 100000}}}
+  },
+  "expect": {"decision": "denied", "action_taken": "denied"}
+}

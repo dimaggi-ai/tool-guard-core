@@ -91,6 +91,18 @@ cover-html: ## Generate per-statement HTML coverage report at coverage.html
 bench: ## Run microbenchmarks in pkg/engine
 	$(GO) test -bench=. -benchmem -count=1 ./pkg/engine/
 
+.PHONY: stress
+stress: ## Load-test tg-proxy (throughput/latency/overload/audit-chain integrity) + fuzz the JSON/YAML parse paths
+	./scripts/run-stress.sh
+
+.PHONY: conformance
+conformance: ## Run the public conformance corpus (testdata/conformance/) — already covered by `make test`, this is just a focused entry point
+	$(GO) test -run TestConformance -v ./cmd/tg/
+
+.PHONY: policy-compat
+policy-compat: ## Assert frozen policy YAML snapshots (testdata/policy-compat/) still evaluate identically under the current engine
+	$(GO) test -run TestPolicyCompat -v ./cmd/tg/
+
 .PHONY: lint
 lint: ## Run go vet across all packages
 	$(GO) vet $(PKGS)
@@ -98,6 +110,13 @@ lint: ## Run go vet across all packages
 .PHONY: tidy
 tidy: ## Tidy go.mod / go.sum
 	$(GO) mod tidy
+
+.PHONY: sdk-test
+sdk-test: ## Run the Python SDK tests (>=90% coverage required)
+	@echo "→ running Python SDK tests (sdk/python/)…"
+	@cd sdk/python && python3 -m venv .venv 2>/dev/null || true
+	@cd sdk/python && .venv/bin/pip install -q -e ".[dev]"
+	@cd sdk/python && .venv/bin/python -m pytest tests/ --cov-fail-under=90 -q
 
 .PHONY: clean
 clean: ## Remove build and coverage artifacts

@@ -5,11 +5,13 @@ per-change record see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## 0.5.0 — 2026-07-24
+## 0.5.0 — 2026-07-21
 
-"The control holds" — the release is about Reliability and Accountability,
-not new policy surface: making error paths and the audit trail behave the
-way an *enforcing* deployment actually needs. **No breaking changes.**
+"The control holds" — Reliability, Accountability, and the first SDK. Makes
+error paths and the audit trail behave the way an *enforcing* deployment
+needs, ships a Python SDK for universal agent-framework coverage, and lands
+partial progress on five items from the public 1.0 roadmap. **No breaking
+changes.**
 
 ### Highlights
 
@@ -29,6 +31,18 @@ way an *enforcing* deployment actually needs. **No breaking changes.**
   variable-expansion evasions that the old scanner's own doc comment
   admitted to are now caught — or, where they genuinely can't be resolved
   offline, fail closed instead of silently passing through.
+- **New: a Python SDK** (`sdk/python/`, package `toolguard`) — drop-in
+  adapters for LangChain, AutoGen, native OpenAI/Anthropic tool use, and
+  MCP, backed by either the CLI or `tg-proxy`. Pre-1.0 and not yet on
+  PyPI (install from source); an adversarial review caught and fixed two
+  real bugs before this shipped — see [CHANGELOG.md](CHANGELOG.md) for
+  what they were and [sdk/python/README.md](sdk/python/README.md) for
+  usage.
+- **New: a public conformance corpus, a published throughput floor, a
+  release provenance attestation, a policy-compatibility regression net,
+  and a documented internal review process** — five partial steps toward
+  the public 1.0 roadmap, each scoped honestly rather than claimed in
+  full. Details in [CHANGELOG.md](CHANGELOG.md).
 
 ### Upgrade notes
 
@@ -40,9 +54,11 @@ way an *enforcing* deployment actually needs. **No breaking changes.**
   long-running deployment, this is the one thing worth checking before you
   restart — run `tg verify -file <your-audit-log>` first if you want to
   confirm ahead of time rather than find out at startup.
-- Everything else is either strictly additive (`-unknown-tools-deny` is
-  opt-in) or a correctness fix in the direction of catching more, never
-  less, than before (the panic recovery, the tokenizer).
+- Everything else is either strictly additive (`-unknown-tools-deny`, the
+  SDK, the conformance/compat/stress/provenance tooling are all opt-in or
+  CI-only, with zero runtime impact on an existing deployment) or a
+  correctness fix in the direction of catching more, never less, than
+  before (the panic recovery, the tokenizer).
 - Recommended, not required: set `-fail-closed-tools` (or `-fail-closed`)
   on `tg hook` for any deployment meant to actually enforce policy — see
   [docs/getting-started.md](docs/getting-started.md).

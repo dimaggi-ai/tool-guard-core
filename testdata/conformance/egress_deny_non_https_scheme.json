@@ -1,0 +1,11 @@
+{
+  "name": "egress_deny_non_https_scheme",
+  "description": "A plain http:// destination to an otherwise-fine host — the policy requires https for every destination, must deny.",
+  "policy_file": "../../policies/coding_agent_egress.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "fetch",
+    "parameters": {"url": "http://example.com/data.json"}
+  },
+  "expect": {"decision": "denied", "action_taken": "denied"}
+}

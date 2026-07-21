@@ -1,0 +1,11 @@
+{
+  "name": "egress_deny_cloud_metadata_endpoint",
+  "description": "169.254.169.254 is the cloud instance-metadata endpoint (SSRF's classic target — reachable credentials, no auth) — must deny regardless of scheme.",
+  "policy_file": "../../policies/coding_agent_egress.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "http",
+    "parameters": {"url": "http://169.254.169.254/latest/meta-data/iam/security-credentials/"}
+  },
+  "expect": {"decision": "denied", "action_taken": "denied"}
+}

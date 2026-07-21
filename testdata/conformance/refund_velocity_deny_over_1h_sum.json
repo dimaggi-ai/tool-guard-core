@@ -1,0 +1,13 @@
+{
+  "name": "refund_velocity_deny_over_1h_sum",
+  "description": "Rolling 1h refund total is already $5200, over the $5000 cap — must deny even though the per-call amount is small (the amount-fragmentation bypass this policy exists to close).",
+  "policy_file": "../../policies/refund_velocity_cap.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "issue_refund",
+    "tool_group": "monetary_outflow",
+    "parameters": {"amount": 50},
+    "context": {"verified": {"agent_velocity": {"monetary_sum_1h": 5200, "monetary_count_24h": 10}}}
+  },
+  "expect": {"decision": "denied", "action_taken": "denied"}
+}

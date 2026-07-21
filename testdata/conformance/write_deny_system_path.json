@@ -1,0 +1,11 @@
+{
+  "name": "write_deny_system_path",
+  "description": "A write targeting /etc/ — a denied system path prefix — must deny.",
+  "policy_file": "../../policies/coding_agent_writes.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "write",
+    "parameters": {"path": "/etc/passwd", "content": "malicious content"}
+  },
+  "expect": {"decision": "denied", "action_taken": "denied"}
+}

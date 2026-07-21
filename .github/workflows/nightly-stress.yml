@@ -1,0 +1,88 @@
+name: Nightly stress
+
+# Runs the load/overload/audit-chain suite (cmd/stress-test) with a longer
+# fuzz budget than the 30s/target PR gate in ci.yml, and asserts a
+# published throughput/latency floor at a fixed concurrency level.
+#
+# NOT run on every PR: GitHub-hosted runners have noisy, shared-tenant
+# performance (confirmed locally — the same run varied from ~10k to ~26k
+# req/s at concurrency=50 depending on machine load). Gating every PR on
+# that noise would produce flaky failures unrelated to the actual code
+# change. Nightly on a fixed schedule instead — real regressions still get
+# caught within a day, false failures don't block anyone's PR.
+#
+# The floor values below are deliberately conservative relative to
+# real measurements (~10k-26k req/s, ~4-24ms p99 at concurrency=50 on a
+# 16-thread desktop) — wide enough margin to absorb a slower/shared CI
+# runner without false-failing, tight enough to still catch a genuine
+# throughput collapse (e.g. the audit-mutex contention point becoming
+# pathological, or a regression that serializes something that shouldn't
+# be).
+
+on:
+  schedule:
+    # 03:17 UTC — an off-the-hour minute so this doesn't land in the same
+    # scheduling burst as every workflow that (mistakenly) uses "0 3 * * *".
+    - cron: "17 3 * * *"
+  workflow_dispatch: {} # manual trigger from the Actions tab
+
+jobs:
+  stress:
+    name: stress + fuzz (nightly)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.11"
+          cache: true
+
+      - name: Build binaries
+        run: |
+          mkdir -p bin
+          go build -o bin/tg ./cmd/tg
+          go build -o bin/tg-proxy ./cmd/tg-proxy
+          go build -o bin/stress-test ./cmd/stress-test
+
+      - name: Start tg-proxy
+        run: |
+          mkdir -p /tmp/nightly-stress
+          ./bin/tg-proxy \
+            -listen :9090 \
+            -policy-dir ./policies \
+            -audit-log /tmp/nightly-stress/decisions.jsonl \
+            > /tmp/nightly-stress/proxy.log 2>&1 &
+          echo $! > /tmp/nightly-stress/proxy.pid
+          sleep 1
+
+      - name: Load + overload + published floor + audit-chain integrity
+        run: |
+          ./bin/stress-test \
+            -target http://127.0.0.1:9090 \
+            -concurrency 1,10,50,200 \
+            -overload 2000 \
+            -tg-bin ./bin/tg \
+            -audit-log /tmp/nightly-stress/decisions.jsonl \
+            -floor-concurrency 50 \
+            -floor-min-rps 2000 \
+            -floor-max-p99 200ms
+
+      - name: Stop tg-proxy
+        if: always()
+        run: kill "$(cat /tmp/nightly-stress/proxy.pid)" 2>/dev/null || true
+
+      - name: Upload proxy log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-stress-proxy-log
+          path: /tmp/nightly-stress/proxy.log
+          retention-days: 14
+
+      - name: Fuzz (2m per target)
+        if: always()
+        run: |
+          go test -run '^$' -fuzz=FuzzActionEnvelopeDecode -fuzztime=2m ./cmd/tg-proxy/
+          go test -run '^$' -fuzz=FuzzValidateJSONDepth -fuzztime=2m ./cmd/tg-proxy/
+          go test -run '^$' -fuzz=FuzzPolicyYAML -fuzztime=2m ./cmd/tg-proxy/

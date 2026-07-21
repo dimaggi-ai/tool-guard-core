@@ -1,0 +1,12 @@
+{
+  "name": "refund_cap_strict_escalate_reason_mismatch",
+  "description": "amount=100 (under the structured cap) but reason text references $1000 — the classic amount-fragmentation tripwire. Must escalate, not silently allow.",
+  "policy_file": "../../policies/refund_cap_strict.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "issue_refund",
+    "tool_group": "monetary_outflow",
+    "parameters": {"amount": 100, "reason": "Partial credit, remainder of the $1000 refund to follow"}
+  },
+  "expect": {"decision": "escalated", "action_taken": "escalated"}
+}

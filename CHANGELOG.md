@@ -6,11 +6,141 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.5.0] — 2026-07-24
+## [0.5.0] — 2026-07-21
 
-"The control holds" — Reliability + Accountability. Four changes that make
+"The control holds" — Reliability, Accountability, and the first SDK. Makes
 error paths and the audit trail behave the way an *enforcing* deployment
-needs, not just the happy path. No breaking changes; no new required config.
+needs, ships a Python SDK for universal agent-framework coverage, and lands
+partial progress on five items from the public 1.0 roadmap. No breaking
+changes; no new required config.
+
+- **Python SDK (`toolguard`) — universal agent coverage.**
+  Drop-in adapters for LangChain, AutoGen, native OpenAI/Anthropic tool use,
+  and MCP; CLI and HTTP-proxy backends.  Shipped at `sdk/python/` as package
+  `toolguard` v0.1.0 (pre-1.0, not yet published to PyPI — install from
+  source).  Hardened by an adversarial review before landing — see below for
+  what that changed.
+  - `toolguard.ToolGuard` — policy decision client (CLI: `tg evaluate`; proxy:
+    `POST /evaluate`).  Stamps `framework="sdk"` and
+    `integration_type="sdk"` on every envelope so `tg coverage` counts
+    SDK-governed agents.  Fails closed: an unrecognized `tg evaluate` exit
+    code or an unparseable/malformed response body raises rather than
+    defaulting to allowed — there is no principled decision to fall back
+    to in either case.
+  - `toolguard.adapters.langchain.ToolGuardCallbackHandler` — LangChain
+    `BaseCallbackHandler` that intercepts `on_tool_start`; raises
+    `ToolDenied`/`ToolEscalated` to abort the chain.  Sets
+    `raise_error=True` so LangChain's dispatcher actually propagates the
+    exception instead of catching and logging it — a handler that doesn't
+    set this raises into a black hole, and the tool runs anyway.
+  - `toolguard.adapters.autogen.guarded` — decorator for AutoGen /
+    generic function-calling agents; returns an error dict on deny/escalate
+    so the conversation loop can surface the refusal.
+  - `toolguard.adapters.native.guard_tool_calls` — evaluates OpenAI
+    `tool_calls` and Anthropic `content[type=tool_use]` blocks; returns
+    `(allowed, denied)` lists with pre-built `tool_result` error shapes.
+  - `toolguard.adapters.mcp.guard_mcp_tool` — decorator for MCP
+    `call_tool` handlers.
+  - Shadow-mode aware: every adapter and `ToolGuard.evaluate()` branch on
+    `action_taken`, not `decision` — in shadow mode the engine keeps
+    `decision="denied"` (what would have happened) with
+    `action_taken="allowed_shadow"` (what actually happened, since shadow
+    mode never enforces). Branching on `decision` alone would make a
+    shadow-mode deployment enforce through the SDK, which shadow mode
+    exists specifically to never do; verified against a real `tg-proxy`
+    running in shadow mode, not just mocked.
+  - 135 pytest tests (includes a real-dispatcher LangChain integration
+    test — `langchain-core` is now a `dev` extra specifically so this
+    runs through LangChain's actual callback manager, not a direct method
+    call); 95% line coverage; real engine contract test builds `tg` from
+    source and asserts SDK decisions match the engine directly.
+  - `make sdk-test` target, now wired into CI (`.github/workflows/ci.yml`,
+    Python 3.10 and 3.12).
+
+- **Stress suite for `tg-proxy`.** A different concern from `tg benchmark`
+  (single-goroutine in-process latency probe) and `battle-test` (LLM
+  adversarial-bypass harness) — this checks that concurrency doesn't
+  compromise correctness, not just how fast it goes.
+  - `cmd/stress-test` fires a realistic allow/deny mix against a running
+    `tg-proxy` at increasing concurrency levels, reporting throughput and
+    p50/p95/p99 latency, then runs a brief overload phase that verifies
+    the proxy fails *closed* (rejects cleanly) rather than *open* (a 200
+    with the wrong decision, or a hang) when genuinely overwhelmed.
+  - After every phase, shells out to `tg verify` to confirm the audit
+    hash chain written by hundreds of concurrent goroutines racing
+    through the audit-log mutex is still intact — the one
+    product-specific correctness property a generic load-test tool
+    would never think to check.
+  - Native Go fuzz tests (`cmd/tg-proxy/fuzz_test.go`) for the two
+    untrusted-bytes entry points that had zero fuzz coverage before:
+    the `/evaluate` JSON envelope decode and policy YAML parsing.
+  - `make stress` target (`scripts/run-stress.sh`) runs the whole thing
+    end to end: builds the binaries, starts a real `tg-proxy`, runs the
+    load/overload/audit-chain checks, then fuzzes for `$FUZZTIME`
+    (default 15s) per target.
+  - `-floor-concurrency`/`-floor-min-rps`/`-floor-max-p99` flags assert a
+    published throughput/latency floor at a fixed concurrency level and
+    fail the run if it isn't met.
+  - 30s-per-target fuzzing now runs on every PR (`.github/workflows/ci.yml`,
+    Linux only — the fuzzed code has no OS-specific paths, so running it
+    on all three OSes would triple CI time for no extra signal). The full
+    load/overload/audit-chain suite plus the published floor
+    (2000 req/s, 200ms p99 at concurrency=50) and 2-minute-per-target
+    fuzzing run nightly instead (`.github/workflows/nightly-stress.yml`,
+    03:17 UTC + manual dispatch) — GitHub-hosted runners showed real
+    throughput variance (~10k-27k req/s for identical code, same
+    machine, different runs) that would make per-PR floor gating flaky
+    rather than meaningful; a nightly cadence still catches a genuine
+    regression within a day without blocking anyone's PR on CI noise.
+
+- **Public conformance corpus** (`testdata/conformance/`). 18 fixed
+  input/output pairs — one JSON file per scenario — covering every
+  shipped policy (`refund_cap`, `refund_cap_strict`, `refund_velocity_cap`,
+  `coding_agent_egress`, `coding_agent_writes`, `llm_token_spend_guard`)
+  across allow/deny/escalate/flag outcomes and boundary conditions. Each
+  case pins an envelope and policy file to an expected
+  `decision`/`action_taken` pair, so a change to engine or policy
+  semantics that silently flips a real-world outcome breaks a test, not
+  just an internal unit assertion. `cmd/tg/conformance_test.go` runs the
+  whole corpus through the same `engine.Evaluate` path a real deployment
+  uses; already covered by the existing CI matrix (no new workflow
+  needed). `make conformance` runs it directly.
+
+- **Policy compatibility regression net** (`testdata/policy-compat/`, `cmd/tg/policy_compat_test.go`). A partial step toward the "frozen policy
+  schema" 1.0 roadmap item: exact policy YAML snapshots taken from every
+  past release tag (`v0.2.0`, `v0.3.0`, `v0.4.0`), re-run through the
+  conformance corpus against the *current* engine. Asserts an old,
+  unmodified policy file still produces the exact decision it always has
+  — if a future engine or loader change would silently change that,
+  `TestPolicyCompat` fails instead of the break shipping quietly. Not a
+  real schema-versioning system yet (no version field, no migration
+  step) — see `testdata/policy-compat/README.md` for scope and how to
+  add the next version's snapshot. `make policy-compat` runs it
+  directly; already covered by the existing CI matrix, no new workflow
+  needed.
+
+- **Release provenance attestation** (`.github/workflows/release.yml`).
+  Every tagged release now runs `actions/attest-build-provenance` against
+  GoReleaser's archives and `checksums.txt`, producing a verifiable,
+  GitHub-hosted-Sigstore-backed attestation tying those exact bytes to
+  this repo, commit, and workflow run
+  (`gh attestation verify <file> --repo dimaggi-ai/tool-guard-core`).
+  This is **provenance**, not **reproducibility** — it proves the
+  release bytes came from this CI unmodified, not that rebuilding from
+  source deterministically reproduces them bit-for-bit (that needs a
+  separate rebuild-and-diff verifier this repo doesn't have yet).
+  Container images (ghcr.io) are explicitly out of scope for this pass
+  and remain unsigned, as already noted in `.goreleaser.yaml`.
+
+- **Internal review process, documented** (`docs/REVIEW-PROCESS.md`). A
+  partial step toward the "independent review" 1.0 roadmap item: the
+  adversarial self-review pattern that found the SDK bugs above (real
+  dispatcher vs. direct call, allowlist vs. denylist, fail-closed on
+  unhappy paths, claim-honesty check) formalized as a repeatable
+  six-point checklist plus a findings log, wired into `RELEASING.md`'s
+  pre-tag checklist. Explicitly **not** labeled "independent" anywhere —
+  this is maintainer self-review, not third-party audit; a genuinely
+  independent review is still open.
 
 - **`tg-proxy` denies (and audits) a per-request evaluator panic, always.**
   Before this, a panic inside the engine during `/evaluate` had NO recovery

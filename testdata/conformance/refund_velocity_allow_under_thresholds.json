@@ -1,0 +1,13 @@
+{
+  "name": "refund_velocity_allow_under_thresholds",
+  "description": "Rolling 1h sum ($2000) and 24h count (10) both under their caps ($5000 / 100) — must allow.",
+  "policy_file": "../../policies/refund_velocity_cap.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "issue_refund",
+    "tool_group": "monetary_outflow",
+    "parameters": {"amount": 100},
+    "context": {"verified": {"agent_velocity": {"monetary_sum_1h": 2000, "monetary_count_24h": 10}}}
+  },
+  "expect": {"decision": "allowed", "action_taken": "allowed"}
+}

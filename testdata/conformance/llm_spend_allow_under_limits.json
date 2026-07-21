@@ -1,0 +1,13 @@
+{
+  "name": "llm_spend_allow_under_limits",
+  "description": "Hourly cost ($10), daily cost ($50), and daily token count (100K) all well under their ceilings — must allow.",
+  "policy_file": "../../policies/llm_token_spend_guard.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "llm_call",
+    "tool_group": "llm_usage",
+    "parameters": {"prompt": "summarize this document"},
+    "context": {"verified": {"agent_velocity": {"llm_cost_usd_1h": 10, "llm_cost_usd_24h": 50, "token_count_24h": 100000}}}
+  },
+  "expect": {"decision": "allowed", "action_taken": "allowed"}
+}

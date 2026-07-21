@@ -1,0 +1,12 @@
+{
+  "name": "refund_cap_strict_allow_clean",
+  "description": "amount=100, reason text has no dollar-amount reference — neither rule fires, must allow.",
+  "policy_file": "../../policies/refund_cap_strict.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "issue_refund",
+    "tool_group": "monetary_outflow",
+    "parameters": {"amount": 100, "reason": "Customer received a damaged item"}
+  },
+  "expect": {"decision": "allowed", "action_taken": "allowed"}
+}

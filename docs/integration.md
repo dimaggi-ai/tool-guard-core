@@ -323,94 +323,108 @@ func (s *Server) CallTool(ctx context.Context, req CallToolRequest) (CallToolRes
 }
 ```
 
-### 3.2 LangChain (Python via HTTP)
+### 3.2 LangChain (Python)
 
-Use `tg-proxy` as a callback on every tool invocation:
+Install the SDK:
+
+```bash
+pip install toolguard[langchain]
+```
+
+Use the drop-in `ToolGuardCallbackHandler` — no boilerplate required:
 
 ```python
-import json
-import requests
-from langchain.callbacks.base import BaseCallbackHandler
+from toolguard import ToolGuard
+from toolguard.adapters.langchain import ToolGuardCallbackHandler
 
-PROXY = "http://localhost:9090"
+guard = ToolGuard(
+    mode="proxy",
+    proxy_url="http://localhost:9090",
+    agent_id="lc-agent",
+    org_id="acme",
+)
+handler = ToolGuardCallbackHandler(guard, tool_groups={"issue_refund": "monetary_outflow"})
 
-class ToolGuardCallback(BaseCallbackHandler):
-    def __init__(self, agent_id, org_id, session_id):
-        self.agent_id = agent_id
-        self.org_id = org_id
-        self.session_id = session_id
-
-    def on_tool_start(self, serialized, input_str, **kwargs):
-        # LangChain hands you the raw tool input as a string; parse it
-        # into the structured envelope tg-proxy expects.
-        envelope = {
-            "agent_id": self.agent_id,
-            "org_id": self.org_id,
-            "session_id": self.session_id,
-            "tool_name": serialized["name"],
-            "tool_group": "general",
-            "parameters": _parse(input_str),
-        }
-        r = requests.post(f"{PROXY}/evaluate", json=envelope, timeout=2.0)
-        r.raise_for_status()
-        decision = r.json()
-        # Block only on deny/escalate; allowed, allowed_shadow, and
-        # flagged (a recorded near-miss) proceed.
-        if decision["action_taken"] in ("denied", "escalated"):
-            # Short-circuit. LangChain doesn't have a clean "block this
-            # tool" hook; raising stops the chain.
-            raise PermissionError(decision.get("suggested_response") or decision["decision_reason"])
+# Add the handler to any chain or agent executor.
+chain = my_chain.with_config({"callbacks": [handler]})
 ```
+
+The handler intercepts `on_tool_start` and raises `ToolDenied` /
+`ToolEscalated` on a block, which stops the chain.  Allowed and flagged
+calls proceed normally.  See `sdk/python/README.md` for full examples.
 
 ### 3.3 Microsoft AutoGen
 
-AutoGen exposes a `register_for_execution` callback. Insert the proxy
-check before delegating to the real function:
+Install the SDK:
+
+```bash
+pip install toolguard[autogen]
+```
+
+Use the `guarded` decorator:
 
 ```python
-import requests
+from toolguard import ToolGuard
+from toolguard.adapters.autogen import guarded
 
-def guarded(name: str, group: str, fn):
-    def wrapper(**params):
-        envelope = {
-            "agent_id": "autogen-agent",
-            "session_id": "...",
-            "org_id": "...",
-            "tool_name": name,
-            "tool_group": group,
-            "parameters": params,
-        }
-        r = requests.post("http://localhost:9090/evaluate", json=envelope, timeout=2.0)
-        d = r.json()
-        if d["action_taken"] in ("denied", "escalated"):
-            return {"error": d.get("suggested_response") or d["decision_reason"]}
-        return fn(**params)
-    return wrapper
+guard = ToolGuard(
+    mode="proxy",
+    proxy_url="http://localhost:9090",
+    agent_id="autogen-agent",
+    org_id="acme",
+)
 
-assistant.register_for_execution(name="issue_refund")(guarded("issue_refund", "monetary_outflow", real_refund))
+@guarded(guard, tool_name="issue_refund", tool_group="monetary_outflow")
+def issue_refund(order_id: str, amount: float) -> dict:
+    ...  # real implementation
+
+# Register with AutoGen as normal:
+assistant.register_for_execution(name="issue_refund")(issue_refund)
 ```
+
+On a deny or escalate, the wrapper returns `{"error": "denied", "reason": "...",
+"suggested_response": "..."}` so AutoGen's conversation loop can surface the
+refusal to the LLM.
 
 ### 3.4 Anthropic / OpenAI native tool use
 
-When you receive a `tool_use` block from the model, do not execute it
-yet. Call `/evaluate` first. Then either run the tool and return the
-result, or short-circuit and return `tool_result` with `is_error=true`
-and the suggested response so the model adapts.
+Install the SDK:
+
+```bash
+pip install toolguard[anthropic]   # or [openai]
+```
 
 ```python
-def handle_tool_call(tool_use, session):
-    envelope = build_envelope(tool_use, session)
-    r = requests.post("http://localhost:9090/evaluate", json=envelope, timeout=2.0).json()
-    if r["action_taken"] in ("denied", "escalated"):
-        return {
-            "type": "tool_result",
-            "tool_use_id": tool_use["id"],
-            "is_error": True,
-            "content": r.get("suggested_response") or r["decision_reason"],
-        }
-    output = TOOLS[tool_use["name"]](**tool_use["input"])
-    return {"type": "tool_result", "tool_use_id": tool_use["id"], "content": output}
+from toolguard import ToolGuard
+from toolguard.adapters.native import guard_tool_calls
+
+guard = ToolGuard(
+    mode="proxy",
+    proxy_url="http://localhost:9090",
+    agent_id="my-agent",
+    org_id="acme",
+)
+
+# response.content is the list of tool_use blocks from the model.
+allowed, denied = guard_tool_calls(
+    response.content,
+    guard,
+    provider="anthropic",   # or "openai"
+    tool_groups={"issue_refund": "monetary_outflow"},
+)
+
+# Execute only the allowed calls, then return results + error stubs to the model.
+tool_results = []
+for item in allowed:
+    call = item["call"]
+    output = TOOLS[call["name"]](**call["input"])
+    tool_results.append({"type": "tool_result", "tool_use_id": call["id"], "content": output})
+
+for item in denied:
+    tool_results.append(item["tool_result"])  # pre-built is_error=True result
 ```
+
+See `sdk/python/README.md` for the full OpenAI shape example.
 
 ---
 

@@ -1,0 +1,17 @@
+{
+  "name": "write_deny_private_key_content",
+  "description": "Path is a normal workspace path, but the content being written matches the private-key marker regex \u2014 must deny on content alone, regardless of path. Body is a placeholder, not real key material.",
+  "policy_file": "../../policies/coding_agent_writes.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "write",
+    "parameters": {
+      "path": "/home/user/project/notes.txt",
+      "content": "-----BEGIN RSA PRIVATE KEY----- (placeholder test fixture) -----END RSA PRIVATE KEY-----"
+    }
+  },
+  "expect": {
+    "decision": "denied",
+    "action_taken": "denied"
+  }
+}

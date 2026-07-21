@@ -1,0 +1,13 @@
+{
+  "name": "refund_velocity_escalate_over_24h_count",
+  "description": "101 refunds in the trailing 24h, over the 100-count ceiling — must escalate for human review, while the 1h monetary sum stays under its own cap.",
+  "policy_file": "../../policies/refund_velocity_cap.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "issue_refund",
+    "tool_group": "monetary_outflow",
+    "parameters": {"amount": 50},
+    "context": {"verified": {"agent_velocity": {"monetary_sum_1h": 100, "monetary_count_24h": 101}}}
+  },
+  "expect": {"decision": "escalated", "action_taken": "escalated"}
+}

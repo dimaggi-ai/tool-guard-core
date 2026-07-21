@@ -1,0 +1,13 @@
+{
+  "name": "llm_spend_escalate_hourly_cost",
+  "description": "Hourly LLM cost is $65, over the $50/h escalate threshold (retry-loop signature) — must escalate.",
+  "policy_file": "../../policies/llm_token_spend_guard.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "llm_call",
+    "tool_group": "llm_usage",
+    "parameters": {"prompt": "summarize this document"},
+    "context": {"verified": {"agent_velocity": {"llm_cost_usd_1h": 65, "llm_cost_usd_24h": 100, "token_count_24h": 100000}}}
+  },
+  "expect": {"decision": "escalated", "action_taken": "escalated"}
+}

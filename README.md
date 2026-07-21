@@ -124,8 +124,7 @@ commercial, self-hosted enforcement gateway + management product; see
 **Not present in either edition:**
 
 - Multi-model ensemble voting, voice-print matching, managed
-  hosting, client SDKs. See
-  [Known limitations](#known-limitations) for the full
+  hosting. See [Known limitations](#known-limitations) for the full
   list and what each would take to build.
 
 The included `cmd/battle-test` drives a local LLM (Gemma 4 e4b via
@@ -527,9 +526,14 @@ Comprehensive docs live in [`docs/`](docs/README.md):
 > **New in 0.5.0:** a per-request evaluator panic on `tg-proxy` now always
 > denies and audits (previously it dropped the connection with no record);
 > `tg-proxy` verifies the full audit chain on startup, not just the tail;
-> `tg hook -unknown-tools-deny`; and a real, quote-aware shell tokenizer
+> `tg hook -unknown-tools-deny`; a real, quote-aware shell tokenizer
 > behind `-protect-paths` (the old scanner's documented quoting/
-> substitution/variable-expansion evasions are now caught or fail closed).
+> substitution/variable-expansion evasions are now caught or fail closed);
+> and a new [Python SDK](sdk/python/README.md) with LangChain/AutoGen/
+> native/MCP adapters, plus partial progress on five public 1.0-roadmap
+> items (conformance corpus, throughput floor, provenance attestation,
+> policy-compatibility net, documented review process) — see
+> [CHANGELOG.md](CHANGELOG.md) for the full list.
 > **New in 0.4.0:** correct path-prefix matching on Windows (deny-lists in
 > `path_classify`/`write_classify`/`-protect-paths` were previously silently
 > inert there). **New in 0.3.0:** `write_classify` and `http_classify` —
@@ -567,10 +571,12 @@ Features absent from this repo today:
 - **No managed hosting.** You run the proxy. You run Ollama. You own
   the operations. There is no hosted version.
 - **No gRPC variant.** REST `POST /evaluate` only.
-- **No Python / Node client SDK and no OpenAPI spec.** The HTTP API
-  is language-agnostic and documented in `docs/integration.md`;
-  the request/response shapes are small enough to hand-write a
-  client in any language.
+- **No Node client SDK and no OpenAPI spec.** A Python SDK ships at
+  [`sdk/python/`](sdk/python/README.md) (`pip install` from source —
+  not yet on PyPI) with adapters for LangChain, AutoGen, native
+  OpenAI/Anthropic tool use, and MCP. For other languages, the HTTP
+  API is documented in `docs/integration.md`; the request/response
+  shapes are small enough to hand-write a client.
 - **Battle-test catalogue is Gemma-4-only.** Today's bypass numbers
   reflect Gemma's failure modes specifically; other models will
   fail differently.

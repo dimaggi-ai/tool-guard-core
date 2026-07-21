@@ -71,6 +71,46 @@ jobs:
       - name: Integration tests
         run: go test -race -count=1 -tags=integration ./cmd/tg/... ./cmd/tg-proxy/...
 
+      # Only on one OS in the matrix — the fuzzed logic (JSON/YAML parsing)
+      # has no OS-specific code path, so tripling this across the matrix
+      # would just triple CI time for no extra signal. 30s/target is cheap
+      # enough for every PR; nightly-stress.yml runs these longer.
+      - name: Fuzz (30s per target)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          go test -run '^$' -fuzz=FuzzActionEnvelopeDecode -fuzztime=30s ./cmd/tg-proxy/
+          go test -run '^$' -fuzz=FuzzValidateJSONDepth -fuzztime=30s ./cmd/tg-proxy/
+          go test -run '^$' -fuzz=FuzzPolicyYAML -fuzztime=30s ./cmd/tg-proxy/
+
+  sdk-python:
+    name: sdk-test (python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # pyproject.toml declares support for 3.10-3.12; test the bounds.
+        python:
+          - "3.10"
+          - "3.12"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.11"
+          cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      # test_contract.py builds `tg` from source itself and skips gracefully
+      # if it can't — this just gives it a warm module cache so that build
+      # doesn't silently fail on a cold GOPATH in CI and skip the single
+      # most important test in the suite (the one that checks SDK decisions
+      # actually match the real engine).
+      - name: Warm Go module cache
+        run: go mod download
+      - name: sdk-test
+        run: make sdk-test
+
   govulncheck:
     name: govulncheck
     runs-on: ubuntu-latest

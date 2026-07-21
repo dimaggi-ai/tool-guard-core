@@ -33,3 +33,15 @@ examples/postgres-attack/audit/
 /mcp-server
 /battle-test
 /example-chain
+
+# Python (sdk/python/) — none of this existed before the SDK landed, so
+# nothing caught it: `git add sdk/` would have committed venvs, bytecode,
+# and coverage artifacts straight into the public repo.
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+.coverage.*
+.venv/
+*.venv/

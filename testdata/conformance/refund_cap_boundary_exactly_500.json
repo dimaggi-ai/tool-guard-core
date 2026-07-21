@@ -1,0 +1,12 @@
+{
+  "name": "refund_cap_boundary_exactly_500",
+  "description": "Exactly $500 — the rule is `gt` (strictly greater than), so the boundary value itself must allow, not deny. Pins the off-by-one direction.",
+  "policy_file": "../../policies/refund_cap.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "issue_refund",
+    "tool_group": "monetary_outflow",
+    "parameters": {"amount": 500}
+  },
+  "expect": {"decision": "allowed", "action_taken": "allowed"}
+}

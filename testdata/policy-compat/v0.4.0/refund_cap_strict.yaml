@@ -1,0 +1,60 @@
+# Cleaner sibling of refund_cap.yaml — passes `tg lint` with no error
+# findings. Scopes by tool_group (mitigates the tool-substitution bypass
+# class) and ships a regex check on the reason field so amount fragmentation
+# (e.g. amount=100 with reason="$1000 refund") leaves a deterministic
+# tripwire even without semantic evaluation.
+policy_id: pol-refund-cap-strict
+name: refund-cap-strict
+description: >
+  Refund authorisation with tool-group scope and a free-text consistency
+  check on the reason field. Designed to lint cleanly under tg lint.
+version: 1
+status: approved
+mode: enforcement
+
+scope:
+  # Naming the literal tools we expect …
+  tool_names:
+    - issue_refund
+    - process_return
+  # … AND the tool group so an attacker cannot pivot to a sibling tool.
+  tool_groups:
+    - monetary_outflow
+
+rules:
+  - rule_id: rule-amount-cap
+    name: Single refund amount limit
+    rule_type: threshold
+    conditions:
+      field: amount
+      operator: gt
+      value: 500
+    effect: deny
+    effect_config:
+      severity: high
+      suggested_response: "Refunds over $500 require supervisor approval."
+    citation:
+      document_id: doc-refund-sop
+      section: "2.3"
+      excerpt: "Individual refund transactions exceeding $500 require supervisor approval prior to processing."
+
+  - rule_id: rule-reason-amount-consistency
+    name: Reason field claims an amount over the cap
+    rule_type: regex
+    conditions:
+      field: parameters.reason
+      operator: regex
+      # Requires a $ sign followed by 3+ digits/commas. Catches the
+      # textbook amount-fragmentation pattern ("amount: 100" plus
+      # reason: "Refund of $1000 to customer") without false-positiving
+      # on bare digit-runs in order numbers or customer IDs.
+      value: '\$[0-9,]{3,}'
+    effect: escalate
+    effect_config:
+      severity: medium
+      escalate_to: approver
+      timeout_minutes: 15
+    citation:
+      document_id: doc-refund-sop
+      section: "2.4"
+      excerpt: "Refund justifications that reference dollar amounts above the structured limit must be escalated for human review."

@@ -1,0 +1,12 @@
+{
+  "name": "refund_cap_deny_over_500",
+  "description": "A $1000 refund exceeds the $500 cap — must deny. The exact scenario the README's quick-start walks through.",
+  "policy_file": "../../policies/refund_cap.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "issue_refund",
+    "tool_group": "monetary_outflow",
+    "parameters": {"amount": 1000}
+  },
+  "expect": {"decision": "denied", "action_taken": "denied"}
+}

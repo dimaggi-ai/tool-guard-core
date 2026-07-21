@@ -8,6 +8,8 @@ on:
 permissions:
   contents: write     # GitHub Releases
   packages: write     # ghcr.io image push
+  id-token: write     # actions/attest-build-provenance (OIDC signing)
+  attestations: write # actions/attest-build-provenance (publish the attestation)
 
 jobs:
   release:
@@ -72,3 +74,19 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Signs the release artifacts (archives + checksums.txt) with a
+      # GitHub-hosted Sigstore identity, tying them verifiably to this
+      # exact workflow run, commit, and source repo — an attacker who
+      # compromises the GitHub Release upload step (or a mirror) can't
+      # silently swap a binary without the attestation failing to verify.
+      # This is NOT "reproducible builds" — it proves *provenance*
+      # (these bytes came from this repo's CI, unmodified since), not
+      # *reproducibility* (that rebuilding from source deterministically
+      # reproduces the same bytes bit-for-bit). The latter needs a
+      # separate rebuild-and-diff verifier job this repo doesn't have yet
+      # — don't conflate the two when talking about this publicly.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: "dist/*.tar.gz,dist/*.zip,dist/checksums.txt"
