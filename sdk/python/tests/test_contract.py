@@ -10,14 +10,22 @@ Skips gracefully (pytest.skip) when:
   - ``go`` is not on PATH
   - The go build fails (e.g. missing module cache)
   - The tool-guard-core source is not at the expected path
+
+Set TG_CONTRACT_REQUIRED=1 to turn any of the above into a hard failure
+instead of a skip. CI sets this: a green sdk-python job with THIS test —
+the one that proves the SDK's decisions actually match the real engine,
+not a mock — silently skipped would be worse than a red job, and nothing
+else in the suite would catch that.
 """
 from __future__ import annotations
 
 import json
 import os
 import shutil
+import socket
 import subprocess
 import tempfile
+import time
 
 import pytest
 
@@ -35,6 +43,18 @@ REPO_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "..")
 )
 TG_BIN = "/tmp/tg_sdk_contract_test"
+
+
+def _skip_or_fail(reason: str) -> None:
+    """pytest.skip, unless TG_CONTRACT_REQUIRED=1 — then pytest.fail.
+
+    CI sets TG_CONTRACT_REQUIRED=1 so a broken prerequisite (go missing,
+    build failure, wrong path) fails the job loudly instead of quietly
+    skipping the one test that checks the SDK against the real engine.
+    """
+    if os.environ.get("TG_CONTRACT_REQUIRED") == "1":
+        pytest.fail(f"TG_CONTRACT_REQUIRED=1: {reason}")
+    pytest.skip(reason)
 
 # Policy YAML that denies issue_refund > $500 and allows everything else.
 _DENY_POLICY = """\
@@ -85,12 +105,12 @@ rules:
 def tg_binary():
     """Build tg once per test session.  Skip if go is unavailable."""
     if not shutil.which("go"):
-        pytest.skip("go not on PATH — skipping contract tests")
+        _skip_or_fail("go not on PATH — skipping contract tests")
 
     if not os.path.isdir(REPO_ROOT) or not os.path.isfile(
         os.path.join(REPO_ROOT, "go.mod")
     ):
-        pytest.skip(
+        _skip_or_fail(
             f"tool-guard-core source not found at {REPO_ROOT} — skipping contract tests"
         )
 
@@ -102,7 +122,7 @@ def tg_binary():
         timeout=120,
     )
     if result.returncode != 0:
-        pytest.skip(
+        _skip_or_fail(
             f"go build failed (exit {result.returncode}): {result.stderr[:500]}"
         )
 
@@ -113,6 +133,99 @@ def tg_binary():
         os.unlink(TG_BIN)
     except OSError:
         pass
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+@pytest.fixture(scope="session")
+def tg_proxy_binary():
+    """Build tg-proxy once per session. Same skip/fail semantics as tg_binary."""
+    if not shutil.which("go"):
+        _skip_or_fail("go not on PATH — skipping proxy shadow-mode contract test")
+
+    if not os.path.isdir(REPO_ROOT) or not os.path.isfile(
+        os.path.join(REPO_ROOT, "go.mod")
+    ):
+        _skip_or_fail(
+            f"tool-guard-core source not found at {REPO_ROOT} — skipping proxy contract test"
+        )
+
+    bin_path = "/tmp/tg_proxy_sdk_contract_test"
+    result = subprocess.run(
+        ["go", "build", "-o", bin_path, "./cmd/tg-proxy"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if result.returncode != 0:
+        _skip_or_fail(
+            f"go build (tg-proxy) failed (exit {result.returncode}): {result.stderr[:500]}"
+        )
+
+    yield bin_path
+
+    try:
+        os.unlink(bin_path)
+    except OSError:
+        pass
+
+
+@pytest.fixture()
+def tg_proxy_shadow(tg_proxy_binary, tmp_path):
+    """
+    Start a real tg-proxy in shadow mode against the deny-cap policy and
+    yield its base URL. This is what backs the CHANGELOG's "verified
+    against a real tg-proxy running in shadow mode, not just mocked" claim
+    — as an automated, repeatable test instead of a one-time manual check
+    that could silently regress.
+    """
+    policy_dir = tmp_path / "policies"
+    policy_dir.mkdir()
+    (policy_dir / "deny_cap_shadow.yaml").write_text(
+        _DENY_POLICY.replace("mode: enforcement", "mode: shadow")
+    )
+    audit_log = tmp_path / "decisions.jsonl"
+    port = _free_port()
+
+    proc = subprocess.Popen(
+        [
+            tg_proxy_binary,
+            "-listen", f"127.0.0.1:{port}",
+            "-policy-dir", str(policy_dir),
+            "-audit-log", str(audit_log),
+            "-default-mode", "shadow",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    try:
+        base_url = f"http://127.0.0.1:{port}"
+        deadline = time.monotonic() + 5
+        ready = False
+        while time.monotonic() < deadline:
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                    ready = True
+                    break
+            except OSError:
+                time.sleep(0.05)
+        if not ready:
+            proc.terminate()
+            out, _ = proc.communicate(timeout=5)
+            pytest.fail(f"tg-proxy never opened its listen port; output: {out[:1000]}")
+        yield base_url
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
 
 
 @pytest.fixture()
@@ -286,3 +399,53 @@ class TestContract:
             "issue_refund", {"amount": 50}, tool_group="monetary_outflow"
         )
         assert result.decision == Decision.ALLOWED
+
+
+# ---------------------------------------------------------------------------
+# Proxy-mode shadow contract: the real regression net for the
+# decision-vs-action_taken fix (client.py's evaluate() must branch on
+# action_taken, not decision — see docs/REVIEW-PROCESS.md pillar 1).
+# ---------------------------------------------------------------------------
+
+class TestProxyShadowModeContract:
+    def test_shadow_mode_denies_do_not_raise(self, tg_proxy_shadow):
+        """
+        A shadow-mode policy that would deny must NOT raise ToolDenied
+        through the SDK's proxy backend — shadow mode observes, it never
+        blocks. The engine reports decision=denied (what would happen)
+        with action_taken=allowed_shadow (what actually happens); evaluate()
+        must branch on the latter. Before the fix in this release, this
+        test would have raised ToolDenied and failed.
+        """
+        client = ToolGuard(
+            mode="proxy",
+            proxy_url=tg_proxy_shadow,
+            agent_id="shadow-contract-agent",
+            org_id="shadow-contract-org",
+        )
+
+        result = client.evaluate(
+            "issue_refund",
+            {"amount": 1000, "reason": "would be denied if enforced"},
+            tool_group="monetary_outflow",
+        )
+
+        assert result.decision == Decision.DENIED
+        assert result.action_taken == "allowed_shadow"
+
+    def test_shadow_mode_allows_stay_allowed(self, tg_proxy_shadow):
+        """Sanity check: a call the shadow policy wouldn't deny anyway
+        still evaluates cleanly (not just "any exception swallowed")."""
+        client = ToolGuard(
+            mode="proxy",
+            proxy_url=tg_proxy_shadow,
+            agent_id="shadow-contract-agent",
+            org_id="shadow-contract-org",
+        )
+
+        result = client.evaluate(
+            "issue_refund", {"amount": 100}, tool_group="monetary_outflow"
+        )
+
+        assert result.decision == Decision.ALLOWED
+        assert result.action_taken == Decision.ALLOWED

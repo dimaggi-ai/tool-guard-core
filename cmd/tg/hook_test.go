@@ -146,6 +146,30 @@ func TestHook_PolicyAllow(t *testing.T) {
 	}
 }
 
+// TestHook_ShadowMode_ObservesDoesNotEnforce guards against a bug an
+// adversarial review caught: evalHook used to switch on result.Decision
+// (what WOULD happen) instead of result.ActionTaken (what actually
+// happens). A shadow-mode policy sets Decision=denied but
+// ActionTaken=allowed_shadow — branching on Decision made `tg hook -mode
+// shadow` silently enforce every policy, since the calling agent (Claude
+// Code / Codex / etc.) actually blocks the tool call on a "deny"
+// permissionDecision regardless of what mode label the engine used
+// internally. Shadow mode exists specifically to observe without ever
+// blocking; this proves it actually does that at the hook's own JSON
+// output, not just inside the engine.
+func TestHook_ShadowMode_ObservesDoesNotEnforce(t *testing.T) {
+	shadowDenyPolicy := strings.Replace(hookDenyPolicy, "mode: enforcement", "mode: shadow", 1)
+	pol := writeHookPolicy(t, shadowDenyPolicy)
+	stdin := `{"tool_name":"bash","tool_input":{"command":"rm -rf /tmp/x"}}`
+	out, code := runHookStr(t, stdin, "-policy", pol, "-mode", "shadow")
+	if code != 0 {
+		t.Errorf("hook must always exit 0, got %d", code)
+	}
+	if d := hookDecision(t, out); d != "allow" {
+		t.Errorf("shadow mode must never block — expected allow (near-miss observed, not enforced), got %q; output=%s", d, out)
+	}
+}
+
 // ── B2: fail-open on malformed stdin ──────────────────────────────────────
 
 func TestHook_MalformedStdin_FailOpen(t *testing.T) {

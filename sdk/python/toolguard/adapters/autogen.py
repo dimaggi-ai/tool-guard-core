@@ -11,8 +11,8 @@ framework / integration_type stamped on every envelope:
   framework        = "sdk"
   integration_type = "sdk"
 
-Install:
-    pip install toolguard[autogen]    # also installs pyautogen
+Install (not yet on PyPI — from a clone of this repo):
+    pip install "./tool-guard-core/sdk/python[autogen]"    # also installs pyautogen
 """
 from __future__ import annotations
 

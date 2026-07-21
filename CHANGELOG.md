@@ -47,13 +47,20 @@ changes; no new required config.
     `action_taken="allowed_shadow"` (what actually happened, since shadow
     mode never enforces). Branching on `decision` alone would make a
     shadow-mode deployment enforce through the SDK, which shadow mode
-    exists specifically to never do; verified against a real `tg-proxy`
-    running in shadow mode, not just mocked.
-  - 135 pytest tests (includes a real-dispatcher LangChain integration
+    exists specifically to never do; proven by
+    `TestProxyShadowModeContract` (`sdk/python/tests/test_contract.py`),
+    which builds and runs a real `tg-proxy` in shadow mode and asserts
+    `evaluate()` does not raise — not a one-time manual check, an
+    automated regression test that fails loudly if this ever breaks again.
+  - 137 pytest tests (includes a real-dispatcher LangChain integration
     test — `langchain-core` is now a `dev` extra specifically so this
     runs through LangChain's actual callback manager, not a direct method
-    call); 95% line coverage; real engine contract test builds `tg` from
-    source and asserts SDK decisions match the engine directly.
+    call — and the real-`tg-proxy` shadow-mode contract test above); 95%
+    line coverage; the CLI-mode contract test builds `tg` from source and
+    asserts SDK decisions match the engine directly. `TG_CONTRACT_REQUIRED=1`
+    (set in CI) turns a broken prerequisite (missing `go`, failed build)
+    for either contract test into a hard CI failure instead of a silent
+    skip of the tests that prove the SDK matches the real engine.
   - `make sdk-test` target, now wired into CI (`.github/workflows/ci.yml`,
     Python 3.10 and 3.12).
 
@@ -179,6 +186,21 @@ changes; no new required config.
   agent starts calling matches no policy and is silently ungoverned. The
   shared check (`engine.ToolNameKnown`) moved from a `tg-proxy`-private
   function to `pkg/engine` so both entry points can't drift apart.
+- **`tg hook -mode shadow` now actually observes instead of enforcing.**
+  `evalHook` (`cmd/tg/hook.go`) branched on the engine's `Decision` (what
+  WOULD happen) instead of `ActionTaken` (what actually happens) — the
+  exact bug class this release's SDK fixes exist to close, present in the
+  flagship coding-agent enforcement point itself. A shadow-mode policy
+  sets `Decision=denied` alongside `ActionTaken=allowed_shadow`, but the
+  hook emitted `permissionDecision: "deny"` regardless — since a
+  PreToolUse `"deny"` IS enforced by the calling agent (Claude Code,
+  Codex, etc.), `tg hook -mode shadow` silently enforced every policy
+  instead of only observing near-misses. Found by an adversarial review
+  pass run specifically to check whether the SDK's decision-vs-
+  action_taken fix pattern was applied everywhere it needed to be — it
+  wasn't. Fixed to switch on `ActionTaken`; regression-tested by
+  `TestHook_ShadowMode_ObservesDoesNotEnforce`, confirmed to fail against
+  the pre-fix code before landing the fix.
 - **Real, quote-aware shell tokenizer replaces the "best-effort" scanner**
   behind `-protect-paths`/`-protect-self`'s shell-command detection
   (`shellTouchesProtected`). The old scanner used unquoted `strings.Fields`

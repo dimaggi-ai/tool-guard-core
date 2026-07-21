@@ -109,6 +109,11 @@ jobs:
       - name: Warm Go module cache
         run: go mod download
       - name: sdk-test
+        env:
+          # A broken prerequisite (go missing, build failure) must fail this
+          # job loudly, not silently skip test_contract.py — the one test
+          # that proves SDK decisions match the real engine, not a mock.
+          TG_CONTRACT_REQUIRED: "1"
         run: make sdk-test
 
   govulncheck:

@@ -98,6 +98,33 @@ passes have real precedent instead of a starting from scratch.
   explicit correction to not imply "reproducible builds" — the config
   only proves provenance (these bytes came from this CI run), not
   bit-for-bit reproducibility. → pillar 5.
+- **2026-07 · `cmd/tg/hook.go`, v0.5.0 pre-tag review.** After fixing the
+  SDK's decision-vs-action_taken bug (pillar 1, two entries above), a
+  review pass was specifically asked to check whether the same fix
+  pattern held everywhere it needed to — it did not: `evalHook` branched
+  on `Decision` instead of `ActionTaken`, so `tg hook -mode shadow`
+  silently enforced every policy instead of only observing near-misses.
+  This is the flagship coding-agent enforcement point, not a peripheral
+  adapter, and it shipped drafted (pre-0.5.0) before the SDK work
+  surfaced the bug class at all — a first review pass on the SDK alone
+  would not have caught it. → pillar 1, and a reminder that pillar 1's
+  "grep every new branch point" needs to mean the whole diff, not just
+  the files the current change-set touched most.
+- **2026-07 · v0.5.0 pre-tag review, general.** The first review pass on
+  this exact tag was interrupted mid-run (background task killed) after
+  confirming the conformance corpus was non-vacuous but before checking
+  the CI wiring, the stress-test floor gating, or the SDK's remaining
+  doc claims. A second, fresh pass (no memory of the first) caught the
+  hook.go bug above plus five doc/metadata issues (a half-applied SDK
+  version bump, stale PyPI-implying install instructions in five files,
+  stale `decision`-based docstrings in `errors.py`, a contract test that
+  could silently skip in CI, and a "verified against a real tg-proxy"
+  claim with no automated test backing it — closed by adding
+  `TestProxyShadowModeContract`). None of these were caught by the
+  original SDK-focused review. → pillar 6, and evidence for why this
+  checklist says "run against any change touching the decision path" —
+  narrowly scoping a review to "the new SDK" missed a bug in existing
+  code that the SDK's own fix pattern should have prompted a search for.
 
 ## Where this fits in the release checklist
 

@@ -325,10 +325,10 @@ func (s *Server) CallTool(ctx context.Context, req CallToolRequest) (CallToolRes
 
 ### 3.2 LangChain (Python)
 
-Install the SDK:
+Install the SDK (not yet published to PyPI — install from a clone of this repo):
 
 ```bash
-pip install toolguard[langchain]
+pip install "./tool-guard-core/sdk/python[langchain]"
 ```
 
 Use the drop-in `ToolGuardCallbackHandler` — no boilerplate required:
@@ -358,7 +358,7 @@ calls proceed normally.  See `sdk/python/README.md` for full examples.
 Install the SDK:
 
 ```bash
-pip install toolguard[autogen]
+pip install "./tool-guard-core/sdk/python[autogen]"
 ```
 
 Use the `guarded` decorator:
@@ -391,7 +391,7 @@ refusal to the LLM.
 Install the SDK:
 
 ```bash
-pip install toolguard[anthropic]   # or [openai]
+pip install "./tool-guard-core/sdk/python[anthropic]"   # or [openai]
 ```
 
 ```python

@@ -27,8 +27,9 @@ import (
 //	          "permissionDecision":"deny|ask|allow","permissionDecisionReason":"..."}}
 //	exit   : ALWAYS 0 — a PreToolUse hook signals via JSON, never via exit code.
 //
-// Decision mapping: engine `denied` → deny, `escalated` → ask, everything
-// else → allow.
+// Decision mapping (on the engine's action_taken, not its decision — the
+// two differ in shadow mode): `denied` → deny, `escalated` → ask,
+// everything else (including `allowed_shadow`) → allow.
 //
 // Fail-open by default: any internal error (unparseable stdin, policy load
 // failure, eval panic) emits allow so a tooling glitch never wedges the
@@ -203,10 +204,20 @@ func evalHook(policyDir, policyFile string, env *domain.ActionEnvelope, mode dom
 	}
 
 	result := engine.NewEvaluator().Evaluate(env, policies, mode)
-	switch result.Decision {
-	case domain.DecisionDenied:
+	// Branches on ActionTaken (what actually happened), NOT Decision (what
+	// would have happened). In shadow mode the engine reports
+	// Decision=denied/escalated alongside ActionTaken=allowed_shadow — the
+	// call is never actually meant to be blocked. Switching on Decision
+	// here made `tg hook -mode shadow` silently enforce every policy,
+	// since a PreToolUse "deny" IS enforced by the calling agent regardless
+	// of what the engine's own mode label says. Same bug class as the SDK's
+	// decision-vs-action_taken fixes (see docs/REVIEW-PROCESS.md pillar 1)
+	// — found here by an adversarial review pass that specifically went
+	// looking for it after the SDK fixes landed.
+	switch result.ActionTaken {
+	case domain.ActionDenied:
 		return "deny", hookReason(result)
-	case domain.DecisionEscalated:
+	case domain.ActionEscalated:
 		return "ask", hookReason(result)
 	default:
 		return "allow", ""

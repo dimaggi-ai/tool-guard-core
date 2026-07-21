@@ -26,6 +26,9 @@ changes.**
 - **`tg hook -unknown-tools-deny`** — the coding-agent enforcement point
   finally has the same "deny anything not explicitly declared" posture
   `tg-proxy` already had.
+- **Fixed: `tg hook -mode shadow` now actually only observes.** It was
+  silently enforcing every policy instead — see "Upgrade notes" below if
+  you use shadow mode on `tg hook` today.
 - **A real, quote-aware shell tokenizer** replaces the old best-effort
   scanner behind `-protect-paths`. Quoting, command substitution, and
   variable-expansion evasions that the old scanner's own doc comment
@@ -48,6 +51,13 @@ changes.**
 
 - **Drop-in.** No schema, CLI, or audit-format changes to existing
   classifiers or the hook contract.
+- **Behavior fix to know about if you use `tg hook -mode shadow`:**
+  before this release, a shadow-mode policy on `tg hook` was actually
+  enforced — every "would deny" became a real `permissionDecision: deny`
+  the calling agent obeyed. If you were relying on shadow mode there to
+  observe without blocking, it wasn't; after upgrading, it will. This is
+  a correctness fix, not new behavior you're opting into, but it changes
+  what happens at runtime for that one flag combination.
 - **New default-on behavior to know about, unlike every prior release:**
   `tg-proxy` will now refuse to start if its existing audit log's hash
   chain is broken *anywhere*, not only at the tail. If you're upgrading a

@@ -379,7 +379,9 @@ class ToolGuard:
             import httpx
         except ImportError as exc:
             raise ImportError(
-                "httpx is required: pip install toolguard  (it ships as a core dep)"
+                "httpx is required: pip install \"./tool-guard-core/sdk/python\" "
+                "(it ships as a core dep; not yet on PyPI — install from a clone "
+                "of this repo)"
             ) from exc
 
         payload = envelope.to_dict()
