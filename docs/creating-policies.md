@@ -51,15 +51,24 @@ its `tool_group` is in `tool_groups`. A policy with empty scope
 matches every envelope - `tg lint` warns about this as
 `policy-scope-leak`.
 
-`tool_names` matching is **case-insensitive** (`bash` in a policy
-matches an incoming `Bash`, `BASH`, etc.) — different agent
-frameworks capitalize their own tool names inconsistently (Claude
-Code sends `Bash`; other integrations send `bash`), and `tool_name`
-is untrusted, externally-sourced data, so a policy author shouldn't
-have to anticipate every casing variant to avoid a silent
-never-matches gap. `tool_groups` matching stays case-sensitive
-exact-match, since group names are operator-assigned constants, not
-raw agent-supplied input.
+`tool_names` matching **for whether a policy's own rules apply to a
+call** is case-insensitive (`bash` in a policy matches an incoming
+`Bash`, `BASH`, etc.) — different agent frameworks capitalize their
+own tool names inconsistently (Claude Code sends `Bash`; other
+integrations send `bash`), and `tool_name` is untrusted,
+externally-sourced data, so a policy author shouldn't have to
+anticipate every casing variant to avoid a silent never-matches gap.
+`tool_groups` matching stays case-sensitive exact-match, since group
+names are operator-assigned constants, not raw agent-supplied input.
+
+`-unknown-tools-deny`'s check (is this tool name one *any* loaded
+enforcement policy explicitly declared, or is it unrecognized and
+therefore denied by default) deliberately stays case-**sensitive** —
+the opposite of the above. Its job is proving a name was exactly,
+deliberately authorized, and a case-varied spoof of a declared name
+(`DROP_TABLE` vs. a policy declaring `drop_table`) is exactly the kind
+of thing that fail-closed default exists to catch, not something that
+should quietly count as "known."
 
 The recommended pattern is BOTH a `tool_names` allowlist AND a
 `tool_groups` allowlist. The lint heuristic `scope-no-tool-group`

@@ -201,12 +201,17 @@ func TestMatchPolicies_FiltersByApproved(t *testing.T) {
 	}
 }
 
-// TestToolNameKnown_CaseInsensitive pins the same case-insensitivity fix
-// for ToolNameKnown (backs -unknown-tools-deny) that matchesScope got -
-// it shares the tool-name matching logic and would otherwise treat a
-// declared "bash" policy as not covering an incoming "Bash" call, wrongly
-// denying it as an unknown tool.
-func TestToolNameKnown_CaseInsensitive(t *testing.T) {
+// TestToolNameKnown_ExactMatchOnly pins that ToolNameKnown stays
+// case-SENSITIVE, deliberately unlike matchesScope's tool_names check.
+// This is a security regression guard, not an oversight: making this
+// case-insensitive (as an earlier version of this fix did, briefly)
+// let examples/postgres-attack's bruteforce-policies.sh "Tool-name
+// variant spoofing" cases (DROP_TABLE / Drop_Table vs. a declared
+// "drop_table") slip past -unknown-tools-deny's fail-closed default and
+// evaluate as allowed - confirmed by a real bypass in that suite. Do not
+// change this to containsStrFold without re-running
+// `make test-postgres-full` and confirming zero bypasses.
+func TestToolNameKnown_ExactMatchOnly(t *testing.T) {
 	enforcement := domain.Policy{
 		PolicyID: "p1",
 		Mode:     domain.PolicyModeEnforcement,
@@ -215,15 +220,15 @@ func TestToolNameKnown_CaseInsensitive(t *testing.T) {
 	shadow := domain.Policy{
 		PolicyID: "p2",
 		Mode:     domain.PolicyModeShadow,
-		Scope:    domain.PolicyScope{ToolNames: []string{"Grep"}},
+		Scope:    domain.PolicyScope{ToolNames: []string{"grep"}},
 	}
 	policies := []domain.Policy{enforcement, shadow}
 
-	if !ToolNameKnown("Bash", policies) {
-		t.Error(`ToolNameKnown("Bash") = false, want true (case-insensitive match against enforcement policy's "bash")`)
-	}
 	if !ToolNameKnown("bash", policies) {
-		t.Error(`ToolNameKnown("bash") = false, want true (exact match)`)
+		t.Error(`ToolNameKnown("bash") = false, want true (exact match against enforcement policy's "bash")`)
+	}
+	if ToolNameKnown("Bash", policies) {
+		t.Error(`ToolNameKnown("Bash") = true, want false — must stay case-SENSITIVE (regression guard: a case variant of a declared name must NOT count as "known", or -unknown-tools-deny's fail-closed default silently stops catching case-spoofed tool names)`)
 	}
 	if ToolNameKnown("grep", policies) {
 		t.Error(`ToolNameKnown("grep") = true, want false (only a shadow-mode policy declares it, shadow must not count)`)

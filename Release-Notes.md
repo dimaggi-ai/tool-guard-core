@@ -5,30 +5,46 @@ per-change record see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## 0.5.1 — 2026-07-26
+## 0.5.2 — 2026-07-26
 
 Bug-fix release. **No breaking changes; no new required config.**
 
 ### Highlights
 
-- **`tool_names` scope matching is now case-insensitive.** A policy scoped
-  to `tool_names: [bash]` previously never matched a call whose tool name
-  arrived as `Bash` — different agent frameworks capitalize their own tool
-  names inconsistently, and `tool_name` is untrusted, externally-sourced
+- **`matchesScope`'s `tool_names` check is now case-insensitive.** A policy
+  scoped to `tool_names: [bash]` previously never matched a call whose tool
+  name arrived as `Bash` — different agent frameworks capitalize their own
+  tool names inconsistently, and `tool_name` is untrusted, externally-sourced
   data. Found via a real dogfood deployment: an `enforcement`-mode policy
   with a `deny-rm-root` rule silently never fired against Claude Code's own
   `Bash` tool calls. `OrgIDs`/`AgentIDs` (real identifiers) and `ToolGroups`
   (operator-assigned constants) are unaffected and stay exact-match.
 
+  **`-unknown-tools-deny`'s underlying check (`ToolNameKnown`) deliberately
+  stays exact-match**, unlike the `matchesScope` fix above. Its whole job is
+  telling apart "a name the operator explicitly declared" from "something
+  else, fail closed" — and a case-varied spoof of a declared name (e.g.
+  `DROP_TABLE` vs. a policy declaring `drop_table`) is exactly the kind of
+  "something else" that fail-closed default exists to catch. This was
+  caught before release by `make test-postgres-full`'s adversarial suite,
+  which now passes 129/129 with zero bypasses.
+
+- **CI fixes, unrelated to the above but caught in the same pass:** a
+  Windows `gofmt` false-positive (missing `.gitattributes` → CRLF checkout
+  → every file flagged) that had been silently failing `main` since 0.3.0
+  across three releases undetected, and a Go toolchain bump to 1.25.12 for
+  `GO-2026-5856` (a `crypto/tls` privacy-leak CVE).
+
 ### Upgrade notes
 
 If you're relying on the previous exact-match behavior to deliberately
-exclude a differently-cased tool name from a policy's scope, this release
-changes that — the fix makes matching **strictly more permissive** (more
-calls now match an existing policy than before), never less, so it cannot
-newly deny anything that was previously allowed. Reconcile duplicate
-same-tool entries differing only by case in your own `tool_names` lists;
-they're now redundant.
+exclude a differently-cased tool name from a `matchesScope`-governed
+policy, this release changes that — the fix makes that specific check
+**strictly more permissive** (more calls now match an existing policy than
+before), never less, so it cannot newly deny anything that was previously
+allowed. Reconcile duplicate same-tool entries differing only by case in
+your own `tool_names` lists; they're now redundant. `-unknown-tools-deny`
+behavior is unchanged (still exact-match, as before this release).
 
 ---
 

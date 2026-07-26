@@ -6,11 +6,11 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.5.1] — 2026-07-26
+## [0.5.2] — 2026-07-26
 
 Bug-fix release. No breaking changes; no new required config.
 
-- **`tool_names` scope matching is now case-insensitive** (`pkg/engine`).
+- **`matchesScope`'s `tool_names` check is now case-insensitive** (`pkg/engine`).
   Found via a real dogfood deployment: a policy scoped to lowercase
   `tool_names: [bash]` never matched Claude Code's own tool name (`Bash`,
   capitalized) — `MatchPolicies` returned zero matches for every call
@@ -19,17 +19,48 @@ Bug-fix release. No breaking changes; no new required config.
   allowed. `env.ToolName` is untrusted, externally-sourced data, and
   different agent frameworks capitalize their own tool names inconsistently,
   so a policy author shouldn't have to enumerate every casing variant to
-  avoid a silent no-match gap. `matchesScope` and `ToolNameKnown` (backs
-  `-unknown-tools-deny`) both now compare tool names with
-  `strings.EqualFold` instead of exact `==`. Deliberately scoped to tool
-  names only — `OrgIDs`/`AgentIDs` stay exact-match (real identifiers, case
-  carries meaning) and `ToolGroups` stays exact-match (operator-assigned
-  constants, not raw agent-supplied input, so it doesn't have the same
-  organic case-variance problem). Regression tests added in
-  `pkg/engine/matcher_test.go` (`TestMatchesScope_AllPaths`'s new
-  case-insensitivity cases, `TestToolNameKnown_CaseInsensitive`); `pkg/engine`
-  coverage 86.8% → 87.4%. See `docs/creating-policies.md`'s Scope section for
-  the documented matching contract.
+  avoid a silent no-match gap. `matchesScope` now compares `tool_names`
+  with `strings.EqualFold` instead of exact `==`.
+
+  **`ToolNameKnown` (backs `-unknown-tools-deny`) deliberately stays
+  exact-match.** An earlier version of this fix made both functions
+  case-insensitive; that was wrong and caught by `make test-postgres-full`
+  before release — `examples/postgres-attack`'s "Tool-name variant
+  spoofing" cases (`DROP_TABLE`, `Drop_Table` vs. a declared
+  `drop_table`) went from correctly denied (unrecognized tool name, fail
+  closed) to incorrectly allowed, because case-insensitivity made the
+  spoofed variant register as "known". `matchesScope`'s job is applying an
+  already-declared policy's own rules to a real call, where
+  case-insensitivity closes a real gap; `ToolNameKnown`'s job is the
+  opposite — proving a name was EXACTLY, deliberately declared, or failing
+  closed — and case-variant spoofing is exactly the class of thing that
+  fail-closed default exists to catch. `OrgIDs`/`AgentIDs` and
+  `ToolGroups` are unaffected everywhere (real identifiers and
+  operator-assigned constants, not raw agent-supplied tool names).
+
+  Regression tests in `pkg/engine/matcher_test.go`:
+  `TestMatchesScope_AllPaths`'s new case-insensitivity cases,
+  `TestToolNameKnown_ExactMatchOnly` (pins the exact-match requirement as a
+  security regression guard). `pkg/engine` coverage 86.8% → 87.4%.
+  `make test-postgres-full` (129 checks) passes with zero bypasses. See
+  `docs/creating-policies.md`'s Scope section for the documented matching
+  contract.
+
+- **CI: fixed a Windows `gofmt` false-positive that had been silently
+  failing `main` since the 0.3.0 release (2026-07-14, undetected across
+  0.3.0/0.4.0/0.5.0).** No `.gitattributes` existed, so GitHub's
+  `windows-latest` runner checked out `.go` files with CRLF line endings
+  (Windows Git's default), and `gofmt -l` correctly flagged every file as
+  unformatted as a byte-level artifact of that — not a real formatting
+  problem. Added `.gitattributes` (`* text=auto eol=lf`) to force LF on
+  checkout regardless of platform.
+
+- **CI/toolchain: bumped Go from 1.25.11 to 1.25.12**, which fixes
+  `GO-2026-5856` (an Encrypted Client Hello privacy leak in `crypto/tls`),
+  caught by `govulncheck` and reachable from `cmd/tg-proxy`, `cmd/tg`,
+  `examples/mcp-server`, and `pkg/llmguard` (anything making a TLS
+  connection). Updated `go.mod`'s `toolchain` directive and every
+  `go-version` pin in `.github/workflows/ci.yml`.
 
 ## [0.5.0] — 2026-07-26
 

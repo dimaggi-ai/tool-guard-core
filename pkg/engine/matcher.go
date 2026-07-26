@@ -66,6 +66,23 @@ func matchesScope(env *domain.ActionEnvelope, scope domain.PolicyScope) bool {
 // "for observation" must NOT make the unknown-tools gate pass, since
 // nothing is actually enforcing on it yet.
 //
+// Deliberately EXACT-match (containsStr), not case-insensitive, unlike
+// matchesScope's tool_names check below. This is not an inconsistency:
+// matchesScope's job is "apply an already-declared policy's own rules to
+// a real call", where case-insensitivity closes a real gap (different
+// agent frameworks capitalize tool names differently). ToolNameKnown's
+// job is the opposite - "is this EXACTLY one of the names the operator
+// explicitly, deliberately declared, or should we fail closed and deny
+// it as unrecognized" - and unrecognized-name spoofing via case variation
+// ("DROP_TABLE" vs. a declared "drop_table") is exactly the kind of thing
+// this fail-closed default exists to catch. Confirmed by a real
+// regression: making this case-insensitive let examples/postgres-attack's
+// bruteforce-policies.sh's "Tool-name variant spoofing" cases
+// (DROP_TABLE, Drop_Table) slip past -unknown-tools-deny and evaluate as
+// allowed, where the exact-match version correctly fails closed and
+// denies them as unrecognized. Do not change this back without re-running
+// `make test-postgres-full` and confirming zero bypasses.
+//
 // Exported (moved here from cmd/tg-proxy) so both first-class enforcement
 // points share ONE definition instead of two copies that could silently
 // drift apart.
@@ -77,7 +94,7 @@ func ToolNameKnown(toolName string, policies []domain.Policy) bool {
 		if p.Mode != domain.PolicyModeEnforcement {
 			continue
 		}
-		if containsStrFold(p.Scope.ToolNames, toolName) {
+		if containsStr(p.Scope.ToolNames, toolName) {
 			return true
 		}
 	}
@@ -94,7 +111,8 @@ func containsStr(list []string, val string) bool {
 }
 
 // containsStrFold is containsStr with a case-insensitive comparison, used
-// specifically for tool-name matching (both here and in ToolNameKnown).
+// ONLY by matchesScope's tool_names check - deliberately NOT by
+// ToolNameKnown (see its doc comment for why that stays exact-match).
 // env.ToolName is untrusted, externally-sourced data, and real agent
 // frameworks are inconsistent about its casing - Claude Code sends "Bash",
 // other integrations send "bash" - so a policy authored against one casing
@@ -102,11 +120,10 @@ func containsStr(list []string, val string) bool {
 // policy silently never matches and the call passes ungoverned with
 // PoliciesMatched=0 (found via a real dogfood deployment: an enforcement
 // policy scoped to lowercase tool_names never matched "Bash", so `rm -rf /`
-// evaluated as allowed). Deliberately scoped to tool names ONLY: OrgIDs and
-// AgentIDs stay on containsStr because they're identifiers where case
-// carries real meaning, and ToolGroups stays on containsStr because it's
-// an operator-assigned constant, not raw agent-supplied input, so it
-// doesn't have the same organic case-variance problem.
+// evaluated as allowed). Also not used for OrgIDs/AgentIDs (identifiers
+// where case carries real meaning) or ToolGroups (an operator-assigned
+// constant, not raw agent-supplied input, so it doesn't have the same
+// organic case-variance problem).
 func containsStrFold(list []string, val string) bool {
 	for _, s := range list {
 		if strings.EqualFold(s, val) {

@@ -1,0 +1,7 @@
+# Force LF line endings on checkout regardless of platform/git config.
+# Without this, GitHub's windows-latest runner checks out .go files with
+# CRLF (Windows Git's default core.autocrlf behavior), and `gofmt -l`
+# correctly flags every file as "unformatted" as a result - a false
+# positive that's been silently failing CI's Windows job since the 0.3.0
+# release (2026-07-14), unrelated to any actual formatting problem.
+* text=auto eol=lf
