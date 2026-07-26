@@ -256,7 +256,18 @@ func TestProtect_ShellCommandToProtectedPath_Returns403(t *testing.T) {
 	baseURL, teardown := startProtectProxy(t, "-protect-paths", protectedDir)
 	defer teardown()
 
-	targetFile := filepath.Join(protectedDir, "pwned.yaml")
+	// ToSlash specifically for the shell-command text: unlike a JSON field
+	// or an argv flag value, this string gets parsed by a REAL bash
+	// tokenizer (tokenizeShell), where an unescaped "\" is an ESCAPE
+	// CHARACTER, not a path separator - a native Windows path spliced in
+	// raw (filepath.Join's backslashes) gets every backslash silently
+	// consumed by the tokenizer's own escape handling, mangling the
+	// target into something that can never match. Forward slashes have
+	// no special meaning to the shell tokenizer and parse through intact;
+	// Go's Windows path functions still recognize the result as the same
+	// absolute path (filepath.IsAbs/Clean accept "/" as an input
+	// separator), so this changes nothing about what path is under test.
+	targetFile := filepath.ToSlash(filepath.Join(protectedDir, "pwned.yaml"))
 	cmd := fmt.Sprintf("echo evil > %s", targetFile)
 
 	env := map[string]any{

@@ -90,6 +90,24 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   integration tests) still clean natively, `make test-postgres-full`
   still 129/129 zero bypasses.
 
+- **Fixed the last layer, uncovered only after all of the above let
+  Windows CI reach a real HTTP round-trip through `tg-proxy` for the
+  first time**: `TestProtect_ShellCommandToProtectedPath_Returns403`
+  (`cmd/tg-proxy/protect_integration_test.go`) builds its shell command
+  text with `fmt.Sprintf("echo evil > %s", filepath.Join(protectedDir,
+  "pwned.yaml"))` — a native Windows path (backslash-separated) spliced
+  directly into shell syntax. Unlike a JSON field or an argv flag, this
+  string gets parsed by a **real bash tokenizer**
+  (`tokenizeShell`/`shellTouchesProtected`, exactly the machinery fixed
+  earlier in this release), where an unescaped `\` is an ESCAPE
+  CHARACTER, not a path separator — every backslash in the Windows path
+  was silently consumed by the tokenizer's own (correct) escape
+  handling, mangling the redirect target into something that could
+  never match. Fixed the same way as the JSON-fixture bugs above:
+  `filepath.ToSlash` the path before splicing it into the command
+  string. Swept the rest of the integration suite for the same
+  `fmt.Sprintf`-into-shell-text pattern; this was the only instance.
+
 ## [0.5.2] — 2026-07-26
 
 Bug-fix release. No breaking changes; no new required config.
