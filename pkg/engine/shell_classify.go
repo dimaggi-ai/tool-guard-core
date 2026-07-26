@@ -1,6 +1,7 @@
 package engine
 
 import (
+	stdpath "path"
 	"path/filepath"
 	"strings"
 
@@ -78,13 +79,18 @@ func evalShellClassify(s *domain.ShellClassify, fields map[string]interface{}) b
 			if !filepath.IsAbs(arg) && !posixAbs {
 				continue
 			}
-			cleaned := filepath.Clean(arg)
+			var cleaned string
 			if posixAbs {
-				// filepath.Clean silently backslash-ifies a "/"-rooted
-				// path on Windows; restore the POSIX form so the prefix
-				// comparisons below (DeniedArgvPaths, POSIX-style policy
-				// config) still match. No-op on non-Windows.
-				cleaned = filepath.ToSlash(cleaned)
+				// path.Clean (GOOS-independent), not filepath.Clean: on
+				// Windows, filepath.Clean treats a leading "//" as the
+				// start of a UNC path and mangles a plain POSIX
+				// double-slash argv value instead of collapsing it -
+				// path.Clean has no concept of UNC paths at all,
+				// sidestepping that ambiguity. See canonicalCandidates in
+				// protect.go for the identical fix and full reasoning.
+				cleaned = stdpath.Clean(arg)
+			} else {
+				cleaned = filepath.Clean(arg)
 			}
 			// Test cleaned form and (when configured) the symlink-
 			// resolved form. Either match denies.

@@ -104,7 +104,15 @@ func TestHookIntegration_ProtectPaths_DenyBeforePolicy(t *testing.T) {
 	// Write tool targeting the protected directory is NOT covered by the
 	// deny-rm policy, but -protect-paths should still deny it.
 	protected := dir
-	target := filepath.Join(protected, "evil.yaml")
+	// ToSlash: target is a real OS path (dir is t.TempDir()) - on Windows
+	// that's backslash-separated, and embedding it raw into the JSON
+	// string literal below would produce invalid JSON (a literal "\e"
+	// from "...\evil.yaml" is not a valid JSON escape). Forward slashes
+	// need no escaping and Go's Windows path functions accept "/" as an
+	// input separator too, so this doesn't change what path is under
+	// test. -protect-paths below stays native (protected, not ToSlash'd)
+	// since it's a real argv flag value, not JSON text.
+	target := filepath.ToSlash(filepath.Join(protected, "evil.yaml"))
 	stdin := `{"tool_name":"write","tool_input":{"file_path":"` + target + `"}}`
 
 	res, stdout, code := runHookBin(t, stdin, "-policy", pol, "-protect-paths", protected)
@@ -159,7 +167,8 @@ func TestHookIntegration_ProtectSelf(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "policy.yaml", hookIntDenyPolicy)
 
-	target := filepath.Join(dir, "injected.yaml")
+	// ToSlash: see the comment in TestHookIntegration_ProtectPaths_DenyBeforePolicy above.
+	target := filepath.ToSlash(filepath.Join(dir, "injected.yaml"))
 	stdin := `{"tool_name":"write","tool_input":{"file_path":"` + target + `"}}`
 
 	// -protect-self auto-protects the -policy-dir.

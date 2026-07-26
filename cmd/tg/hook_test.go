@@ -288,8 +288,14 @@ func TestHook_ProtectSelf_DeniesWriteToOwnPolicyDir(t *testing.T) {
 	if err := os.WriteFile(polPath, []byte(hookAllowPolicy), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Now try to write a file inside the policy directory.
-	target := filepath.Join(polDir, "evil.yaml")
+	// Now try to write a file inside the policy directory. ToSlash: target
+	// is a real OS path (polDir is t.TempDir()) - on Windows that's
+	// backslash-separated, and embedding it raw into the JSON string
+	// literal below would produce invalid JSON (a literal "\e" from
+	// "...\evil.yaml" is not a valid JSON escape). Forward slashes need no
+	// escaping and Go's Windows path functions accept "/" as an input
+	// separator too, so this doesn't change what path is under test.
+	target := filepath.ToSlash(filepath.Join(polDir, "evil.yaml"))
 	stdin := `{"tool_name":"write","tool_input":{"file_path":"` + target + `"}}`
 	out, code := runHookStr(t, stdin, "-policy-dir", polDir, "-protect-self")
 	if code != 0 {

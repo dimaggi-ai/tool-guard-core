@@ -18,9 +18,13 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   on `windows-latest`, hidden until the 0.5.2 `.gitattributes` fix (above)
   stopped `gofmt` from failing that CI job at an earlier step, before
   these tests ever ran. Now gated on a POSIX-absolute check
-  (`strings.HasPrefix(p, "/")`) that runs regardless of `GOOS`, with
-  `filepath.ToSlash` restoring the POSIX form after `filepath.Clean`
-  backslash-ifies it on Windows. Verified: native build/vet/test pass,
+  (`strings.HasPrefix(p, "/")`) that runs `path.Clean` (GOOS-independent)
+  instead of `filepath.Clean` for those inputs — `filepath.Clean` treats a
+  leading `//` as a Windows UNC-path prefix and mangles a plain POSIX
+  double-slash input (`//etc//shadow`) instead of collapsing it, a second
+  real Windows CI failure caught after the first fix. `path.Clean` has no
+  concept of UNC paths, sidestepping that ambiguity entirely rather than
+  trying to reverse it afterward. Verified: native build/vet/race pass,
   `GOOS=windows` cross-compiles and vets clean, `make test-postgres-full`
   (129 checks) still zero bypasses.
 
@@ -39,6 +43,24 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   unaffected by design — they operate on operator-supplied local
   filesystem paths for the machine running `tg hook`, which are correctly
   OS-native, not POSIX shell-command text.
+
+- **Fixed a test-fixture bug (not production code) that was ALSO hidden
+  behind the same gofmt failure**: four `cmd/tg` tests
+  (`TestHook_ProtectPaths_ArrayParam`, `TestHook_ProtectSelf_DeniesWriteToOwnPolicyDir`,
+  `TestHookIntegration_ProtectPaths_DenyBeforePolicy`,
+  `TestHookIntegration_ProtectSelf`) build their PreToolUse JSON stdin
+  fixture by raw string concatenation of a real `t.TempDir()` path. On
+  Windows that path is backslash-separated, and embedding it unescaped
+  into a JSON string literal produces genuinely invalid JSON (e.g. a
+  literal `\A` from `...\AppData\...` is not a valid JSON escape) — the
+  hook correctly treats the unparseable stdin as fail-open (`allow`) by
+  default, which is why these tests got `"allow"` instead of the expected
+  `"deny"`. Fixed by `filepath.ToSlash`-ing the path before embedding;
+  forward slashes need no JSON escaping and Go's Windows path functions
+  accept `/` as an input separator, so this changes nothing about what
+  path is under test. Two of the four (`TestHookIntegration_*`) are
+  behind `//go:build integration` and hadn't even been reached by CI yet
+  — the unit-test-level failures above were still blocking that step.
 
 ## [0.5.2] — 2026-07-26
 

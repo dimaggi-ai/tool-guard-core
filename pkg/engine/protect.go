@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	stdpath "path"
 	"path/filepath"
 	"strings"
 
@@ -134,22 +135,24 @@ func canonicalCandidates(p string) []string {
 	// hidden until now by an unrelated gofmt false-positive that failed
 	// the job at an earlier step, before these tests ever ran.
 	posixAbs := strings.HasPrefix(abs, "/")
-	if !filepath.IsAbs(abs) && !posixAbs {
-		if wd, err := os.Getwd(); err == nil {
-			abs = filepath.Join(wd, abs)
-		}
-	}
-	abs = filepath.Clean(abs)
 	if posixAbs {
-		// filepath.Clean silently backslash-ifies a "/"-rooted path on
-		// Windows even though it never touched the cwd above - restore
-		// the POSIX form the rest of this pipeline, and matchPathPrefix's
-		// prefix comparison, expect. filepath.ToSlash is a no-op on
-		// non-Windows. Gated on posixAbs specifically so a genuine native
-		// Windows path (drive letter, already filepath.IsAbs()==true) is
-		// left untouched here - matchPathPrefix's own
-		// normalizeIfWindowsPath handles that shape at comparison time.
-		abs = filepath.ToSlash(abs)
+		// Use path.Clean (GOOS-independent, pure POSIX semantics), not
+		// filepath.Clean: on Windows, filepath.Clean treats a leading "//"
+		// as the start of a UNC path ("\\host\share\...") and mangles a
+		// plain POSIX double-slash input like "//etc//shadow" instead of
+		// just collapsing it to "/etc/shadow" - a real Windows CI failure
+		// (path_classify_test.go's multi-slash case) even after
+		// ToSlash-restoring the common single-slash case. path.Clean has
+		// no concept of UNC paths at all, so this sidesteps that ambiguity
+		// entirely rather than trying to reverse it after the fact.
+		abs = stdpath.Clean(abs)
+	} else {
+		if !filepath.IsAbs(abs) {
+			if wd, err := os.Getwd(); err == nil {
+				abs = filepath.Join(wd, abs)
+			}
+		}
+		abs = filepath.Clean(abs)
 	}
 	out := []string{abs}
 	if resolved := resolveSymlinksBestEffort(abs); resolved != "" && resolved != abs {

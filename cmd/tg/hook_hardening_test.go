@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -59,7 +60,14 @@ func TestHook_OversizedStdin_Default_FailsOpen(t *testing.T) {
 // in an array param (not the flat file_path/path) is still caught.
 func TestHook_ProtectPaths_ArrayParam(t *testing.T) {
 	pol := writeHookPolicy(t, hookAllowPolicy)
-	dir := t.TempDir()
+	// ToSlash: dir is a real OS temp dir (t.TempDir()) - on Windows that's
+	// backslash-separated, and embedding it raw into a JSON string literal
+	// below would produce invalid JSON (JSON requires "\" to be escaped as
+	// "\\"; a literal "\A" from "...\AppData\..." is not a valid JSON
+	// escape). Forward slashes need no escaping and Go's Windows path
+	// functions accept "/" as an input separator too, so this doesn't
+	// change what path is under test.
+	dir := filepath.ToSlash(t.TempDir())
 	in := `{"tool_name":"multiedit","tool_input":{"paths":["` + dir + `/ok.txt","` + dir + `/secret.key"]}}`
 	out, _ := runHookStr(t, in, "-policy", pol, "-protect-paths", dir+"/secret.key")
 	if d := hookDecision(t, out); d != "deny" {
