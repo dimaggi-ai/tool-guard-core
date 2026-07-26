@@ -68,7 +68,12 @@ the opposite of the above. Its job is proving a name was exactly,
 deliberately authorized, and a case-varied spoof of a declared name
 (`DROP_TABLE` vs. a policy declaring `drop_table`) is exactly the kind
 of thing that fail-closed default exists to catch, not something that
-should quietly count as "known."
+should quietly count as "known." It also only counts an
+`enforcement`-mode policy's `tool_names` if that policy's own
+`status` is `approved` — a `draft`/`review`/`archived` policy never
+actually governs anything (normal policy matching excludes it too), so
+letting its scope alone satisfy `-unknown-tools-deny` would make a name
+register as "known" while zero real policies enforce on it.
 
 The recommended pattern is BOTH a `tool_names` allowlist AND a
 `tool_groups` allowlist. The lint heuristic `scope-no-tool-group`

@@ -64,7 +64,15 @@ func matchesScope(env *domain.ActionEnvelope, scope domain.PolicyScope) bool {
 // tool_names anywhere and would otherwise pass ungoverned by default.
 // Shadow-mode policies are excluded — a shadow rollout that lists a tool
 // "for observation" must NOT make the unknown-tools gate pass, since
-// nothing is actually enforcing on it yet.
+// nothing is actually enforcing on it yet. Draft/pending/archived policies
+// are excluded too, mirroring MatchPolicies' own approval-status filter:
+// a draft enforcement-mode policy that merely lists a dangerous tool name
+// in its scope will never actually be matched or applied (MatchPolicies
+// filters it out), so letting it count here would make ToolNameKnown
+// report "known" for a name that in reality has zero policies governing
+// it — the call then sails through allowed with PoliciesMatched=0,
+// silently defeating -unknown-tools-deny for any tool name that merely
+// appears in SOME non-approved policy anywhere in the org's policy set.
 //
 // Deliberately EXACT-match (containsStr), not case-insensitive, unlike
 // matchesScope's tool_names check below. This is not an inconsistency:
@@ -91,6 +99,9 @@ func ToolNameKnown(toolName string, policies []domain.Policy) bool {
 		return false
 	}
 	for _, p := range policies {
+		if p.Status != domain.PolicyStatusApproved {
+			continue
+		}
 		if p.Mode != domain.PolicyModeEnforcement {
 			continue
 		}

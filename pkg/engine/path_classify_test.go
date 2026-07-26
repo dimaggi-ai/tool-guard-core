@@ -88,6 +88,56 @@ func TestEvalPathClassify_ClosesConfirmedBypasses(t *testing.T) {
 	}
 }
 
+// TestEvalPathClassify_UNCPrefixMatchesForwardSlashCandidate pins that a
+// UNC-style deny prefix matches a UNC-style candidate path regardless of
+// which slash form each one is written in. Found by an independent
+// adversarial review ahead of the v0.5.2 release: path.Clean (used above
+// to correctly collapse a plain double-slash typo like "//etc//shadow"
+// down to "/etc/shadow" - see TestEvalPathClassify_ClosesConfirmedBypasses)
+// ALSO collapses a genuine UNC-notation candidate written with forward
+// slashes ("//server/share/...", the form agent tool-call text always
+// uses - see evalPathClassify's posixAbs comment) down to a single
+// leading slash. matchPathPrefix's normalizeIfWindowsPath only swaps "\"
+// for "/" on an operator-authored native prefix ("\\server\share\...");
+// it never collapses redundant slashes. Without also collapsing the
+// prefix the same way, the two sides permanently disagree on slash count
+// and a UNC-style protected path never matches - silently disabling path
+// protection for any network-share target, on any platform, regardless
+// of which slash form the operator used to author the prefix.
+func TestEvalPathClassify_UNCPrefixMatchesForwardSlashCandidate(t *testing.T) {
+	nativePrefix := domain.Condition{
+		PathClassify: &domain.PathClassify{
+			Field: "parameters.path",
+			Require: domain.PathRequire{
+				CleanFirst:              true,
+				DeniedCanonicalPrefixes: []string{`\\server\share\protected`},
+			},
+		},
+	}
+	if !engine.EvalCondition(nativePrefix, pathFields("//server/share/protected/file.txt")) {
+		t.Error("forward-slash UNC candidate did not match a native-backslash-authored UNC deny prefix; expected deny")
+	}
+
+	forwardSlashPrefix := domain.Condition{
+		PathClassify: &domain.PathClassify{
+			Field: "parameters.path",
+			Require: domain.PathRequire{
+				CleanFirst:              true,
+				DeniedCanonicalPrefixes: []string{"//server/share/protected"},
+			},
+		},
+	}
+	if !engine.EvalCondition(forwardSlashPrefix, pathFields("//server/share/protected/file.txt")) {
+		t.Error("forward-slash UNC candidate did not match a forward-slash-authored UNC deny prefix; expected deny")
+	}
+
+	// A different share must not match either prefix form — the fix must
+	// not become overly permissive while closing the mismatch above.
+	if engine.EvalCondition(nativePrefix, pathFields("//server/other-share/file.txt")) {
+		t.Error("unrelated share matched the \\\\server\\share\\protected deny prefix; expected allow")
+	}
+}
+
 // FailClosed: missing field, wrong type, etc.
 func TestEvalPathClassify_FailsClosed(t *testing.T) {
 	cond := domain.Condition{

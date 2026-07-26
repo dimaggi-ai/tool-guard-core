@@ -214,11 +214,13 @@ func TestMatchPolicies_FiltersByApproved(t *testing.T) {
 func TestToolNameKnown_ExactMatchOnly(t *testing.T) {
 	enforcement := domain.Policy{
 		PolicyID: "p1",
+		Status:   domain.PolicyStatusApproved,
 		Mode:     domain.PolicyModeEnforcement,
 		Scope:    domain.PolicyScope{ToolNames: []string{"bash"}},
 	}
 	shadow := domain.Policy{
 		PolicyID: "p2",
+		Status:   domain.PolicyStatusApproved,
 		Mode:     domain.PolicyModeShadow,
 		Scope:    domain.PolicyScope{ToolNames: []string{"grep"}},
 	}
@@ -238,5 +240,35 @@ func TestToolNameKnown_ExactMatchOnly(t *testing.T) {
 	}
 	if ToolNameKnown("", policies) {
 		t.Error(`ToolNameKnown("") = true, want false`)
+	}
+}
+
+// TestToolNameKnown_ExcludesNonApprovedStatus pins that ToolNameKnown
+// filters on Status == Approved, mirroring MatchPolicies. A draft (or
+// review/archived) enforcement-mode policy that merely lists a dangerous
+// tool name in its scope will never actually be matched or enforced —
+// MatchPolicies filters it out — so it must not count as "known" here
+// either. Before this filter existed, a draft policy naming a tool made
+// -unknown-tools-deny treat that name as recognized while zero policies
+// actually governed it: the real call sailed through allowed with
+// PoliciesMatched=0, silently defeating the fail-closed default for any
+// tool name appearing in any draft/pending/archived policy anywhere in
+// the org's policy set. Found by an independent adversarial review ahead
+// of the v0.5.2 release.
+func TestToolNameKnown_ExcludesNonApprovedStatus(t *testing.T) {
+	draft := domain.Policy{
+		PolicyID: "p1",
+		Status:   domain.PolicyStatusDraft,
+		Mode:     domain.PolicyModeEnforcement,
+		Scope:    domain.PolicyScope{ToolNames: []string{"drop_table"}},
+	}
+	policies := []domain.Policy{draft}
+
+	if ToolNameKnown("drop_table", policies) {
+		t.Error(`ToolNameKnown("drop_table") = true, want false — a draft-status policy must not count as "known"; MatchPolicies would filter it out, so ToolNameKnown reporting it as known makes -unknown-tools-deny wrongly let the call through as if a real policy governed it`)
+	}
+	matched := MatchPolicies(&domain.ActionEnvelope{ToolName: "drop_table"}, policies)
+	if len(matched) != 0 {
+		t.Fatalf("sanity check failed: MatchPolicies matched %d policies for a draft policy, want 0", len(matched))
 	}
 }

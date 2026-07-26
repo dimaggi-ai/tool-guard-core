@@ -6,6 +6,63 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.2] — 2026-07-26
+
+Bug-fix release. No breaking changes; no new required config.
+
+- **`matchesScope`'s `tool_names` check is now case-insensitive** (`pkg/engine`).
+  Found via a real dogfood deployment: a policy scoped to lowercase
+  `tool_names: [bash]` never matched Claude Code's own tool name (`Bash`,
+  capitalized) — `MatchPolicies` returned zero matches for every call
+  regardless of content, so an `enforcement`-mode policy with a real
+  `deny-rm-root` regex rule silently never fired and the call evaluated as
+  allowed. `env.ToolName` is untrusted, externally-sourced data, and
+  different agent frameworks capitalize their own tool names inconsistently,
+  so a policy author shouldn't have to enumerate every casing variant to
+  avoid a silent no-match gap. `matchesScope` now compares `tool_names`
+  with `strings.EqualFold` instead of exact `==`.
+
+  **`ToolNameKnown` (backs `-unknown-tools-deny`) deliberately stays
+  exact-match.** An earlier version of this fix made both functions
+  case-insensitive; that was wrong and caught by `make test-postgres-full`
+  before release — `examples/postgres-attack`'s "Tool-name variant
+  spoofing" cases (`DROP_TABLE`, `Drop_Table` vs. a declared
+  `drop_table`) went from correctly denied (unrecognized tool name, fail
+  closed) to incorrectly allowed, because case-insensitivity made the
+  spoofed variant register as "known". `matchesScope`'s job is applying an
+  already-declared policy's own rules to a real call, where
+  case-insensitivity closes a real gap; `ToolNameKnown`'s job is the
+  opposite — proving a name was EXACTLY, deliberately declared, or failing
+  closed — and case-variant spoofing is exactly the class of thing that
+  fail-closed default exists to catch. `OrgIDs`/`AgentIDs` and
+  `ToolGroups` are unaffected everywhere (real identifiers and
+  operator-assigned constants, not raw agent-supplied tool names).
+
+  Regression tests in `pkg/engine/matcher_test.go`:
+  `TestMatchesScope_AllPaths`'s new case-insensitivity cases,
+  `TestToolNameKnown_ExactMatchOnly` (pins the exact-match requirement as a
+  security regression guard). `pkg/engine` coverage 86.8% → 87.4%.
+  `make test-postgres-full` (129 checks) passes with zero bypasses. See
+  `docs/creating-policies.md`'s Scope section for the documented matching
+  contract.
+
+- **CI: fixed a Windows `gofmt` false-positive that had been silently
+  failing `main` since the `windows-latest` job was added to the CI
+  matrix in 0.4.0 (2026-07-20, undetected across 0.4.0/0.5.0).** No
+  `.gitattributes` existed, so GitHub's
+  `windows-latest` runner checked out `.go` files with CRLF line endings
+  (Windows Git's default), and `gofmt -l` correctly flagged every file as
+  unformatted as a byte-level artifact of that — not a real formatting
+  problem. Added `.gitattributes` (`* text=auto eol=lf`) to force LF on
+  checkout regardless of platform.
+
+- **CI/toolchain: bumped Go from 1.25.11 to 1.25.12**, which fixes
+  `GO-2026-5856` (an Encrypted Client Hello privacy leak in `crypto/tls`),
+  caught by `govulncheck` and reachable from `cmd/tg-proxy`, `cmd/tg`,
+  `examples/mcp-server`, and `pkg/llmguard` (anything making a TLS
+  connection). Updated `go.mod`'s `toolchain` directive and every
+  `go-version` pin in `.github/workflows/ci.yml`.
+
 - **Fixed: `canonicalCandidates` (`pkg/engine/protect.go`) mishandled
   POSIX-absolute shell-command paths on Windows**, silently disabling
   `-protect-paths`/`-protect-self`'s shell-command coverage on that
@@ -15,18 +72,17 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   directory — corrupting it into something that could never match a
   `/`-prefixed policy prefix again. Every case in
   `shell_tokenize_test.go`'s protected-path suite was silently not firing
-  on `windows-latest`, hidden until the 0.5.2 `.gitattributes` fix (above)
-  stopped `gofmt` from failing that CI job at an earlier step, before
-  these tests ever ran. Now gated on a POSIX-absolute check
-  (`strings.HasPrefix(p, "/")`) that runs `path.Clean` (GOOS-independent)
-  instead of `filepath.Clean` for those inputs — `filepath.Clean` treats a
-  leading `//` as a Windows UNC-path prefix and mangles a plain POSIX
-  double-slash input (`//etc//shadow`) instead of collapsing it, a second
-  real Windows CI failure caught after the first fix. `path.Clean` has no
-  concept of UNC paths, sidestepping that ambiguity entirely rather than
-  trying to reverse it afterward. Verified: native build/vet/race pass,
-  `GOOS=windows` cross-compiles and vets clean, `make test-postgres-full`
-  (129 checks) still zero bypasses.
+  on `windows-latest`, hidden until the gofmt fix above stopped that CI
+  job from failing at an earlier step, before these tests ever ran. Now
+  gated on a POSIX-absolute check (`strings.HasPrefix(p, "/")`) that runs
+  `path.Clean` (GOOS-independent) instead of `filepath.Clean` for those
+  inputs — `filepath.Clean` treats a leading `//` as a Windows UNC-path
+  prefix and mangles a plain POSIX double-slash input (`//etc//shadow`)
+  instead of collapsing it, a second real Windows CI failure caught after
+  the first fix. `path.Clean` has no concept of UNC paths, sidestepping
+  that ambiguity entirely rather than trying to reverse it afterward.
+  Verified: native build/vet/race pass, `GOOS=windows` cross-compiles and
+  vets clean, `make test-postgres-full` (129 checks) still zero bypasses.
 
 - **Fixed the same bug class in two more call sites, found by a repo-wide
   sweep for `filepath.IsAbs`/`filepath.Clean` after the fix above**:
@@ -108,61 +164,55 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   string. Swept the rest of the integration suite for the same
   `fmt.Sprintf`-into-shell-text pattern; this was the only instance.
 
-## [0.5.2] — 2026-07-26
+- **Fixed: `ToolNameKnown` (`pkg/engine/matcher.go`) didn't filter on
+  policy approval status**, unlike `MatchPolicies`. Found by an
+  independent adversarial review (Codex) ahead of release, and
+  reproduced with a real test before being fixed: a **draft** (or
+  review/archived) `enforcement`-mode policy that merely lists a
+  dangerous tool name in its `scope.tool_names` made
+  `-unknown-tools-deny` treat that name as "known", even though
+  `MatchPolicies` would filter the draft policy out and it would never
+  actually govern anything — the real call sailed through **allowed**
+  with `PoliciesMatched=0`, silently defeating the fail-closed default
+  for any tool name that merely appears in some non-approved policy
+  anywhere in the org's policy set. Fixed by adding the same
+  `Status == PolicyStatusApproved` filter `MatchPolicies` already has.
+  Regression test:
+  `TestToolNameKnown_ExcludesNonApprovedStatus` in
+  `pkg/engine/matcher_test.go`.
 
-Bug-fix release. No breaking changes; no new required config.
+- **Fixed: a UNC-style deny/allow-prefix (`path_classify`,
+  `write_classify`, `-protect-paths`/`-protect-self`) authored in native
+  Windows form (`\\server\share\...`) never matched an equivalent
+  candidate path written with forward slashes (`//server/share/...`)**,
+  silently disabling path protection for any network-share target. Also
+  found by the same independent review (Codex) and reproduced with a
+  real test before being fixed. Root cause: `matchPathPrefix`'s
+  `normalizeIfWindowsPath` only swaps `\` for `/` on the prefix — it
+  never collapses redundant slashes — so a native UNC prefix normalizes
+  to a *doubled*-leading-slash form (`//server/share/...`), while a
+  forward-slash-written UNC candidate is already collapsed to a
+  *single*-leading-slash form (`/server/share/...`) upstream by the
+  `path.Clean` fix earlier in this release (required so a plain
+  double-slash typo like `//etc//shadow` still collapses to
+  `/etc/shadow` — see the fixes above). The two sides then permanently
+  disagreed on slash count. Fixed by also `path.Clean`-collapsing the
+  prefix (after `normalizeIfWindowsPath`, guarded on a leading `/`) so
+  both sides collapse the same way regardless of which slash form the
+  operator used to author the prefix. Regression test:
+  `TestEvalPathClassify_UNCPrefixMatchesForwardSlashCandidate` in
+  `pkg/engine/path_classify_test.go`.
 
-- **`matchesScope`'s `tool_names` check is now case-insensitive** (`pkg/engine`).
-  Found via a real dogfood deployment: a policy scoped to lowercase
-  `tool_names: [bash]` never matched Claude Code's own tool name (`Bash`,
-  capitalized) — `MatchPolicies` returned zero matches for every call
-  regardless of content, so an `enforcement`-mode policy with a real
-  `deny-rm-root` regex rule silently never fired and the call evaluated as
-  allowed. `env.ToolName` is untrusted, externally-sourced data, and
-  different agent frameworks capitalize their own tool names inconsistently,
-  so a policy author shouldn't have to enumerate every casing variant to
-  avoid a silent no-match gap. `matchesScope` now compares `tool_names`
-  with `strings.EqualFold` instead of exact `==`.
-
-  **`ToolNameKnown` (backs `-unknown-tools-deny`) deliberately stays
-  exact-match.** An earlier version of this fix made both functions
-  case-insensitive; that was wrong and caught by `make test-postgres-full`
-  before release — `examples/postgres-attack`'s "Tool-name variant
-  spoofing" cases (`DROP_TABLE`, `Drop_Table` vs. a declared
-  `drop_table`) went from correctly denied (unrecognized tool name, fail
-  closed) to incorrectly allowed, because case-insensitivity made the
-  spoofed variant register as "known". `matchesScope`'s job is applying an
-  already-declared policy's own rules to a real call, where
-  case-insensitivity closes a real gap; `ToolNameKnown`'s job is the
-  opposite — proving a name was EXACTLY, deliberately declared, or failing
-  closed — and case-variant spoofing is exactly the class of thing that
-  fail-closed default exists to catch. `OrgIDs`/`AgentIDs` and
-  `ToolGroups` are unaffected everywhere (real identifiers and
-  operator-assigned constants, not raw agent-supplied tool names).
-
-  Regression tests in `pkg/engine/matcher_test.go`:
-  `TestMatchesScope_AllPaths`'s new case-insensitivity cases,
-  `TestToolNameKnown_ExactMatchOnly` (pins the exact-match requirement as a
-  security regression guard). `pkg/engine` coverage 86.8% → 87.4%.
-  `make test-postgres-full` (129 checks) passes with zero bypasses. See
-  `docs/creating-policies.md`'s Scope section for the documented matching
-  contract.
-
-- **CI: fixed a Windows `gofmt` false-positive that had been silently
-  failing `main` since the 0.3.0 release (2026-07-14, undetected across
-  0.3.0/0.4.0/0.5.0).** No `.gitattributes` existed, so GitHub's
-  `windows-latest` runner checked out `.go` files with CRLF line endings
-  (Windows Git's default), and `gofmt -l` correctly flagged every file as
-  unformatted as a byte-level artifact of that — not a real formatting
-  problem. Added `.gitattributes` (`* text=auto eol=lf`) to force LF on
-  checkout regardless of platform.
-
-- **CI/toolchain: bumped Go from 1.25.11 to 1.25.12**, which fixes
-  `GO-2026-5856` (an Encrypted Client Hello privacy leak in `crypto/tls`),
-  caught by `govulncheck` and reachable from `cmd/tg-proxy`, `cmd/tg`,
-  `examples/mcp-server`, and `pkg/llmguard` (anything making a TLS
-  connection). Updated `go.mod`'s `toolchain` directive and every
-  `go-version` pin in `.github/workflows/ci.yml`.
+Both of the fixes immediately above were found during an independent,
+blind cross-review (Fable/Opus and Codex, run in parallel, neither aware
+of the other's findings or of this changelog) requested specifically to
+adversarially check this release before it shipped — not found by the
+person who wrote the original fixes. Full local gate (build/vet/race/
+gofmt/govulncheck/coverage/integration/Windows cross-compile),
+`make test-finance` (18/18), `make test-business` (26/26),
+`make test-postgres-full` (129/129, zero bypasses), and `make stress`
+(load + overload + audit-chain integrity + fuzz) all re-verified clean
+after applying both fixes.
 
 ## [0.5.0] — 2026-07-26
 

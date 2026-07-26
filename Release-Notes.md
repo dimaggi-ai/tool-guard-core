@@ -31,9 +31,49 @@ Bug-fix release. **No breaking changes; no new required config.**
 
 - **CI fixes, unrelated to the above but caught in the same pass:** a
   Windows `gofmt` false-positive (missing `.gitattributes` → CRLF checkout
-  → every file flagged) that had been silently failing `main` since 0.3.0
-  across three releases undetected, and a Go toolchain bump to 1.25.12 for
+  → every file flagged) that had been silently failing `main` since the
+  `windows-latest` job was added to the CI matrix in 0.4.0, undetected
+  across 0.4.0/0.5.0, and a Go toolchain bump to 1.25.12 for
   `GO-2026-5856` (a `crypto/tls` privacy-leak CVE).
+
+- **`-protect-paths`/`-protect-self`, `path_classify`, and
+  `write_classify` are now reliable on Windows.** Fixing the gofmt
+  false-positive above let Windows CI run these suites for the first
+  time and surface a real, previously-invisible correctness bug: on
+  Windows, `filepath.IsAbs`/`filepath.Clean` mishandle a POSIX-style
+  absolute path (the form agent tool-call text always uses, regardless
+  of host OS) — an already-absolute `/etc/shadow`-style path was
+  wrongly treated as relative and joined onto the working directory, or
+  had a plain double-slash typo mangled instead of collapsed, silently
+  disabling path protection on that platform. If you run Windows
+  deployments with `-protect-paths`, `-protect-self`, `path_classify`,
+  or `write_classify` rules, this release is the first one where those
+  actually work as documented — previously they were fail-open on
+  Windows with no indication anything was wrong.
+
+- **A UNC-style deny/allow-prefix (`\\server\share\...`) now matches an
+  equivalent forward-slash-written candidate path
+  (`//server/share/...`)**, and vice versa. Found by an independent
+  adversarial review requested specifically to check this release
+  before shipping (see below) — the fix above for the double-slash typo
+  case had a side effect of un-matching genuine UNC-style paths written
+  with forward slashes; both sides now normalize consistently.
+
+- **`-unknown-tools-deny` now also requires the declaring policy to be
+  approved**, not just enforcement-mode. Also found by the same
+  independent review: a **draft** policy that merely listed a dangerous
+  tool name in its scope made that name register as "known" even though
+  the draft would never actually be enforced (it's excluded by normal
+  policy matching) — the real call then evaluated as allowed with zero
+  policies actually matched, silently defeating the fail-closed default
+  for any tool name appearing in any non-approved policy.
+
+Both of the last two fixes were found by a blind, parallel cross-review
+(Opus and Codex, neither aware of the other's findings) specifically
+requested before this release shipped, each with its own reproduction
+test now checked in as a permanent regression guard. See
+[CHANGELOG.md](CHANGELOG.md) for full technical detail on every fix in
+this release.
 
 ### Upgrade notes
 
@@ -44,7 +84,16 @@ policy, this release changes that — the fix makes that specific check
 before), never less, so it cannot newly deny anything that was previously
 allowed. Reconcile duplicate same-tool entries differing only by case in
 your own `tool_names` lists; they're now redundant. `-unknown-tools-deny`
-behavior is unchanged (still exact-match, as before this release).
+stays exact-match (unchanged from before this release), but now also
+requires the declaring policy to be **approved**: if you have a tool
+name that appears ONLY in a draft/review/archived policy's
+`tool_names` — nowhere in an approved one — a call using that name
+previously passed `-unknown-tools-deny` (because the draft made it
+"known") and will now be **denied** as unrecognized. This is the
+correct, intended behavior (that tool was never actually governed by
+anything), but approve the relevant policy, or add the tool name to an
+already-approved policy's scope, if you see a new denial after
+upgrading.
 
 ---
 

@@ -190,6 +190,26 @@ func matchPathPrefix(path, prefix string) bool {
 	// couldn't be exercised by a test running on a non-Windows CI runner.
 	path = normalizeIfWindowsPath(path)
 	prefix = normalizeIfWindowsPath(prefix)
+	// Collapse redundant slashes in the prefix the same way canonicalCandidates
+	// / evalPathClassify's CleanFirst already collapse the candidate. Without
+	// this, a UNC deny-prefix authored in native form ("\\server\share\...")
+	// normalizes above to "//server/share/..." (normalizeIfWindowsPath is a
+	// literal "\"->"/" swap, so it preserves the doubled leading slash), but a
+	// forward-slash UNC candidate ("//server/share/.../file") arrives already
+	// collapsed to "/server/share/.../file" by path.Clean upstream - the two
+	// sides then disagree on slash count and never match, silently disabling
+	// path protection for any UNC-style network-share target. path.Clean has
+	// to collapse "//host/..." on the candidate side (that's also what makes
+	// a plain typo'd "//etc//shadow" correctly collapse to "/etc/shadow" -
+	// see canonicalCandidates in protect.go), so there is no shape-based way
+	// to tell "genuine UNC" from "typo" apart on that side; cleaning the
+	// prefix identically is what keeps both sides consistent instead.
+	// Guarded on a leading "/" so a wildcard-free relative or empty prefix
+	// (stdpath.Clean("") == ".") is never silently rewritten into something
+	// that matches everything.
+	if strings.HasPrefix(prefix, "/") {
+		prefix = stdpath.Clean(prefix)
+	}
 	if !strings.Contains(prefix, "*") {
 		// Common case: literal prefix. Also accept exact match (so
 		// "/etc/shadow" matches both /etc/shadow and /etc/shadow/...).
