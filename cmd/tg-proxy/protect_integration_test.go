@@ -19,7 +19,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -78,18 +77,18 @@ func startProtectProxy(t *testing.T, extraArgs ...string) (baseURL string, teard
 	cmd := exec.Command(proxyBin, args...)
 	cmd.Stdout = os.Stderr // pass through for debugging on failure
 	cmd.Stderr = os.Stderr
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	setNewProcessGroup(cmd)
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start protect proxy: %v", err)
 	}
 
 	if err := waitReady(url+"/readyz", 5*time.Second); err != nil {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+		killProcessTree(cmd)
 		t.Fatalf("protect proxy did not become ready: %v", err)
 	}
 
 	return url, func() {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+		killProcessTree(cmd)
 		_, _ = cmd.Process.Wait()
 	}
 }
@@ -145,12 +144,12 @@ func TestProtect_WriteToProtectedPath_Returns403(t *testing.T) {
 	)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	setNewProcessGroup(cmd)
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start proxy: %v", err)
 	}
 	defer func() {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+		killProcessTree(cmd)
 		_, _ = cmd.Process.Wait()
 	}()
 	if err := waitReady(baseURL+"/readyz", 5*time.Second); err != nil {
@@ -314,12 +313,12 @@ func TestProtect_AuditChainIntactAfterMultipleDenies(t *testing.T) {
 	)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	setNewProcessGroup(cmd)
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start proxy: %v", err)
 	}
 	defer func() {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+		killProcessTree(cmd)
 		_, _ = cmd.Process.Wait()
 	}()
 	if err := waitReady(baseURL+"/readyz", 5*time.Second); err != nil {

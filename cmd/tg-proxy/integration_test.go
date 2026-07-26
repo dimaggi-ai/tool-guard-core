@@ -19,8 +19,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -106,7 +106,15 @@ func TestMain(m *testing.M) {
 		os.Exit(2)
 	}
 
-	proxyBin = filepath.Join(tmp, "tg-proxy")
+	// Windows requires the .exe extension to recognize and execute a file
+	// as a binary, even when invoked by a full absolute path - without it,
+	// os/exec fails with "executable file not found in %PATH%" even
+	// though the file exists and was just built successfully.
+	proxyBinName := "tg-proxy"
+	if runtime.GOOS == "windows" {
+		proxyBinName += ".exe"
+	}
+	proxyBin = filepath.Join(tmp, proxyBinName)
 	build := exec.Command("go", "build", "-o", proxyBin, ".")
 	build.Stderr = os.Stderr
 	if err := build.Run(); err != nil {
@@ -130,8 +138,9 @@ func TestMain(m *testing.M) {
 	)
 	proxyCmd.Stdout = os.Stderr // pass through, useful when a test fails
 	proxyCmd.Stderr = os.Stderr
-	// New process group so we can SIGTERM the whole tree on shutdown.
-	proxyCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// New process group so we can terminate the whole tree on shutdown
+	// (see integration_proc_unix.go / integration_proc_windows.go).
+	setNewProcessGroup(proxyCmd)
 	if err := proxyCmd.Start(); err != nil {
 		fmt.Fprintln(os.Stderr, "start tg-proxy:", err)
 		os.Exit(2)
@@ -144,7 +153,7 @@ func TestMain(m *testing.M) {
 
 	code := m.Run()
 
-	_ = syscall.Kill(-proxyCmd.Process.Pid, syscall.SIGTERM)
+	killProcessTree(proxyCmd)
 	_, _ = proxyCmd.Process.Wait()
 
 	os.Exit(code)
@@ -545,12 +554,12 @@ func TestIntegration_ApproverTokenFile(t *testing.T) {
 		"-audit-log", filepath.Join(tmp, "audit.jsonl"),
 		"-approver-token-file", tokenPath,
 	)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	setNewProcessGroup(cmd)
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+		killProcessTree(cmd)
 		_, _ = cmd.Process.Wait()
 	}()
 	if err := waitReady(url+"/readyz", 5*time.Second); err != nil {

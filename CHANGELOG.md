@@ -62,6 +62,34 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   behind `//go:build integration` and hadn't even been reached by CI yet
   — the unit-test-level failures above were still blocking that step.
 
+- **Fixed two more layers, uncovered only after the fixes above let
+  Windows CI reach the "Integration tests" step for the first time**:
+  1. `cmd/tg/integration_test.go` and `cmd/tg-proxy/integration_test.go`
+     built their test binaries as `tg`/`tg-proxy` (no extension).
+     Windows requires a `.exe` extension to recognize and execute a file,
+     even via a full absolute path — `os/exec` failed every single
+     integration test with "executable file not found in %PATH%" despite
+     the binary having just built successfully. Fixed by appending
+     `.exe` on `runtime.GOOS == "windows"`.
+  2. Five `cmd/tg-proxy` integration test files used
+     `syscall.SysProcAttr{Setpgid: true}` and `syscall.Kill(-pid, …)` to
+     start the test proxy in its own process group and tear down the
+     whole tree — both POSIX-only; the struct field and the function
+     don't exist on Windows at all, so these files never even
+     **compiled** for Windows before now, a platform break invisible
+     until Windows CI got this far. Split into
+     `integration_proc_unix.go` / `integration_proc_windows.go`
+     (`setNewProcessGroup`/`killProcessTree`, `//go:build integration &&
+     (!windows|windows)`); Windows just kills the direct child, adequate
+     for this test harness since `tg-proxy` doesn't fork further
+     children here.
+
+  Verified: `GOOS=windows go vet -tags=integration ./cmd/tg/...
+  ./cmd/tg-proxy/...` now compiles clean (previously a hard compile
+  error), full local gate (build/vet/race/gofmt/govulncheck/coverage/
+  integration tests) still clean natively, `make test-postgres-full`
+  still 129/129 zero bypasses.
+
 ## [0.5.2] — 2026-07-26
 
 Bug-fix release. No breaking changes; no new required config.

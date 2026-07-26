@@ -16,7 +16,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -62,7 +61,7 @@ func startVelocityProxy(t *testing.T) (string, func()) {
 	)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	setNewProcessGroup(cmd)
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +71,7 @@ func startVelocityProxy(t *testing.T) (string, func()) {
 		t.Fatalf("velocity proxy not ready: %v", err)
 	}
 	return url, func() {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+		killProcessTree(cmd)
 		_, _ = cmd.Process.Wait()
 	}
 }

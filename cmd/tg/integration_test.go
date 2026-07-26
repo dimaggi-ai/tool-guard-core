@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -37,7 +38,15 @@ func TestMain(m *testing.M) {
 	}
 	defer os.RemoveAll(dir)
 
-	tgBinary = filepath.Join(dir, "tg")
+	// Windows requires the .exe extension to recognize and execute a file
+	// as a binary, even when invoked by a full absolute path - without it,
+	// os/exec fails with "executable file not found in %PATH%" even
+	// though the file exists and was just built successfully.
+	binName := "tg"
+	if runtime.GOOS == "windows" {
+		binName += ".exe"
+	}
+	tgBinary = filepath.Join(dir, binName)
 	build := exec.Command("go", "build", "-o", tgBinary, ".")
 	build.Stderr = os.Stderr
 	if err := build.Run(); err != nil {
