@@ -5,6 +5,33 @@ per-change record see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## 0.5.1 — 2026-07-26
+
+Bug-fix release. **No breaking changes; no new required config.**
+
+### Highlights
+
+- **`tool_names` scope matching is now case-insensitive.** A policy scoped
+  to `tool_names: [bash]` previously never matched a call whose tool name
+  arrived as `Bash` — different agent frameworks capitalize their own tool
+  names inconsistently, and `tool_name` is untrusted, externally-sourced
+  data. Found via a real dogfood deployment: an `enforcement`-mode policy
+  with a `deny-rm-root` rule silently never fired against Claude Code's own
+  `Bash` tool calls. `OrgIDs`/`AgentIDs` (real identifiers) and `ToolGroups`
+  (operator-assigned constants) are unaffected and stay exact-match.
+
+### Upgrade notes
+
+If you're relying on the previous exact-match behavior to deliberately
+exclude a differently-cased tool name from a policy's scope, this release
+changes that — the fix makes matching **strictly more permissive** (more
+calls now match an existing policy than before), never less, so it cannot
+newly deny anything that was previously allowed. Reconcile duplicate
+same-tool entries differing only by case in your own `tool_names` lists;
+they're now redundant.
+
+---
+
 ## 0.5.0 — 2026-07-21
 
 "The control holds" — Reliability, Accountability, and the first SDK. Makes

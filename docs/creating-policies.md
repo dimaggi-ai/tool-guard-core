@@ -51,6 +51,16 @@ its `tool_group` is in `tool_groups`. A policy with empty scope
 matches every envelope - `tg lint` warns about this as
 `policy-scope-leak`.
 
+`tool_names` matching is **case-insensitive** (`bash` in a policy
+matches an incoming `Bash`, `BASH`, etc.) — different agent
+frameworks capitalize their own tool names inconsistently (Claude
+Code sends `Bash`; other integrations send `bash`), and `tool_name`
+is untrusted, externally-sourced data, so a policy author shouldn't
+have to anticipate every casing variant to avoid a silent
+never-matches gap. `tool_groups` matching stays case-sensitive
+exact-match, since group names are operator-assigned constants, not
+raw agent-supplied input.
+
 The recommended pattern is BOTH a `tool_names` allowlist AND a
 `tool_groups` allowlist. The lint heuristic `scope-no-tool-group`
 catches tool-substitution bypasses (an attacker pivots to a sibling

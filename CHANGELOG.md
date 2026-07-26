@@ -6,6 +6,31 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-07-26
+
+Bug-fix release. No breaking changes; no new required config.
+
+- **`tool_names` scope matching is now case-insensitive** (`pkg/engine`).
+  Found via a real dogfood deployment: a policy scoped to lowercase
+  `tool_names: [bash]` never matched Claude Code's own tool name (`Bash`,
+  capitalized) — `MatchPolicies` returned zero matches for every call
+  regardless of content, so an `enforcement`-mode policy with a real
+  `deny-rm-root` regex rule silently never fired and the call evaluated as
+  allowed. `env.ToolName` is untrusted, externally-sourced data, and
+  different agent frameworks capitalize their own tool names inconsistently,
+  so a policy author shouldn't have to enumerate every casing variant to
+  avoid a silent no-match gap. `matchesScope` and `ToolNameKnown` (backs
+  `-unknown-tools-deny`) both now compare tool names with
+  `strings.EqualFold` instead of exact `==`. Deliberately scoped to tool
+  names only — `OrgIDs`/`AgentIDs` stay exact-match (real identifiers, case
+  carries meaning) and `ToolGroups` stays exact-match (operator-assigned
+  constants, not raw agent-supplied input, so it doesn't have the same
+  organic case-variance problem). Regression tests added in
+  `pkg/engine/matcher_test.go` (`TestMatchesScope_AllPaths`'s new
+  case-insensitivity cases, `TestToolNameKnown_CaseInsensitive`); `pkg/engine`
+  coverage 86.8% → 87.4%. See `docs/creating-policies.md`'s Scope section for
+  the documented matching contract.
+
 ## [0.5.0] — 2026-07-26
 
 "The control holds" — Reliability, Accountability, and the first SDK. Makes

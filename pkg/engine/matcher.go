@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"strings"
+
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 )
 
@@ -39,7 +41,7 @@ func matchesScope(env *domain.ActionEnvelope, scope domain.PolicyScope) bool {
 	// open ("match all tools"); when one is set, that selector gates.
 	if len(scope.ToolNames) > 0 || len(scope.ToolGroups) > 0 {
 		toolMatched := false
-		if len(scope.ToolNames) > 0 && containsStr(scope.ToolNames, env.ToolName) {
+		if len(scope.ToolNames) > 0 && containsStrFold(scope.ToolNames, env.ToolName) {
 			toolMatched = true
 		}
 		if !toolMatched && len(scope.ToolGroups) > 0 && env.ToolGroup != "" && containsStr(scope.ToolGroups, env.ToolGroup) {
@@ -75,7 +77,7 @@ func ToolNameKnown(toolName string, policies []domain.Policy) bool {
 		if p.Mode != domain.PolicyModeEnforcement {
 			continue
 		}
-		if containsStr(p.Scope.ToolNames, toolName) {
+		if containsStrFold(p.Scope.ToolNames, toolName) {
 			return true
 		}
 	}
@@ -85,6 +87,29 @@ func ToolNameKnown(toolName string, policies []domain.Policy) bool {
 func containsStr(list []string, val string) bool {
 	for _, s := range list {
 		if s == val {
+			return true
+		}
+	}
+	return false
+}
+
+// containsStrFold is containsStr with a case-insensitive comparison, used
+// specifically for tool-name matching (both here and in ToolNameKnown).
+// env.ToolName is untrusted, externally-sourced data, and real agent
+// frameworks are inconsistent about its casing - Claude Code sends "Bash",
+// other integrations send "bash" - so a policy authored against one casing
+// must still govern a call that arrives with a different one, or the
+// policy silently never matches and the call passes ungoverned with
+// PoliciesMatched=0 (found via a real dogfood deployment: an enforcement
+// policy scoped to lowercase tool_names never matched "Bash", so `rm -rf /`
+// evaluated as allowed). Deliberately scoped to tool names ONLY: OrgIDs and
+// AgentIDs stay on containsStr because they're identifiers where case
+// carries real meaning, and ToolGroups stays on containsStr because it's
+// an operator-assigned constant, not raw agent-supplied input, so it
+// doesn't have the same organic case-variance problem.
+func containsStrFold(list []string, val string) bool {
+	for _, s := range list {
+		if strings.EqualFold(s, val) {
 			return true
 		}
 	}

@@ -137,6 +137,37 @@ func TestMatchesScope_AllPaths(t *testing.T) {
 			},
 			want: false,
 		},
+		{
+			// Real-world regression: a dogfood policy scoped tool_names to
+			// lowercase ("bash") but Claude Code's own tool_name is "Bash"
+			// (capitalized) - PoliciesMatched stayed 0 for every call, so an
+			// enforcement policy with a real deny-rm-root rule silently never
+			// fired. env.ToolName is untrusted, externally-sourced data;
+			// different agent frameworks capitalize it differently, so the
+			// match must be case-insensitive.
+			name: "tool_names — case-insensitive match (capitalized agent tool name vs lowercase policy)",
+			env:  mkEnv("o", "a", "Bash", ""),
+			scope: domain.PolicyScope{
+				ToolNames: []string{"bash"},
+			},
+			want: true,
+		},
+		{
+			name: "tool_names — case-insensitive match (lowercase agent tool name vs capitalized policy)",
+			env:  mkEnv("o", "a", "bash", ""),
+			scope: domain.PolicyScope{
+				ToolNames: []string{"Bash"},
+			},
+			want: true,
+		},
+		{
+			name: "tool_names — case-insensitive match does not widen to a genuinely different tool",
+			env:  mkEnv("o", "a", "Bashful", ""),
+			scope: domain.PolicyScope{
+				ToolNames: []string{"bash"},
+			},
+			want: false,
+		},
 	}
 
 	for _, tc := range cases {
@@ -167,5 +198,40 @@ func TestMatchPolicies_FiltersByApproved(t *testing.T) {
 	got := MatchPolicies(env, []domain.Policy{approved, draft})
 	if len(got) != 1 || got[0].PolicyID != "approved" {
 		t.Fatalf("MatchPolicies should drop non-approved; got %d policies", len(got))
+	}
+}
+
+// TestToolNameKnown_CaseInsensitive pins the same case-insensitivity fix
+// for ToolNameKnown (backs -unknown-tools-deny) that matchesScope got -
+// it shares the tool-name matching logic and would otherwise treat a
+// declared "bash" policy as not covering an incoming "Bash" call, wrongly
+// denying it as an unknown tool.
+func TestToolNameKnown_CaseInsensitive(t *testing.T) {
+	enforcement := domain.Policy{
+		PolicyID: "p1",
+		Mode:     domain.PolicyModeEnforcement,
+		Scope:    domain.PolicyScope{ToolNames: []string{"bash"}},
+	}
+	shadow := domain.Policy{
+		PolicyID: "p2",
+		Mode:     domain.PolicyModeShadow,
+		Scope:    domain.PolicyScope{ToolNames: []string{"Grep"}},
+	}
+	policies := []domain.Policy{enforcement, shadow}
+
+	if !ToolNameKnown("Bash", policies) {
+		t.Error(`ToolNameKnown("Bash") = false, want true (case-insensitive match against enforcement policy's "bash")`)
+	}
+	if !ToolNameKnown("bash", policies) {
+		t.Error(`ToolNameKnown("bash") = false, want true (exact match)`)
+	}
+	if ToolNameKnown("grep", policies) {
+		t.Error(`ToolNameKnown("grep") = true, want false (only a shadow-mode policy declares it, shadow must not count)`)
+	}
+	if ToolNameKnown("write", policies) {
+		t.Error(`ToolNameKnown("write") = true, want false (no policy declares it at all)`)
+	}
+	if ToolNameKnown("", policies) {
+		t.Error(`ToolNameKnown("") = true, want false`)
 	}
 }
