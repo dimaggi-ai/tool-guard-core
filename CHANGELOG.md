@@ -6,13 +6,21 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.5.0] — 2026-07-21
+## [0.5.0] — 2026-07-26
 
 "The control holds" — Reliability, Accountability, and the first SDK. Makes
 error paths and the audit trail behave the way an *enforcing* deployment
 needs, ships a Python SDK for universal agent-framework coverage, and lands
 partial progress on five items from the public 1.0 roadmap. No breaking
 changes; no new required config.
+
+- **Release-gate hardening.** Added complete behavioral coverage for audit-log
+  rotation-set discovery (numeric ordering, active-file placement, crash-gap
+  recovery, ignored lookalikes, and filesystem errors), lifting `pkg/audit`
+  coverage from 68.5% to 90.2%. The coding-agent write and egress policies now
+  include capability groups (`filesystem_writes`, `network_egress`), the hook
+  maps the corresponding tool names to those groups, and the write policy
+  explicitly denies edits to shipped policy and standard audit-log paths.
 
 - **Python SDK (`toolguard`) — universal agent coverage.**
   Drop-in adapters for LangChain, AutoGen, native OpenAI/Anthropic tool use,

@@ -351,6 +351,27 @@ func TestHook_AlwaysExitsZero(t *testing.T) {
 	}
 }
 
+func TestHookToolGroup_CapabilityMappings(t *testing.T) {
+	tests := map[string]string{
+		"write":        "filesystem_writes",
+		"edit":         "filesystem_writes",
+		"notebookedit": "filesystem_writes",
+		"apply_patch":  "filesystem_writes",
+		"multiedit":    "filesystem_writes",
+		"create":       "filesystem_writes",
+		"read":         "filesystem",
+		"http":         "network_egress",
+		"fetch":        "network_egress",
+		"webfetch":     "network_egress",
+		"bash":         "shell",
+	}
+	for tool, want := range tests {
+		if got := hookToolGroup(tool); got != want {
+			t.Errorf("hookToolGroup(%q) = %q, want %q", tool, got, want)
+		}
+	}
+}
+
 // ── B8: -unknown-tools-deny ───────────────────────────────────────────────
 // tg-proxy has had -unknown-tools-deny since before 0.5.0; tg hook — the
 // coding-agent enforcement point most deployments actually run — did not.
@@ -360,7 +381,7 @@ func TestHook_AlwaysExitsZero(t *testing.T) {
 
 func TestHook_UnknownToolsDeny_DeniesUndeclaredTool(t *testing.T) {
 	// Scoped to tool_names:[bash] + tool_groups:[shell] only — "write", a
-	// filesystem-group tool, matches neither dimension, so a normal eval
+	// filesystem_writes-group tool, matches neither dimension, so a normal eval
 	// matches no policy at all (default allow) whether or not the flag is
 	// set. -unknown-tools-deny must override that default and deny.
 	pol := writeHookPolicy(t, hookAllowPolicy)

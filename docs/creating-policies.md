@@ -56,6 +56,20 @@ The recommended pattern is BOTH a `tool_names` allowlist AND a
 catches tool-substitution bypasses (an attacker pivots to a sibling
 tool in the same group).
 
+Common group names use lower-case capability nouns with underscores:
+
+| Tool group | Capability |
+|---|---|
+| `monetary_outflow` | Refunds, purchases, credits, and transfers |
+| `database_ops` | Database reads and mutations |
+| `llm_usage` | Generative-model inference |
+| `filesystem_writes` | File creation and mutation |
+| `network_egress` | Outbound HTTP/fetch operations |
+
+An integration owns the tool-name-to-group mapping. The built-in coding-agent
+hook maps its standard write and HTTP tool names to `filesystem_writes` and
+`network_egress` respectively.
+
 ## Modes
 
 - `enforcement` - the decision returned to the agent is applied.

@@ -266,12 +266,18 @@ func hookEnvelope(tool string, in hookInput, agentID string) *domain.ActionEnvel
 	}
 }
 
-// hookToolGroup is a small heuristic so tool_groups-scoped policies match:
-// shell-executing tools → "shell", file tools → "filesystem", else "shell".
+// hookToolGroup is a small heuristic so tool_groups-scoped policies match.
+// Keep write and network capabilities distinct from read-only filesystem
+// tools: grouping them together would make a write-classifier policy evaluate
+// (and fail closed) on harmless reads.
 func hookToolGroup(tool string) string {
 	switch tool {
-	case "write", "edit", "notebookedit", "multiedit", "read", "create":
+	case "write", "edit", "notebookedit", "apply_patch", "multiedit", "create":
+		return "filesystem_writes"
+	case "read":
 		return "filesystem"
+	case "http", "fetch", "webfetch":
+		return "network_egress"
 	default:
 		return "shell"
 	}

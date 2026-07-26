@@ -11,6 +11,7 @@ mode: enforcement
 
 scope:
   tool_names: [http, fetch, webfetch]
+  tool_groups: [network_egress]
 
 rules:
   - rule_id: rule-egress
