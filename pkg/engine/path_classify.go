@@ -33,7 +33,13 @@ func evalPathClassify(p *domain.PathClassify, fields map[string]interface{}) boo
 		return true
 	}
 
-	if p.Require.AbsoluteOnly && !filepath.IsAbs(path) {
+	// Paths reaching path_classify come from agent tool-call parameters,
+	// which are POSIX-style text regardless of what OS this binary runs
+	// on (same reasoning as canonicalCandidates in protect.go).
+	// filepath.IsAbs alone is not sufficient: on Windows it requires a
+	// drive letter and returns false for an already-absolute "/etc/shadow".
+	posixAbs := strings.HasPrefix(path, "/")
+	if p.Require.AbsoluteOnly && !filepath.IsAbs(path) && !posixAbs {
 		return true
 	}
 
@@ -48,6 +54,14 @@ func evalPathClassify(p *domain.PathClassify, fields map[string]interface{}) boo
 	cleaned := path
 	if p.Require.CleanFirst {
 		cleaned = filepath.Clean(path)
+		if posixAbs {
+			// filepath.Clean silently backslash-ifies a "/"-rooted path
+			// on Windows; restore the POSIX form so the prefix
+			// comparisons below (DeniedCanonicalPrefixes /
+			// AllowedCanonicalPrefixes, which are POSIX-style policy
+			// config) still match. No-op on non-Windows.
+			cleaned = filepath.ToSlash(cleaned)
+		}
 	}
 
 	if p.Require.MaxPathLength > 0 && len(cleaned) > p.Require.MaxPathLength {

@@ -66,10 +66,26 @@ func evalShellClassify(s *domain.ShellClassify, fields map[string]interface{}) b
 
 	if len(s.Require.DeniedArgvPaths) > 0 {
 		for _, arg := range argv {
-			if !filepath.IsAbs(arg) {
+			// argv elements are POSIX-style text regardless of what OS
+			// this binary runs on (same reasoning as canonicalCandidates
+			// in protect.go / evalPathClassify in path_classify.go).
+			// filepath.IsAbs alone is not sufficient: on Windows it
+			// requires a drive letter and returns false for an
+			// already-absolute "/etc/shadow", which would `continue`
+			// here and skip the deny check entirely - a silent bypass,
+			// not just a corrupted comparison.
+			posixAbs := strings.HasPrefix(arg, "/")
+			if !filepath.IsAbs(arg) && !posixAbs {
 				continue
 			}
 			cleaned := filepath.Clean(arg)
+			if posixAbs {
+				// filepath.Clean silently backslash-ifies a "/"-rooted
+				// path on Windows; restore the POSIX form so the prefix
+				// comparisons below (DeniedArgvPaths, POSIX-style policy
+				// config) still match. No-op on non-Windows.
+				cleaned = filepath.ToSlash(cleaned)
+			}
 			// Test cleaned form and (when configured) the symlink-
 			// resolved form. Either match denies.
 			variants := []string{cleaned}

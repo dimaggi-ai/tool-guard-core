@@ -24,6 +24,22 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   `GOOS=windows` cross-compiles and vets clean, `make test-postgres-full`
   (129 checks) still zero bypasses.
 
+- **Fixed the same bug class in two more call sites, found by a repo-wide
+  sweep for `filepath.IsAbs`/`filepath.Clean` after the fix above**:
+  `evalPathClassify` (`pkg/engine/path_classify.go`, backs `path_classify`
+  and `write_classify`'s deny/allow-prefix checks) and
+  `evalShellClassify`'s `DeniedArgvPaths` check
+  (`pkg/engine/shell_classify.go`). The `shell_classify` instance was
+  worse than a corrupted comparison — `!filepath.IsAbs(arg)` on Windows
+  `continue`d past an already-absolute POSIX argv path entirely, skipping
+  the deny check outright rather than just failing to match. Both fixed
+  with the identical POSIX-absolute-gated pattern. `write_classify`
+  reuses the already-fixed `canonicalCandidates`, so it needed no
+  separate change. `cmd/tg/hook.go`'s two `filepath.Clean` call sites are
+  unaffected by design — they operate on operator-supplied local
+  filesystem paths for the machine running `tg hook`, which are correctly
+  OS-native, not POSIX shell-command text.
+
 ## [0.5.2] — 2026-07-26
 
 Bug-fix release. No breaking changes; no new required config.
