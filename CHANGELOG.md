@@ -6,6 +6,24 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- **Fixed: `canonicalCandidates` (`pkg/engine/protect.go`) mishandled
+  POSIX-absolute shell-command paths on Windows**, silently disabling
+  `-protect-paths`/`-protect-self`'s shell-command coverage on that
+  platform. `filepath.IsAbs("/protected/f")` returns `false` on Windows
+  (it requires a drive letter), so the check wrongly treated an
+  already-absolute POSIX path as relative and joined it onto the working
+  directory — corrupting it into something that could never match a
+  `/`-prefixed policy prefix again. Every case in
+  `shell_tokenize_test.go`'s protected-path suite was silently not firing
+  on `windows-latest`, hidden until the 0.5.2 `.gitattributes` fix (above)
+  stopped `gofmt` from failing that CI job at an earlier step, before
+  these tests ever ran. Now gated on a POSIX-absolute check
+  (`strings.HasPrefix(p, "/")`) that runs regardless of `GOOS`, with
+  `filepath.ToSlash` restoring the POSIX form after `filepath.Clean`
+  backslash-ifies it on Windows. Verified: native build/vet/test pass,
+  `GOOS=windows` cross-compiles and vets clean, `make test-postgres-full`
+  (129 checks) still zero bypasses.
+
 ## [0.5.2] — 2026-07-26
 
 Bug-fix release. No breaking changes; no new required config.

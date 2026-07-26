@@ -121,12 +121,36 @@ func expandPrefixes(prefixes []string) []string {
 // textual form is always tested, so resolution failure never fails open).
 func canonicalCandidates(p string) []string {
 	abs := p
-	if !filepath.IsAbs(abs) {
+	// This function processes POSIX shell-command text (see
+	// shell_tokenize.go/protect.go's callers) - always "/"-separated,
+	// regardless of what OS this binary itself runs on. filepath.IsAbs
+	// alone is not sufficient to detect that: on Windows it requires a
+	// drive letter and returns false for a POSIX-absolute "/protected/f",
+	// which fell through to the relative-path branch below and got the
+	// CWD wrongly prepended - corrupting the value into something that
+	// could never match a "/"-prefixed policy prefix again. Found via a
+	// real Windows CI failure: every case in shell_tokenize_test.go's
+	// protected-path suite silently stopped firing on windows-latest,
+	// hidden until now by an unrelated gofmt false-positive that failed
+	// the job at an earlier step, before these tests ever ran.
+	posixAbs := strings.HasPrefix(abs, "/")
+	if !filepath.IsAbs(abs) && !posixAbs {
 		if wd, err := os.Getwd(); err == nil {
 			abs = filepath.Join(wd, abs)
 		}
 	}
 	abs = filepath.Clean(abs)
+	if posixAbs {
+		// filepath.Clean silently backslash-ifies a "/"-rooted path on
+		// Windows even though it never touched the cwd above - restore
+		// the POSIX form the rest of this pipeline, and matchPathPrefix's
+		// prefix comparison, expect. filepath.ToSlash is a no-op on
+		// non-Windows. Gated on posixAbs specifically so a genuine native
+		// Windows path (drive letter, already filepath.IsAbs()==true) is
+		// left untouched here - matchPathPrefix's own
+		// normalizeIfWindowsPath handles that shape at comparison time.
+		abs = filepath.ToSlash(abs)
+	}
 	out := []string{abs}
 	if resolved := resolveSymlinksBestEffort(abs); resolved != "" && resolved != abs {
 		out = append(out, resolved)
