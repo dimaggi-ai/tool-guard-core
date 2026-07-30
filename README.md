@@ -73,6 +73,45 @@ the rule, the reason, and a citation back to the source document the
 rule came from. Stage policies in shadow mode against live traffic,
 then promote to enforcement without redeploying agents.
 
+## Reversibility-aware gating
+
+Not every action carries the same risk when an agent gets it wrong. Reading
+a record is free to retry; wiring money, dropping a table, deploying to
+production, or deleting an account cannot be taken back. Core classifies
+every tool call by whether its effect can be undone and guarantees that
+actions which cannot be undone are never silently allowed — the
+**irreversibility floor**.
+
+`engine.ClassifyReversibility` is deterministic (no network, no LLM). It
+derives a class from the tool name/group and the shape of the parameters,
+reusing the existing destructive-operation detectors (the four-dialect SQL
+classifier, the quote-aware shell tokenizer, HTTP method):
+
+| Class | Meaning | Examples |
+|-------|---------|----------|
+| `reversible` | no lasting effect, or a one-step undo at no cost | read / list / get, add-label, create-draft, HTTP GET, `SELECT` |
+| `recoverable` | undoable only with effort / a restore window | file overwrite, `UPDATE`, `DELETE ... WHERE`, HTTP PUT/PATCH/DELETE, `rm file` |
+| `irreversible` | no ordinary undo path | payments / wire / transfer / refund, deploy / publish, account or data destruction, physical actuation, `DROP`/`TRUNCATE`/unscoped `DELETE`, `rm -rf` |
+| `unknown` | not recognized — **fail-safe**, treated as caution-worthy, never silently reversible | an unrecognized tool with no telltale parameters |
+
+The class is exposed as the ordinary condition field `reversibility`, so any
+rule can gate on it:
+
+```yaml
+conditions:
+  field: reversibility
+  operator: eq
+  value: irreversible
+effect: escalate        # human-in-the-loop; an irreversible action is never auto-allowed
+```
+
+The shipped [`policies/irreversibility_floor.yaml`](policies/irreversibility_floor.yaml)
+is an approved, enforcement-mode reference policy that escalates every
+irreversible action to a human reviewer (mapped to **EU AI Act Article 14 —
+human oversight**) and allows clearly reversible ones. Because a call the
+classifier cannot recognize stays `unknown` — never `reversible` — an unknown
+action can never satisfy a "reversible" allow rule by default.
+
 ## Where Enterprise begins
 
 Core is the decision point. **Tool Guard Enterprise**
@@ -104,6 +143,7 @@ not depend on it.
 - Write classifier (file-write path allow/deny-lists, byte ceiling, denied-content regex)
 - HTTP classifier (egress host/scheme/method/port allow/deny-lists)
 - Local LLM content classifier (Gemma 4 via Ollama — image/audio/text gen)
+- Reversibility classifier + irreversibility floor — deterministically class every call reversible / recoverable / irreversible / unknown, and gate irreversible actions to human oversight ([`policies/irreversibility_floor.yaml`](policies/irreversibility_floor.yaml))
 - `tg coverage` — measures what fraction of an agent's tool calls have any governing policy
 - Battle-test harness (`cmd/battle-test`)
 

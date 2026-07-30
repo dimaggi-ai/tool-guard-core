@@ -1,0 +1,82 @@
+policy_id: irreversibility-floor
+name: irreversibility-floor
+description: >
+  The irreversibility floor. An action whose effect cannot be undone must
+  never be auto-allowed — it is escalated to a human reviewer
+  (human-in-the-loop) before it runs. Tool Guard's reversibility classifier
+  (deterministic; no network, no LLM) marks money movement
+  (payments/wire/transfer/refund), account or data destruction, production
+  deploy/publish, physical actuation, and destructive statements (SQL
+  DROP/TRUNCATE or unscoped DELETE, shell `rm -rf`) as `irreversible`. This
+  is the product's accountability guarantee: an agent can never silently
+  commit an action that cannot be taken back. Clearly reversible actions
+  (reads, add-label, create-draft) are allowed.
+version: 1
+# Highest priority (1). The floor is evaluated first so an irreversible
+# action is gated even if a lower-priority policy would have allowed it.
+priority: 1
+status: approved
+mode: enforcement
+
+# Compliance mapping: EU AI Act Article 14 requires that high-risk AI
+# systems remain under effective human oversight. Routing every
+# irreversible action to a human reviewer is a direct implementation of
+# that oversight obligation.
+compliance:
+  eu_ai_act:
+    - art_14
+
+# No `scope` block on purpose: the floor applies to EVERY tool call, so
+# nothing irreversible can slip through a gap in per-tool coverage.
+
+rules:
+  - rule_id: rule-irreversible-escalate
+    name: irreversible actions require human oversight
+    rule_type: sanity
+    description: >
+      Reversibility floor. Any call the engine classifies as `irreversible`
+      is escalated for human-in-the-loop review rather than executed
+      automatically. An effect that cannot be undone is never auto-allowed.
+    conditions:
+      field: reversibility
+      operator: eq
+      value: irreversible
+    effect: escalate
+    effect_config:
+      severity: high
+      escalate_to: human_reviewer
+      timeout_minutes: 60
+      suggested_response: >
+        This action cannot be undone (classified irreversible). A human must
+        review and approve it before it runs.
+    citation:
+      document_id: EU-AI-ACT-2024-1689
+      document_title: Regulation (EU) 2024/1689 (EU AI Act)
+      section: Article 14 — Human oversight
+      excerpt: >
+        High-risk AI systems shall be designed and developed in such a way,
+        including with appropriate human-machine interface tools, that they
+        can be effectively overseen by natural persons during the period in
+        which they are in use. Actions whose effects are irreversible remain
+        subject to human oversight and cannot be auto-approved by the system.
+
+  # Allow examples: clearly reversible actions do not need the human gate.
+  - rule_id: rule-reversible-allow
+    name: clearly reversible actions are permitted
+    rule_type: sanity
+    description: >
+      Read-only or trivially-undoable actions (reversibility=reversible,
+      e.g. read/list/get, add-label, create-draft) are explicitly allowed.
+    conditions:
+      field: reversibility
+      operator: eq
+      value: reversible
+    effect: allow
+    citation:
+      document_id: EU-AI-ACT-2024-1689
+      document_title: Regulation (EU) 2024/1689 (EU AI Act)
+      section: Article 14 — Human oversight
+      excerpt: >
+        Reversible actions do not carry the same oversight requirement as
+        irreversible ones; the oversight measures are proportionate to the
+        risks.
