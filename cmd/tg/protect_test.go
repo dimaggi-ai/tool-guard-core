@@ -99,8 +99,10 @@ func TestProtectClaudeApplyPreservesAndIsIdempotent(t *testing.T) {
 	if data, err := os.ReadFile(policy); err != nil || !bytes.Contains(data, []byte("deny-recursive-root-delete")) {
 		t.Fatalf("starter policy missing/invalid: err=%v data=%s", err, data)
 	}
-	if info, _ := os.Stat(config); info.Mode().Perm() != 0o600 {
-		t.Fatalf("config mode=%o, want 600", info.Mode().Perm())
+	if runtime.GOOS != "windows" {
+		if info, _ := os.Stat(config); info.Mode().Perm() != 0o600 {
+			t.Fatalf("config mode=%o, want 600", info.Mode().Perm())
+		}
 	}
 
 	code, _, errOut = runProtectTest(t, args...)

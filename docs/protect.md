@@ -41,10 +41,11 @@ when paths contain spaces. A default-profile install detects Claude Code and
 refuses versions older than 2.1.139. Passing an explicit `-config` is the
 advanced/test-profile path and bypasses local Claude installation detection.
 
-Configuration and state writes are atomic and mode `0600`. Parent directories
-are mode `0700` when Tool Guard creates them. The selected binary must exist
-and be executable; the selected policy must parse and pass engine validation
-before the hook is activated.
+Configuration and state writes are atomic. On POSIX systems files are mode
+`0600` and Tool Guard-created parent directories are mode `0700`. On Windows,
+files inherit the user-profile ACLs; Go permission bits do not create Windows
+ACLs. The selected binary must exist and be executable; the selected policy
+must parse and pass engine validation before the hook is activated.
 
 ## Safety and reversibility
 
