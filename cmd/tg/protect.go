@@ -272,8 +272,9 @@ func runProtectStatus(args []string, stdout, stderr io.Writer) int {
 	}
 	markerInstalled := hasManagedClaudeHook(root)
 	executableOK := state.Version == 1 || validateTGExecutable(state.Command) == nil
-	installed := markerInstalled && executableOK
-	result := map[string]any{"target": claudeTarget, "protected": installed, "config_path": p.config, "policy_path": state.PolicyPath, "drifted": digest(raw) != state.InstalledSHA256, "executable_ok": executableOK}
+	policyOK := validPolicyFile(state.PolicyPath)
+	installed := markerInstalled && executableOK && policyOK
+	result := map[string]any{"target": claudeTarget, "protected": installed, "config_path": p.config, "policy_path": state.PolicyPath, "drifted": digest(raw) != state.InstalledSHA256, "executable_ok": executableOK, "policy_ok": policyOK}
 	b, _ := json.Marshal(result)
 	fmt.Fprintln(stdout, string(b))
 	if !installed {
@@ -347,7 +348,11 @@ func runUnprotect(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "unprotect:", marshalErr)
 			return 1
 		}
-		if err := atomicWrite(p.config, append(encoded, '\n'), 0o600); err != nil {
+		mode := os.FileMode(0o600)
+		if state.OriginalExisted && state.OriginalMode != 0 {
+			mode = os.FileMode(state.OriginalMode)
+		}
+		if err := atomicWrite(p.config, append(encoded, '\n'), mode); err != nil {
 			fmt.Fprintln(stderr, "unprotect:", err)
 			return 1
 		}
@@ -444,18 +449,28 @@ func requireClaudeExecHookSupport() error {
 	if err != nil {
 		return fmt.Errorf("Claude Code version check failed: %w", err)
 	}
-	fields := strings.Fields(string(out))
-	if len(fields) == 0 {
-		return errors.New("Claude Code returned an empty version")
-	}
-	major, minor, patch, err := parseThreePartVersion(fields[0])
+	major, minor, patch, err := parseClaudeVersionOutput(string(out))
 	if err != nil {
-		return fmt.Errorf("cannot parse Claude Code version %q: %w", fields[0], err)
+		return fmt.Errorf("cannot parse Claude Code version %q: %w", strings.TrimSpace(string(out)), err)
 	}
 	if versionLess(major, minor, patch, minClaudeExecHookMajor, minClaudeExecHookMinor, minClaudeExecHookPatch) {
 		return fmt.Errorf("Claude Code %d.%d.%d is too old; exec-form hooks require >= 2.1.139", major, minor, patch)
 	}
 	return nil
+}
+
+func parseClaudeVersionOutput(output string) (int, int, int, error) {
+	for _, field := range strings.Fields(output) {
+		candidate := strings.Trim(field, "()[]{}<>,;:")
+		major, minor, patch, err := parseThreePartVersion(candidate)
+		if err == nil {
+			return major, minor, patch, nil
+		}
+	}
+	if strings.TrimSpace(output) == "" {
+		return 0, 0, 0, errors.New("empty output")
+	}
+	return 0, 0, 0, errors.New("no major.minor.patch token found")
 }
 
 func parseThreePartVersion(version string) (int, int, int, error) {
@@ -489,7 +504,19 @@ func versionLess(aMajor, aMinor, aPatch, bMajor, bMinor, bPatch int) bool {
 }
 
 func claudeHookArgs(p protectPaths) []string {
-	return []string{"hook", "-policy", p.policy, "-agent-id", managedAgent, "-protect-paths", p.config, "-protect-self", "-fail-closed-tools", "bash,write,edit,notebookedit", "-audit-log", p.audit}
+	args := []string{"hook", "-policy", p.policy, "-agent-id", managedAgent}
+	for _, path := range []string{p.config, p.backup, p.state, filepath.Dir(p.audit)} {
+		args = append(args, "-protect-path", path)
+	}
+	return append(args, "-protect-self", "-fail-closed-tools", "bash,write,edit,notebookedit", "-audit-log", p.audit)
+}
+
+func validPolicyFile(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	policy, err := loadPolicyYAML(path)
+	return err == nil && engine.ValidatePolicy(&policy) == nil
 }
 
 func claudeHookHandler(p protectPaths) map[string]any {

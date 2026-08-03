@@ -225,6 +225,7 @@ Key flags:
 | `-policy-dir DIR` | Load all `*.yaml` policies from this directory |
 | `-policy FILE` | Load a single policy file (mutually exclusive with `-policy-dir`) |
 | `-protect-self` | Unconditionally protect the policy dir and `$HOME/.claude` from writes — the agent cannot edit this away |
+| `-protect-path PATH` | Protect one exact prefix; repeat for multiple paths (preserves commas in names) |
 | `-protect-paths P1,P2` | Additional prefixes to protect (comma-separated) |
 | `-fail-closed` | Deny on any internal error (tooling glitch, bad policy load) |
 | `-fail-closed-tools bash,write,edit,notebookedit` | Deny only these tools on error; others fail open |

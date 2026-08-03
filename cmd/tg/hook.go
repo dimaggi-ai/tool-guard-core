@@ -58,6 +58,8 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	failClosed := fs.Bool("fail-closed", false, "on internal error, emit deny instead of allow")
 	failClosedTools := fs.String("fail-closed-tools", "", "comma list of tool names to fail CLOSED for on internal error (others fail open); overrides -fail-closed's global behavior")
 	protectPaths := fs.String("protect-paths", "", "comma list of path prefixes; a write-capable tool targeting one is denied BEFORE policy eval, unconditionally")
+	var protectPath repeatablePathFlag
+	fs.Var(&protectPath, "protect-path", "path prefix denied before policy eval; repeat for multiple paths")
 	protectSelf := fs.Bool("protect-self", false, "shorthand: also protect the policy dir/file and $HOME/.claude from writes")
 	auditLog := fs.String("audit-log", "", "append each hook decision to this SHA-256 hash-chained JSONL log (tamper-evident, verify with `tg verify`); empty disables")
 	unknownToolsDeny := fs.Bool("unknown-tools-deny", false, "deny any tool_name not declared in scope.tool_names of some loaded ENFORCEMENT policy (closes the tool-name-spoofing/new-tool-goes-ungoverned class); mirrors tg-proxy's -unknown-tools-deny")
@@ -147,7 +149,7 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	}
 
 	// ── Protected paths (Feature B) — BEFORE policy eval, unconditional ──
-	protectList := splitCSVPaths(*protectPaths)
+	protectList := append(splitCSVPaths(*protectPaths), protectPath...)
 	if *protectSelf {
 		protectList = append(selfProtectPaths(*policyDir, *policyFile), protectList...)
 	}
@@ -345,12 +347,31 @@ func splitCSVPaths(s string) []string {
 	return out
 }
 
+// repeatablePathFlag preserves paths exactly, including commas. The legacy
+// -protect-paths comma list remains supported for hand-written invocations,
+// while generated integrations use repeatable -protect-path flags so valid
+// filesystem names cannot be split accidentally.
+type repeatablePathFlag []string
+
+func (p *repeatablePathFlag) String() string {
+	return strings.Join(*p, ",")
+}
+
+func (p *repeatablePathFlag) Set(value string) error {
+	if strings.TrimSpace(value) == "" {
+		return errors.New("protected path cannot be empty")
+	}
+	*p = append(*p, value)
+	return nil
+}
+
 const hookUsage = `tg hook — PreToolUse guard for coding agents
 
 Usage:
   tg hook (-policy-dir DIR | -policy FILE) [-mode shadow|enforcement]
           [-agent-id NAME] [-fail-closed] [-fail-closed-tools bash,write,edit]
-          [-protect-paths P1,P2] [-protect-self] [-unknown-tools-deny]
+          [-protect-path PATH ...] [-protect-paths P1,P2]
+          [-protect-self] [-unknown-tools-deny]
 
 Reads ONE PreToolUse JSON object on stdin, evaluates it, and writes a
 hookSpecificOutput permissionDecision (deny|ask|allow) to stdout. Always

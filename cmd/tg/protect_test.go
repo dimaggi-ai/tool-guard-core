@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -76,7 +77,7 @@ func TestProtectClaudeApplyPreservesAndIsIdempotent(t *testing.T) {
 	if !bytes.Contains(installed, []byte(`"theme": "dark"`)) || !bytes.Contains(installed, []byte("existing-hook")) {
 		t.Fatalf("unrelated settings/hooks lost: %s", installed)
 	}
-	for _, want := range []string{managedAgent, "-protect-paths", "-protect-self", "-fail-closed-tools", "bash,write,edit,notebookedit", "-audit-log", `"args"`, `"timeout": 10`} {
+	for _, want := range []string{managedAgent, "-protect-path", "-protect-self", "-fail-closed-tools", "bash,write,edit,notebookedit", "-audit-log", `"args"`, `"timeout": 10`} {
 		if !bytes.Contains(installed, []byte(want)) {
 			t.Errorf("installed command missing %q: %s", want, installed)
 		}
@@ -91,15 +92,16 @@ func TestProtectClaudeApplyPreservesAndIsIdempotent(t *testing.T) {
 	if filepath.Clean(state.Command) != filepath.Clean(tgPath) {
 		t.Fatalf("managed command=%q, want %q", state.Command, tgPath)
 	}
-	configProtected := false
+	protected := map[string]bool{}
 	for i := 0; i+1 < len(state.Args); i++ {
-		if state.Args[i] == "-protect-paths" && filepath.Clean(state.Args[i+1]) == filepath.Clean(config) {
-			configProtected = true
-			break
+		if state.Args[i] == "-protect-path" {
+			protected[filepath.Clean(state.Args[i+1])] = true
 		}
 	}
-	if !configProtected {
-		t.Fatalf("managed args do not protect config %q: %q", config, state.Args)
+	for _, path := range []string{config, state.BackupPath, config + ".tool-guard-state.json", filepath.Dir(state.AuditPath)} {
+		if !protected[filepath.Clean(path)] {
+			t.Errorf("managed args do not protect %q: %q", path, state.Args)
+		}
 	}
 	backup, err := os.ReadFile(config + ".tool-guard.bak")
 	if err != nil || !bytes.Equal(backup, original) {
@@ -190,6 +192,11 @@ func TestUnprotectPreservesPostInstallDrift(t *testing.T) {
 	if !bytes.Contains(cleaned, []byte("preserve-me")) || bytes.Contains(cleaned, []byte(managedAgent)) {
 		t.Fatalf("targeted removal did not preserve drift: %s", cleaned)
 	}
+	if runtime.GOOS != "windows" {
+		if info, _ := os.Stat(config); info.Mode().Perm() != 0o640 {
+			t.Fatalf("drifted unprotect mode=%o, want original 640", info.Mode().Perm())
+		}
+	}
 }
 
 func TestReprotectAfterDriftCannotDiscardUserChanges(t *testing.T) {
@@ -257,6 +264,21 @@ func TestParseClaudeVersion(t *testing.T) {
 	if versionLess(2, 1, 138, 2, 1, 139) != true || versionLess(2, 1, 139, 2, 1, 139) != false {
 		t.Fatal("minimum-version comparison is incorrect")
 	}
+	for _, tc := range []struct {
+		output string
+		want   string
+	}{
+		{output: "2.1.220 (Claude Code)", want: "2.1.220"},
+		{output: "Claude Code v2.1.220", want: "2.1.220"},
+		{output: "claude-code (2.2.0-beta)", want: "2.2.0"},
+	} {
+		t.Run("output_"+tc.want, func(t *testing.T) {
+			major, minor, patch, err := parseClaudeVersionOutput(tc.output)
+			if err != nil || fmt.Sprintf("%d.%d.%d", major, minor, patch) != tc.want {
+				t.Fatalf("parseClaudeVersionOutput(%q)=%d.%d.%d, %v; want %s", tc.output, major, minor, patch, err, tc.want)
+			}
+		})
+	}
 }
 
 func TestManagedClaudeHookDetectionSupportsExecAndLegacy(t *testing.T) {
@@ -296,5 +318,26 @@ func TestProtectStatusFailsWhenManagedExecutableDisappears(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), `"protected":false`) || !strings.Contains(stdout.String(), `"executable_ok":false`) {
 		t.Fatalf("status did not report missing executable: %s", stdout.String())
+	}
+}
+
+func TestProtectStatusFailsWhenManagedPolicyDisappears(t *testing.T) {
+	_, config, tgPath, _ := protectFixture(t)
+	if code, _, errOut := runProtectTest(t, "claude", "-apply", "-config", config, "-tg", tgPath); code != 0 {
+		t.Fatalf("protect failed: %s", errOut)
+	}
+	state, err := loadProtectState(config + ".tool-guard-state.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(state.PolicyPath); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := runProtectStatus([]string{"claude", "-config", config}, &stdout, &stderr); code != 3 {
+		t.Fatalf("status code=%d, want 3; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"protected":false`) || !strings.Contains(stdout.String(), `"policy_ok":false`) {
+		t.Fatalf("status did not report missing policy: %s", stdout.String())
 	}
 }

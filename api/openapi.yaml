@@ -340,7 +340,7 @@ components:
             signed_by: {type: string}
           additionalProperties: true
       additionalProperties: true
-    EvaluationResult:
+    EvaluationResultFields:
       type: object
       required: [decision, action_taken, effective_mode]
       properties:
@@ -357,16 +357,20 @@ components:
         primary_citation: {$ref: "#/components/schemas/Citation"}
         is_near_miss: {type: boolean}
         suggested_response: {type: string}
-      additionalProperties: false
+    EvaluationResult:
+      allOf:
+        - $ref: "#/components/schemas/EvaluationResultFields"
+      unevaluatedProperties: false
     EscalatedEvaluation:
       allOf:
-        - $ref: "#/components/schemas/EvaluationResult"
+        - $ref: "#/components/schemas/EvaluationResultFields"
         - type: object
           required: [envelope_id, escalation_id, poll_url]
           properties:
             envelope_id: {type: string}
             escalation_id: {type: string}
             poll_url: {type: string}
+      unevaluatedProperties: false
     RuleResult:
       type: object
       required: [rule_id, rule_name, policy_id, matched, effect, citation]

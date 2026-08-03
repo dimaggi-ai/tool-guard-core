@@ -65,6 +65,30 @@ func TestOpenAPI31StructureAndReferences(t *testing.T) {
 	walkRefs(t, doc, components)
 }
 
+func TestEvaluationSchemasAllowOnlyDeclaredComposedProperties(t *testing.T) {
+	doc := loadContract(t)
+	components := asMap(t, doc["components"], "components")
+	schemas := asMap(t, components["schemas"], "components.schemas")
+	for _, name := range []string{"EvaluationResult", "EscalatedEvaluation"} {
+		schema := asMap(t, schemas[name], "components.schemas."+name)
+		if schema["unevaluatedProperties"] != false {
+			t.Errorf("%s must close the composed schema with unevaluatedProperties:false", name)
+		}
+		allOf, ok := schema["allOf"].([]any)
+		if !ok || len(allOf) == 0 {
+			t.Fatalf("%s must compose EvaluationResultFields", name)
+		}
+		base := asMap(t, allOf[0], name+".allOf[0]")
+		if base["$ref"] != "#/components/schemas/EvaluationResultFields" {
+			t.Errorf("%s base ref=%v, want EvaluationResultFields", name, base["$ref"])
+		}
+	}
+	base := asMap(t, schemas["EvaluationResultFields"], "components.schemas.EvaluationResultFields")
+	if _, closedTooEarly := base["additionalProperties"]; closedTooEarly {
+		t.Fatal("EvaluationResultFields must remain composable; close only the concrete schemas")
+	}
+}
+
 func walkRefs(t *testing.T, value any, components map[string]any) {
 	t.Helper()
 	switch node := value.(type) {

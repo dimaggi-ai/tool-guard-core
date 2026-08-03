@@ -21,7 +21,10 @@ the following values in a separate `args` array:
 
 ```text
 hook -policy <absolute-policy> -agent-id tool-guard-claude \
-  -protect-paths <absolute-selected-settings.json> \
+  -protect-path <absolute-selected-settings.json> \
+  -protect-path <absolute-pristine-backup> \
+  -protect-path <absolute-managed-state> \
+  -protect-path <absolute-audit-directory> \
   -protect-self \
   -fail-closed-tools bash,write,edit,notebookedit \
   -audit-log <absolute-audit-log>
@@ -53,7 +56,9 @@ must parse and pass engine validation before the hook is activated.
 - Existing settings and unrelated hook entries are preserved.
 - Repeating `protect ... -apply` adds no duplicate entry.
 - The first pre-install backup is never overwritten.
-- `-protect-self` blocks the agent from writing its policy or Claude settings.
+- The generated protected paths block writes to Claude settings, managed state,
+  the pristine backup, and the audit directory (including rotation siblings).
+- `-protect-self` additionally blocks the agent from writing its policy source.
 - Consequential tools fail closed if policy loading or evaluation fails.
 - Every hook decision is appended to the hash-chained audit log.
 
@@ -82,5 +87,5 @@ tg protect claude \
 ```
 
 All generated command paths are absolute. `status` accepts `-config`, verifies
-that the managed executable still exists, and reports `executable_ok`. Both
-mutating verbs require `-apply`.
+that the managed executable and policy remain usable, and reports
+`executable_ok` and `policy_ok`. Both mutating verbs require `-apply`.

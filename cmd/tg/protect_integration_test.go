@@ -66,6 +66,19 @@ func TestProtectIntegrationGeneratedClaudeHook(t *testing.T) {
 			t.Fatalf("decision=%q, want deny", result.HookSpecificOutput.PermissionDecision)
 		}
 	})
+	for name, path := range map[string]string{
+		"managed backup write denied": state.BackupPath,
+		"managed state write denied":  config + ".tool-guard-state.json",
+		"managed audit write denied":  state.AuditPath,
+	} {
+		t.Run(name, func(t *testing.T) {
+			payload := `{"tool_name":"Write","tool_input":{"file_path":` + string(mustJSON(t, path)) + `,"content":"disable"}}`
+			result := runInstalled(t, payload)
+			if result.HookSpecificOutput.PermissionDecision != "deny" {
+				t.Fatalf("decision=%q, want deny for %s", result.HookSpecificOutput.PermissionDecision, path)
+			}
+		})
+	}
 	t.Run("consequential tool fails closed", func(t *testing.T) {
 		if err := os.WriteFile(state.PolicyPath, []byte("not: [valid"), 0o600); err != nil {
 			t.Fatal(err)
