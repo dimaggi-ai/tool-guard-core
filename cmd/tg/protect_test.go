@@ -76,7 +76,7 @@ func TestProtectClaudeApplyPreservesAndIsIdempotent(t *testing.T) {
 	if !bytes.Contains(installed, []byte(`"theme": "dark"`)) || !bytes.Contains(installed, []byte("existing-hook")) {
 		t.Fatalf("unrelated settings/hooks lost: %s", installed)
 	}
-	for _, want := range []string{managedAgent, "-protect-paths", config, "-protect-self", "-fail-closed-tools", "bash,write,edit,notebookedit", "-audit-log", `"args"`, `"timeout": 10`} {
+	for _, want := range []string{managedAgent, "-protect-paths", "-protect-self", "-fail-closed-tools", "bash,write,edit,notebookedit", "-audit-log", `"args"`, `"timeout": 10`} {
 		if !bytes.Contains(installed, []byte(want)) {
 			t.Errorf("installed command missing %q: %s", want, installed)
 		}
@@ -90,6 +90,16 @@ func TestProtectClaudeApplyPreservesAndIsIdempotent(t *testing.T) {
 	}
 	if filepath.Clean(state.Command) != filepath.Clean(tgPath) {
 		t.Fatalf("managed command=%q, want %q", state.Command, tgPath)
+	}
+	configProtected := false
+	for i := 0; i+1 < len(state.Args); i++ {
+		if state.Args[i] == "-protect-paths" && filepath.Clean(state.Args[i+1]) == filepath.Clean(config) {
+			configProtected = true
+			break
+		}
+	}
+	if !configProtected {
+		t.Fatalf("managed args do not protect config %q: %q", config, state.Args)
 	}
 	backup, err := os.ReadFile(config + ".tool-guard.bak")
 	if err != nil || !bytes.Equal(backup, original) {
