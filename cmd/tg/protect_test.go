@@ -14,6 +14,7 @@ func protectFixture(t *testing.T) (home, config, tgPath string, original []byte)
 	t.Helper()
 	home = t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	config = filepath.Join(home, ".claude", "settings.json")
 	if err := os.MkdirAll(filepath.Dir(config), 0o700); err != nil {
 		t.Fatal(err)
@@ -75,13 +76,20 @@ func TestProtectClaudeApplyPreservesAndIsIdempotent(t *testing.T) {
 	if !bytes.Contains(installed, []byte(`"theme": "dark"`)) || !bytes.Contains(installed, []byte("existing-hook")) {
 		t.Fatalf("unrelated settings/hooks lost: %s", installed)
 	}
-	for _, want := range []string{managedAgent, "-protect-self", "-fail-closed-tools", "bash,write,edit,notebookedit", "-audit-log", tgPath, `"args"`, `"timeout": 10`} {
+	for _, want := range []string{managedAgent, "-protect-self", "-fail-closed-tools", "bash,write,edit,notebookedit", "-audit-log", `"args"`, `"timeout": 10`} {
 		if !bytes.Contains(installed, []byte(want)) {
 			t.Errorf("installed command missing %q: %s", want, installed)
 		}
 	}
 	if count := bytes.Count(installed, []byte(managedAgent)); count != 1 {
 		t.Fatalf("managed hook count=%d, want 1", count)
+	}
+	state, err := loadProtectState(config + ".tool-guard-state.json")
+	if err != nil {
+		t.Fatalf("load protection state: %v", err)
+	}
+	if filepath.Clean(state.Command) != filepath.Clean(tgPath) {
+		t.Fatalf("managed command=%q, want %q", state.Command, tgPath)
 	}
 	backup, err := os.ReadFile(config + ".tool-guard.bak")
 	if err != nil || !bytes.Equal(backup, original) {
@@ -141,8 +149,10 @@ func TestProtectStatusAndExactUnprotect(t *testing.T) {
 	if err != nil || !bytes.Equal(restored, original) {
 		t.Fatalf("exact restore failed: err=%v got=%s", err, restored)
 	}
-	if info, _ := os.Stat(config); info.Mode().Perm() != 0o640 {
-		t.Fatalf("restored mode=%o, want original 640", info.Mode().Perm())
+	if runtime.GOOS != "windows" {
+		if info, _ := os.Stat(config); info.Mode().Perm() != 0o640 {
+			t.Fatalf("restored mode=%o, want original 640", info.Mode().Perm())
+		}
 	}
 }
 
