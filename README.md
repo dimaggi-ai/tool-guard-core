@@ -28,25 +28,28 @@ Nothing in it is gated.
 
 ## Guard a coding agent in 60 seconds
 
-Run AI coding agents (Claude Code, OpenAI Codex, Google Antigravity)? One
-policy gates the shell commands all of them try to run — `rm -rf /` denied,
-`git push` / `reset --hard` escalated (blocked on Claude Code & Codex, an
-interactive "ask" on Antigravity), the rest allowed:
+The native protector currently supports Claude Code 2.1.139 or newer. It previews the exact
+settings change, preserves unrelated hooks, installs a secure starter policy,
+and does nothing until `-apply` is supplied:
 
 ```bash
 git clone https://github.com/dimaggi-ai/tool-guard-core
-cd tool-guard-core/examples/coding-agent-guard
-./run.sh                 # offline proof, no agent/network (builds tg; needs Go + jq)
-./install.sh             # wire the PreToolUse hook into whichever of these agents you have
+cd tool-guard-core
+make build
+./bin/tg protect claude          # dry-run: inspect the proposed settings.json
+./bin/tg protect claude -apply   # back up, install, and enable enforcement
+./bin/tg status claude
 ```
 
-It matches the *shape* of a destructive command (an `rm` + a recursive/force
-flag in any spelling + a root/home target), not one brittle string, so common
-flag-spelling variants don't slip past. Scope is honest: it gates `rm` on shell
-tools (`bash` / `run_command`) — a delete via another tool or a script's
-`os.remove()` needs its own rule. Full per-agent mapping in
+`tg unprotect claude` previews rollback; add `-apply` to remove the managed
+hook. The first pristine backup is never overwritten, and post-install user
+changes are preserved by targeted removal. See [the protection guide](docs/protect.md).
+
+The starter policy matches the *shape* of a destructive command (an `rm` plus
+recursive/force flags and a root/home target), rather than one brittle string.
+The lower-level hook and reference adapters for Codex and Antigravity remain in
 [`examples/coding-agent-guard/`](examples/coding-agent-guard/README.md). Want a
-different rule? Edit the `policy.yaml`, or browse the
+different policy? Pass `-policy /absolute/path/policy.yaml`, or browse the
 [example bundles](#examples-included) for ready-made guards (money, database,
 customer-data export, content safety).
 

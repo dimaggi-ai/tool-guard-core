@@ -5,7 +5,7 @@
 
 GO      ?= go
 BIN     ?= bin
-PKGS    := ./pkg/... ./cmd/...
+PKGS    := ./pkg/... ./cmd/... ./api/...
 
 .DEFAULT_GOAL := help
 

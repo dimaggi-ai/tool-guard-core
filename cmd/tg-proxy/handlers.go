@@ -17,7 +17,10 @@ import (
 // itself is defined in main.go; this file holds only request handlers
 // and the access-log middleware.
 
-func (p *proxy) healthz(w http.ResponseWriter, _ *http.Request) {
+func (p *proxy) healthz(w http.ResponseWriter, r *http.Request) {
+	if !requireHTTPMethod(w, r, http.MethodGet) {
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":     "ok",
 		"started_at": p.startedAt.Format(time.RFC3339),
@@ -25,7 +28,10 @@ func (p *proxy) healthz(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-func (p *proxy) readyz(w http.ResponseWriter, _ *http.Request) {
+func (p *proxy) readyz(w http.ResponseWriter, r *http.Request) {
+	if !requireHTTPMethod(w, r, http.MethodGet) {
+		return
+	}
 	p.mu.RLock()
 	n := len(p.policies)
 	p.mu.RUnlock()
@@ -40,7 +46,10 @@ func (p *proxy) readyz(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ready", "policies": n})
 }
 
-func (p *proxy) listPolicies(w http.ResponseWriter, _ *http.Request) {
+func (p *proxy) listPolicies(w http.ResponseWriter, r *http.Request) {
+	if !requireHTTPMethod(w, r, http.MethodGet) {
+		return
+	}
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	out := make([]map[string]any, 0, len(p.policies))
@@ -57,7 +66,10 @@ func (p *proxy) listPolicies(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-func (p *proxy) metrics(w http.ResponseWriter, _ *http.Request) {
+func (p *proxy) metrics(w http.ResponseWriter, r *http.Request) {
+	if !requireHTTPMethod(w, r, http.MethodGet) {
+		return
+	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	fmt.Fprintf(w, "tg_proxy_uptime_seconds %d\n", int64(time.Since(p.startedAt).Seconds()))
 	fmt.Fprintf(w, "tg_proxy_policies_loaded %d\n", p.policyCount())
@@ -80,6 +92,15 @@ func (p *proxy) metrics(w http.ResponseWriter, _ *http.Request) {
 	fmt.Fprintf(w, "tg_proxy_regex_cache_size %d\n", engine.CachedRegexCount())
 	fmt.Fprintf(w, "tg_proxy_rate_limit_keys %d\n", p.rateLimit.stats())
 	fmt.Fprintf(w, "tg_proxy_velocity_keys %d\n", p.velocity.stats())
+}
+
+func requireHTTPMethod(w http.ResponseWriter, r *http.Request, method string) bool {
+	if r.Method == method {
+		return true
+	}
+	w.Header().Set("Allow", method)
+	writeJSON(w, http.StatusMethodNotAllowed, errBody(method+" only"))
+	return false
 }
 
 func (p *proxy) reloadHandler(w http.ResponseWriter, r *http.Request) {
@@ -179,7 +200,7 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 		mode = domain.PolicyModeEnforcement
 	case "":
 	default:
-		http.Error(w, `{"error":"unknown mode (must be shadow|enforcement)"}`, http.StatusBadRequest)
+		writeJSON(w, http.StatusBadRequest, errBody("unknown mode (must be shadow|enforcement)"))
 		return
 	}
 

@@ -42,6 +42,9 @@ Usage:
   tg simulate  (-policy-dir DIR | -policy POLICY.yaml) -calls CALLS.jsonl
   tg coverage  (-policy-dir DIR | -policy POLICY.yaml) -calls CALLS.jsonl
   tg hook      (-policy-dir DIR | -policy POLICY.yaml) [-protect-self] [-fail-closed-tools ...]
+  tg protect   claude [-apply] [-config PATH] [-policy PATH] [-tg PATH]
+  tg status    [claude] [-config PATH]
+  tg unprotect claude [-apply] [-config PATH]
   tg verify    -file DECISIONS.jsonl
   tg lint      -policy POLICY.yaml
   tg benchmark [-trials N]
@@ -99,6 +102,12 @@ func main() {
 		os.Exit(cmdCoverage(args))
 	case "hook":
 		os.Exit(cmdHook(args))
+	case "protect":
+		os.Exit(cmdProtect(args))
+	case "status":
+		os.Exit(cmdProtectStatus(args))
+	case "unprotect":
+		os.Exit(cmdUnprotect(args))
 	case "verify":
 		os.Exit(cmdVerify(args))
 	case "lint":
