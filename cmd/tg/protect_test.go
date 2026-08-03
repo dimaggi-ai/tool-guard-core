@@ -76,7 +76,7 @@ func TestProtectClaudeApplyPreservesAndIsIdempotent(t *testing.T) {
 	if !bytes.Contains(installed, []byte(`"theme": "dark"`)) || !bytes.Contains(installed, []byte("existing-hook")) {
 		t.Fatalf("unrelated settings/hooks lost: %s", installed)
 	}
-	for _, want := range []string{managedAgent, "-protect-self", "-fail-closed-tools", "bash,write,edit,notebookedit", "-audit-log", `"args"`, `"timeout": 10`} {
+	for _, want := range []string{managedAgent, "-protect-paths", config, "-protect-self", "-fail-closed-tools", "bash,write,edit,notebookedit", "-audit-log", `"args"`, `"timeout": 10`} {
 		if !bytes.Contains(installed, []byte(want)) {
 			t.Errorf("installed command missing %q: %s", want, installed)
 		}

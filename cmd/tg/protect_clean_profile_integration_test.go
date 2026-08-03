@@ -102,6 +102,7 @@ func TestProtectCleanProfileActivation(t *testing.T) {
 			"hook",
 			"-policy", state.PolicyPath,
 			"-agent-id", managedAgent,
+			"-protect-paths", config,
 			"-protect-self",
 			"-fail-closed-tools", "bash,write,edit,notebookedit",
 			"-audit-log", state.AuditPath,

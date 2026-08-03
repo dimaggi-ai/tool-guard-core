@@ -14,9 +14,10 @@ import (
 
 func TestProtectIntegrationGeneratedClaudeHook(t *testing.T) {
 	home := t.TempDir()
-	config := filepath.Join(home, ".claude", "settings.json")
+	config := filepath.Join(t.TempDir(), "selected profile", "settings.json")
+	env := cleanProfileEnvironment(home)
 	cmd := exec.Command(tgBinary, "protect", "claude", "-apply", "-config", config, "-tg", tgBinary)
-	cmd.Env = append(os.Environ(), "HOME="+home)
+	cmd.Env = env
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("protect claude: %v\n%s", err, output)
 	}
@@ -32,7 +33,7 @@ func TestProtectIntegrationGeneratedClaudeHook(t *testing.T) {
 	runInstalled := func(t *testing.T, payload string) hookResultJSON {
 		t.Helper()
 		cmd := exec.Command(state.Command, state.Args...)
-		cmd.Env = append(os.Environ(), "HOME="+home)
+		cmd.Env = env
 		cmd.Stdin = strings.NewReader(payload)
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &stdout, &stderr

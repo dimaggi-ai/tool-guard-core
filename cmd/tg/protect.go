@@ -489,7 +489,7 @@ func versionLess(aMajor, aMinor, aPatch, bMajor, bMinor, bPatch int) bool {
 }
 
 func claudeHookArgs(p protectPaths) []string {
-	return []string{"hook", "-policy", p.policy, "-agent-id", managedAgent, "-protect-self", "-fail-closed-tools", "bash,write,edit,notebookedit", "-audit-log", p.audit}
+	return []string{"hook", "-policy", p.policy, "-agent-id", managedAgent, "-protect-paths", p.config, "-protect-self", "-fail-closed-tools", "bash,write,edit,notebookedit", "-audit-log", p.audit}
 }
 
 func claudeHookHandler(p protectPaths) map[string]any {

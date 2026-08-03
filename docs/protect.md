@@ -21,6 +21,7 @@ the following values in a separate `args` array:
 
 ```text
 hook -policy <absolute-policy> -agent-id tool-guard-claude \
+  -protect-paths <absolute-selected-settings.json> \
   -protect-self \
   -fail-closed-tools bash,write,edit,notebookedit \
   -audit-log <absolute-audit-log>
