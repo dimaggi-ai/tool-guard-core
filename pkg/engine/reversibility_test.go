@@ -302,12 +302,12 @@ func TestSQLSkeletonEdgeCases(t *testing.T) {
 		want ReversibilityClass
 	}{
 		{"SELECT $1, $2 FROM t WHERE id = $1", Reversible},                  // bind params, not dollar-quotes
-		{"SELECT '' AS empty FROM t", Reversible},                            // empty string literal
-		{"SELECT 'a''b DROP' FROM t", Reversible},                            // doubled-quote escape, DROP in string
-		{`SELECT "weird DROP col" FROM t`, Reversible},                       // DROP in a quoted identifier
-		{"SELECT 1 /* DROP TABLE x */ FROM t", Reversible},                   // DROP in a block comment
-		{"SELECT 1 FROM t -- ; DELETE FROM u\n", Reversible},                 // ; and DELETE in a line comment
-		{"UPDATE t SET note = 'has ; and WHERE' WHERE id = 5", Recoverable},  // scoped; string has ; and WHERE
+		{"SELECT '' AS empty FROM t", Reversible},                           // empty string literal
+		{"SELECT 'a''b DROP' FROM t", Reversible},                           // doubled-quote escape, DROP in string
+		{`SELECT "weird DROP col" FROM t`, Reversible},                      // DROP in a quoted identifier
+		{"SELECT 1 /* DROP TABLE x */ FROM t", Reversible},                  // DROP in a block comment
+		{"SELECT 1 FROM t -- ; DELETE FROM u\n", Reversible},                // ; and DELETE in a line comment
+		{"UPDATE t SET note = 'has ; and WHERE' WHERE id = 5", Recoverable}, // scoped; string has ; and WHERE
 		{"SELECT 'unterminated DROP", Reversible},                           // unterminated string runs to end, safe
 	}
 	for _, tc := range cases {

@@ -310,13 +310,26 @@ func lintPolicy(p domain.Policy) []LintFinding {
 	// tool_names AND no tool_groups runs on every tool call across the
 	// org, which means every call carries the policy's eval cost and is
 	// a candidate for false-positive denies. Almost never what the
-	// author intended.
-	if len(p.Scope.ToolNames) == 0 && len(p.Scope.ToolGroups) == 0 {
+	// author intended — so a designed floor must SAY so with
+	// scope.intentionally_global: true, which suppresses this finding.
+	if len(p.Scope.ToolNames) == 0 && len(p.Scope.ToolGroups) == 0 && !p.Scope.IntentionallyGlobal {
 		out = append(out, LintFinding{
 			Rule:     "policy-scope-leak",
 			Severity: "warn",
 			Message:  "policy has empty scope (no tool_names and no tool_groups) — it will evaluate on every tool call, including unrelated ones, raising the false-positive deny rate and per-call latency",
-			Suggest:  "add scope.tool_names or scope.tool_groups to constrain which tools this policy guards",
+			Suggest:  "add scope.tool_names or scope.tool_groups to constrain which tools this policy guards, or declare scope.intentionally_global: true if evaluating on every call is the design (e.g. a floor policy)",
+		})
+	}
+
+	// Heuristic 0b: intentionally_global alongside a tool selector is a
+	// contradiction — the selector wins (matching gates on it), so the
+	// declaration misdocuments the policy's actual reach.
+	if p.Scope.IntentionallyGlobal && (len(p.Scope.ToolNames) > 0 || len(p.Scope.ToolGroups) > 0) {
+		out = append(out, LintFinding{
+			Rule:     "global-scope-contradiction",
+			Severity: "warn",
+			Message:  "scope.intentionally_global is true but tool_names/tool_groups are also set — the selectors gate matching, so the policy is NOT global and the declaration misdocuments it",
+			Suggest:  "remove scope.intentionally_global, or remove the tool selectors if the policy is meant to evaluate on every call",
 		})
 	}
 

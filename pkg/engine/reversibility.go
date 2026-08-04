@@ -848,8 +848,8 @@ func splitComparison(b string) (op, l, r string, ok bool) {
 // dollar-quoted body. Keyword scanning, `;` statement
 // splitting, and WHERE detection all run on the skeleton, so nothing inside a
 // literal or comment can hide a verb, fake a WHERE, or split a statement.
-// Escapes are handled so a quote does not close early: a doubled quote (`''`,
-// `""`, ` `` `) and a backslash escape (`\'`, MySQL) are consumed as content.
+// Escapes are handled so a quote does not close early: a doubled quote (`”`,
+// `""`, ` “ `) and a backslash escape (`\'`, MySQL) are consumed as content.
 // Malformed / unterminated spans run to end-of-input (safe: the whole tail
 // becomes literal content, and the closing delimiter is absent so nothing after
 // it is misread). Byte length is always preserved.
