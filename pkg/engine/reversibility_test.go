@@ -86,6 +86,8 @@ func TestClassifyReversibility(t *testing.T) {
 		{"HTTP GET", "http_request", "", map[string]any{"url": "https://api.example.com/x", "method": "GET"}, Reversible},
 		{"generic HTTP DELETE is Unknown without endpoint semantics", "http_request", "", map[string]any{"url": "https://api.example.com/x/1", "method": "DELETE"}, Unknown},
 		{"generic HTTP POST is Unknown without endpoint semantics", "http_request", "", map[string]any{"url": "https://bank.example/wire-transfers", "method": "POST"}, Unknown},
+		{"HTTP URL without method is Unknown", "get_url", "network_egress", map[string]any{"url": "https://bank.example/wire-transfers"}, Unknown},
+		{"HTTP URL with blank method is Unknown", "get_url", "network_egress", map[string]any{"url": "https://bank.example/wire-transfers", "method": " "}, Unknown},
 
 		// ── Unknown default (fail-safe) ──
 		{"unrecognized tool", "frobnicate_widget", "misc", nil, Unknown},
@@ -618,6 +620,8 @@ func TestIrreversibilityFloorPolicy(t *testing.T) {
 		{"wrapper-hidden rm -rf escalates", "bash", "", map[string]any{"command": "sudo rm -rf /data"}, domain.DecisionEscalated},
 		{"misnamed destructive command escalates", "get_data", "shell", map[string]any{"command": "rm -rf /data"}, domain.DecisionEscalated},
 		{"generic HTTP wire POST escalates", "http_request", "network_egress", map[string]any{"url": "https://bank.example/wire-transfers", "method": "POST"}, domain.DecisionEscalated},
+		{"HTTP wire URL without method escalates", "get_url", "network_egress", map[string]any{"url": "https://bank.example/wire-transfers"}, domain.DecisionEscalated},
+		{"HTTP wire URL with blank method escalates", "get_url", "network_egress", map[string]any{"url": "https://bank.example/wire-transfers", "method": " "}, domain.DecisionEscalated},
 		{"read is allowed", "get_ticker", "market_data", nil, domain.DecisionAllowed},
 		{"add-label is allowed", "add_label", "gmail", nil, domain.DecisionAllowed},
 		// Recoverable (scoped write) is permitted — it is undoable with effort.

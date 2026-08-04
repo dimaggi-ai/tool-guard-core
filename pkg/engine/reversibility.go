@@ -122,12 +122,10 @@ func ClassifyReversibility(env domain.ActionEnvelope) ReversibilityClass {
 	if argv, ok := normalizeArgv(params["argv"]); ok && len(argv) > 0 {
 		consider(argvReversibility(argv))
 	}
-	// Outbound HTTP: presence of parameters.url (the http_classify convention
-	// for "this is HTTP") plus parameters.method classifies the egress method.
+	// Outbound HTTP: a URL is an execution surface. A missing or blank method is
+	// Unknown rather than evidence that the request is safe.
 	if firstString(params, "url") != "" {
-		if m := firstString(params, "method"); m != "" {
-			consider(httpMethodReversibility(m))
-		}
+		consider(httpMethodReversibility(firstString(params, "method")))
 	}
 
 	if hasAuth {
