@@ -107,10 +107,42 @@ effect: escalate        # human-in-the-loop; an irreversible action is never aut
 
 The shipped [`policies/irreversibility_floor.yaml`](policies/irreversibility_floor.yaml)
 is an approved, enforcement-mode reference policy that escalates every
-irreversible action to a human reviewer (mapped to **EU AI Act Article 14 —
-human oversight**) and allows clearly reversible ones. Because a call the
-classifier cannot recognize stays `unknown` — never `reversible` — an unknown
-action can never satisfy a "reversible" allow rule by default.
+`irreversible` **and** every `unknown` action to a human reviewer (mapped to
+**EU AI Act Article 14 — human oversight**), and allows `reversible` and
+`recoverable` ones. Escalating `unknown` is the fail-safe that makes this a
+*floor*: an action the classifier cannot positively recognize as safe is never
+waved through to the engine's default-allow, so novelty or obfuscation
+escalates rather than slipping past a gap in name/parameter coverage.
+
+The parameter-shape detectors are adversarially hardened: destructive commands
+hidden behind wrappers (`sudo`/`env`/`timeout … rm -rf`), command substitution
+(`echo $(rm -rf /data)`), and output redirection to a device (`… > /dev/sda`)
+are recognized; SQL is analysed per-statement after comment and string-literal
+content is neutralized, so a data-modifying CTE, an unscoped `UPDATE`, a
+tautological `WHERE 1=1`, a `WHERE` (or a destructive keyword) hidden inside a
+quoted value, or a sibling statement's `WHERE` cannot disguise a whole-relation
+write.
+
+**What it does not do** (deliberate, structural limits — the classifier reads
+call *structure*, not world state): it does not inspect an HTTP URL's path, so a
+`GET`/`POST` to an irreversible *endpoint* is gated only when the tool
+name/group flags it; it cannot see downstream side effects (a scoped `DELETE`
+that fires a settled-payment trigger looks recoverable); and it trusts the
+declared tool name (a read that is misnamed `get_*` is treated as a read). These
+are false-negative surfaces of *any* pre-execution classifier; the fail-safe
+`unknown` escalation is what bounds them. The class is a necessary structural
+gate, not a proof of safety.
+
+The SQL and shell parameter analysis is deliberately conservative and has been
+hardened against a broad set of obfuscations (comment and literal injection in
+four quoting styles, nested comments, no-semicolon T-SQL batches, tautological
+`WHERE` predicates, command wrappers, substitutions, device-target writes), but
+it is a heuristic, not a full multi-dialect parser: a sufficiently exotic
+always-true predicate or an unlisted write-capable program can still be
+mis-graded. The design leans on two backstops rather than on exhaustive
+recognition: an unrecognized program or statement is `unknown` (escalated), and
+the recommended deployment keeps a raw shell out of the write-capable policy
+scope entirely. Treat the classifier as defense-in-depth, not the sole control.
 
 ## Where Enterprise begins
 
