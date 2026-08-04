@@ -39,12 +39,12 @@ func (e *Evaluator) Evaluate(envelope *domain.ActionEnvelope, policies []domain.
 	fields := FlattenEnvelope(envelope)
 
 	// Step 3: Evaluate all rules from all matched policies, recording each
-	// policy's mode so the decision-owning mode can be resolved in Step 5.
+	// policy's mode so enforcement and shadow effects can be resolved separately.
 	var allResults []domain.RuleResult
+	var enforcedResults []domain.RuleResult
 	rulesTriggered := 0
-	modeByPolicy := make(map[string]domain.PolicyMode, len(matched))
+	shadowGatingMatched := false
 	for _, policy := range matched {
-		modeByPolicy[policy.PolicyID] = policy.Mode
 		for _, rule := range policy.Rules {
 			// Skip disabled rules
 			if !rule.IsEnabled() {
@@ -54,6 +54,13 @@ func (e *Evaluator) Evaluate(envelope *domain.ActionEnvelope, policies []domain.
 			allResults = append(allResults, result)
 			if result.Matched {
 				rulesTriggered++
+				// Treat every non-shadow value as enforcement. Loaders reject invalid
+				// modes, but direct engine callers still fail closed.
+				if policy.Mode != domain.PolicyModeShadow {
+					enforcedResults = append(enforcedResults, result)
+				} else if result.Effect == domain.EffectDeny || result.Effect == domain.EffectEscalate {
+					shadowGatingMatched = true
+				}
 			}
 		}
 	}
@@ -64,52 +71,31 @@ func (e *Evaluator) Evaluate(envelope *domain.ActionEnvelope, policies []domain.
 		decision = ResolveDecision(allResults)
 	}
 
-	// Step 5: Resolve the effective mode for the DECISION, then the action taken.
-	// The action is enforced when EITHER the deployment runs in enforcement mode
-	// OR a policy that OWNS the decision (a matched rule reaching the decision's
-	// severity) is in enforcement mode. It is observed (allowed_shadow) only when
-	// neither holds and an owning policy is shadow. This is the strictest of the
-	// deployment mode and the decision-owner's mode — the key change from a
-	// global "any enforcement policy forces enforcement" is that a broad
-	// always-matching enforcement policy (e.g. the irreversibility floor) only
-	// enforces decisions IT owns; it no longer silently enforces a co-loaded
-	// shadow policy's own (higher-severity) decision or hides its near-miss.
-	effectiveMode := mode
-	maxSev := 0
-	for _, r := range allResults {
-		if r.Matched {
-			if s := domain.EffectSeverity(r.Effect); s > maxSev {
-				maxSev = s
-			}
-		}
-	}
-	if maxSev >= 2 { // a gating decision (flag / escalate / deny)
-		ownerEnforced, ownerShadow := false, false
-		for _, r := range allResults {
-			if r.Matched && domain.EffectSeverity(r.Effect) == maxSev {
-				switch modeByPolicy[r.PolicyID] {
-				case domain.PolicyModeEnforcement:
-					ownerEnforced = true
-				case domain.PolicyModeShadow:
-					ownerShadow = true
-				}
-			}
-		}
-		if mode == domain.PolicyModeEnforcement || ownerEnforced {
-			effectiveMode = domain.PolicyModeEnforcement
-		} else if ownerShadow {
+	// Step 5: Resolve what actually controls the action. A call-site enforcement
+	// mode applies the aggregate decision. In call-site shadow mode, effects from
+	// enforcement policies still apply, while shadow-policy effects remain
+	// telemetry only. Resolve those enforcement effects independently: otherwise
+	// a higher-severity shadow deny could suppress a lower-severity enforcement
+	// escalation and let the action run.
+	actionDecision := decision
+	effectiveMode := domain.PolicyModeEnforcement // unknown modes fail closed
+	if mode == domain.PolicyModeShadow {
+		enforcedDecision := ResolveDecision(enforcedResults)
+		if enforcedDecision == domain.DecisionAllowed {
 			effectiveMode = domain.PolicyModeShadow
+		} else {
+			actionDecision = enforcedDecision
 		}
 	}
 
 	// Step 6: Resolve action taken (differs in shadow mode)
-	actionTaken := ResolveActionTaken(decision, effectiveMode)
+	actionTaken := ResolveActionTaken(actionDecision, effectiveMode)
 
 	// Step 7: Determine near-miss
-	// Near-miss = shadow mode only: the action would have been blocked but was allowed through.
-	// In enforcement mode, blocked actions are real blocks, not near-misses.
-	isNearMiss := (effectiveMode == domain.PolicyModeShadow) &&
-		(decision == domain.DecisionDenied || decision == domain.DecisionEscalated)
+	// A near-miss records a matched shadow deny/escalate that was not itself
+	// applied. It can coexist with a different enforcement-policy action (for
+	// example, a shadow deny observed while the floor escalates the same call).
+	isNearMiss := mode == domain.PolicyModeShadow && shadowGatingMatched
 
 	// Step 7: Find primary citation and suggested response
 	primaryCitation := FindPrimaryCitation(allResults)
@@ -128,7 +114,7 @@ func (e *Evaluator) Evaluate(envelope *domain.ActionEnvelope, policies []domain.
 	}
 
 	// Step 8: Generate decision reason
-	decisionReason := generateDecisionReason(decision, allResults, effectiveMode)
+	decisionReason := generateDecisionReason(decision, actionDecision, allResults, effectiveMode)
 
 	return &domain.EvaluationResult{
 		Decision:          decision,
@@ -166,7 +152,7 @@ func evaluateRule(rule domain.Rule, policyID string, policyVersion int, fields m
 }
 
 // generateDecisionReason builds a human-readable explanation of the decision.
-func generateDecisionReason(decision domain.Decision, results []domain.RuleResult, mode domain.PolicyMode) string {
+func generateDecisionReason(decision, actionDecision domain.Decision, results []domain.RuleResult, mode domain.PolicyMode) string {
 	if decision == domain.DecisionAllowed {
 		triggered := 0
 		for _, r := range results {
@@ -199,6 +185,8 @@ func generateDecisionReason(decision domain.Decision, results []domain.RuleResul
 
 	if mode == domain.PolicyModeShadow {
 		prefix += " (shadow mode — action was allowed)"
+	} else if actionDecision != decision {
+		prefix += fmt.Sprintf(" (enforced action: %s)", actionDecision)
 	}
 
 	if len(reasons) > 0 {

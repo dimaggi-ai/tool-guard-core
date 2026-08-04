@@ -78,9 +78,9 @@ then promote to enforcement without redeploying agents.
 Not every action carries the same risk when an agent gets it wrong. Reading
 a record is free to retry; wiring money, dropping a table, deploying to
 production, or deleting an account cannot be taken back. Core classifies
-every tool call by whether its effect can be undone and guarantees that
-actions which cannot be undone are never silently allowed — the
-**irreversibility floor**.
+every tool call by whether its visible structure appears undoable and provides
+an **irreversibility floor**: calls classified `irreversible` or `unknown` are
+not silently allowed by the reference policy.
 
 `engine.ClassifyReversibility` is deterministic (no network, no LLM). It
 derives a class from the tool name/group and the shape of the parameters,
@@ -90,9 +90,9 @@ classifier, the quote-aware shell tokenizer, HTTP method):
 | Class | Meaning | Examples |
 |-------|---------|----------|
 | `reversible` | no lasting effect, or a one-step undo at no cost | read / list / get, add-label, create-draft, HTTP GET, `SELECT` |
-| `recoverable` | undoable only with effort / a restore window | file overwrite, `UPDATE`, `DELETE ... WHERE`, HTTP PUT/PATCH/DELETE, `rm file` |
+| `recoverable` | undoable only with effort / a restore window | file overwrite, `UPDATE`, `DELETE ... WHERE`, `rm file` |
 | `irreversible` | no ordinary undo path | payments / wire / transfer / refund, deploy / publish, account or data destruction, physical actuation, `DROP`/`TRUNCATE`/unscoped `DELETE`, `rm -rf` |
-| `unknown` | not recognized — **fail-safe**, treated as caution-worthy, never silently reversible | an unrecognized tool with no telltale parameters |
+| `unknown` | not recognized or not provably undoable — **fail-safe**, treated as caution-worthy | an unrecognized tool; generic HTTP POST/PUT/PATCH/DELETE |
 
 The class is exposed as the ordinary condition field `reversibility`, so any
 rule can gate on it:
@@ -124,14 +124,15 @@ quoted value, or a sibling statement's `WHERE` cannot disguise a whole-relation
 write.
 
 **What it does not do** (deliberate, structural limits — the classifier reads
-call *structure*, not world state): it does not inspect an HTTP URL's path, so a
-`GET`/`POST` to an irreversible *endpoint* is gated only when the tool
-name/group flags it; it cannot see downstream side effects (a scoped `DELETE`
-that fires a settled-payment trigger looks recoverable); and it trusts the
-declared tool name (a read that is misnamed `get_*` is treated as a read). These
-are false-negative surfaces of *any* pre-execution classifier; the fail-safe
-`unknown` escalation is what bounds them. The class is a necessary structural
-gate, not a proof of safety.
+call *structure*, not world state): it does not inspect an HTTP URL's path, so
+generic mutating HTTP methods are `unknown` and escalate; even a nominally safe
+`GET` can have a badly designed irreversible endpoint; it cannot see downstream
+side effects (a scoped `DELETE` that fires a settled-payment trigger looks
+recoverable); and parameter-less calls still depend on the declared tool
+name/group. Explicit `command`/`cmd`, SQL, argv, and HTTP surfaces are parsed
+regardless of a misleading tool name. These remain false-negative surfaces of
+pre-execution classification. The class is a necessary structural gate, not a
+proof of safety.
 
 The SQL and shell parameter analysis is deliberately conservative and has been
 hardened against a broad set of obfuscations (comment and literal injection in
@@ -688,4 +689,3 @@ Notable changes per release are recorded in
 ## License
 
 Apache 2.0. See [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
-

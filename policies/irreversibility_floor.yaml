@@ -8,11 +8,10 @@ description: >
   (payments/wire/transfer/refund), account or data destruction, production
   deploy/publish, physical actuation, and destructive statements (SQL
   DROP/TRUNCATE or unscoped DELETE, shell `rm -rf`) as `irreversible`. This
-  is the product's accountability guarantee: an agent can never silently
-  commit an action that cannot be taken back. An action the classifier cannot
-  recognize is `unknown` and is ALSO escalated — the fail-safe: positive proof
-  of reversibility is required before auto-allowing, so a novel or obfuscated
-  action is never waved through just because no rule named it. Clearly
+  is a structural safety control: calls classified irreversible are never
+  silently committed by this policy. An action the classifier cannot
+  recognize is `unknown` and is ALSO escalated — the fail-safe: an unfamiliar
+  structural shape is not auto-allowed merely because no rule named it. Clearly
   reversible actions (reads, add-label, create-draft) are allowed; recoverable
   actions (scoped writes, undoable with effort) are permitted by default.
 version: 1
@@ -34,9 +33,10 @@ compliance:
   eu_ai_act:
     - art_14
 
-# The floor applies to EVERY tool call, so nothing irreversible can slip
-# through a gap in per-tool coverage. That is declared explicitly so `tg lint`
-# can tell a designed floor from an accidental scope leak.
+# The floor evaluates EVERY tool call, avoiding gaps in per-tool scope coverage.
+# It still cannot observe downstream semantics or world state; see the README's
+# limitations. The global intent is explicit so `tg lint` can distinguish this
+# designed floor from an accidental scope leak.
 scope:
   intentionally_global: true
 
@@ -129,8 +129,8 @@ rules:
       human-in-the-loop review rather than letting an unrecognized (possibly
       irreversible) action fall through to the engine's default-allow. This is
       what makes the deterministic classifier a floor and not just a
-      best-effort labeler: novelty and obfuscation escalate instead of slipping
-      through a gap in name/parameter coverage.
+      default-allow labeler: unrecognized structure escalates instead of
+      slipping through a gap in name/parameter coverage.
     conditions:
       field: reversibility
       operator: eq

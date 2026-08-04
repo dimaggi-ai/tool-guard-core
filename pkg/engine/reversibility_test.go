@@ -79,12 +79,13 @@ func TestClassifyReversibility(t *testing.T) {
 		{"shell mkfs", "bash", "", map[string]any{"command": "mkfs.ext4 /dev/sdb"}, Irreversible},
 		{"shell read-only ls", "bash", "", map[string]any{"command": "ls -la /tmp"}, Reversible},
 		{"shell worst-of-segments", "bash", "", map[string]any{"command": "ls /etc && rm -rf /data"}, Irreversible},
+		{"misnamed shell command cannot hide rm -rf", "get_data", "shell", map[string]any{"command": "rm -rf /data"}, Irreversible},
 		{"argv rm -rf", "shell", "", map[string]any{"argv": []any{"rm", "-rf", "/data"}}, Irreversible},
 
 		// ── HTTP method ──
 		{"HTTP GET", "http_request", "", map[string]any{"url": "https://api.example.com/x", "method": "GET"}, Reversible},
-		{"HTTP DELETE is Recoverable", "http_request", "", map[string]any{"url": "https://api.example.com/x/1", "method": "DELETE"}, Recoverable},
-		{"HTTP POST is Recoverable", "http_request", "", map[string]any{"url": "https://api.example.com/x", "method": "POST"}, Recoverable},
+		{"generic HTTP DELETE is Unknown without endpoint semantics", "http_request", "", map[string]any{"url": "https://api.example.com/x/1", "method": "DELETE"}, Unknown},
+		{"generic HTTP POST is Unknown without endpoint semantics", "http_request", "", map[string]any{"url": "https://bank.example/wire-transfers", "method": "POST"}, Unknown},
 
 		// ── Unknown default (fail-safe) ──
 		{"unrecognized tool", "frobnicate_widget", "misc", nil, Unknown},
@@ -254,7 +255,7 @@ func TestReversibilityHelpers(t *testing.T) {
 	// httpMethodReversibility (all method families)
 	hm := map[string]ReversibilityClass{
 		"GET": Reversible, "HEAD": Reversible, "OPTIONS": Reversible, "TRACE": Reversible,
-		"POST": Recoverable, "PUT": Recoverable, "PATCH": Recoverable, "DELETE": Recoverable,
+		"POST": Unknown, "PUT": Unknown, "PATCH": Unknown, "DELETE": Unknown,
 		"PROPFIND": Unknown, "": Unknown,
 	}
 	for in, want := range hm {
@@ -489,9 +490,9 @@ func TestReversibilityFieldExposed(t *testing.T) {
 	}
 }
 
-// TestFloorDoesNotNullifyCoLoadedShadowPolicy proves the always-matching
-// enforcement floor does not silently enforce a co-loaded SHADOW policy's own
-// (higher-severity) decision, nor suppress its near-miss telemetry.
+// TestFloorDoesNotNullifyCoLoadedShadowPolicy proves mixed-mode effects are
+// partitioned: the floor enforces its own escalation, a co-loaded shadow deny
+// remains telemetry, and an allow-only floor match does not promote that deny.
 func TestFloorDoesNotNullifyCoLoadedShadowPolicy(t *testing.T) {
 	floor := domain.Policy{
 		PolicyID: "floor", Version: 1, Mode: domain.PolicyModeEnforcement, Status: domain.PolicyStatusApproved,
@@ -509,17 +510,32 @@ func TestFloorDoesNotNullifyCoLoadedShadowPolicy(t *testing.T) {
 	if res.Decision != domain.DecisionDenied {
 		t.Fatalf("decision=%v want denied", res.Decision)
 	}
-	if res.ActionTaken == domain.ActionDenied {
-		t.Errorf("co-loaded shadow policy was ENFORCED (action=%v); the floor nullified shadow mode", res.ActionTaken)
+	if res.ActionTaken != domain.ActionEscalated {
+		t.Errorf("floor escalation was suppressed by the shadow deny: action=%v", res.ActionTaken)
 	}
 	if !res.IsNearMiss {
 		t.Error("shadow deny should be recorded as a near-miss")
+	}
+	if res.EffectiveMode != domain.PolicyModeEnforcement {
+		t.Errorf("effective_mode=%v want enforcement", res.EffectiveMode)
 	}
 	// And the floor still enforces an irreversible action it OWNS, even in a shadow deployment.
 	env2 := envFor("wire_transfer", "payments", nil)
 	res2 := NewEvaluator().Evaluate(&env2, []domain.Policy{floor}, domain.PolicyModeShadow)
 	if res2.ActionTaken != domain.ActionEscalated {
 		t.Errorf("floor should enforce its own irreversible escalation even in shadow deployment, got %v", res2.ActionTaken)
+	}
+
+	// A reversible call only matches the floor's allow rule, so it must not
+	// promote a co-loaded shadow deny into enforcement.
+	allowFloor := floor
+	allowFloor.Rules = []domain.Rule{{RuleID: "f2", Effect: domain.EffectAllow,
+		Conditions: domain.Condition{Field: "reversibility", Operator: domain.OpEq, Value: "reversible"}}}
+	shadowDeny.Scope = domain.PolicyScope{ToolNames: []string{"get_record"}}
+	env3 := makeEnvelope(5000, "get_record", "a", "o")
+	res3 := NewEvaluator().Evaluate(env3, []domain.Policy{allowFloor, shadowDeny}, domain.PolicyModeShadow)
+	if res3.ActionTaken != domain.ActionAllowedShadow {
+		t.Errorf("allow-only enforcement policy promoted shadow deny: action=%v", res3.ActionTaken)
 	}
 }
 
@@ -600,6 +616,8 @@ func TestIrreversibilityFloorPolicy(t *testing.T) {
 		{"unrecognized tool escalates (fail-safe)", "frobnicate_widget", "misc", nil, domain.DecisionEscalated},
 		{"unknown shell prog escalates (fail-safe)", "bash", "", map[string]any{"command": "customtool --wipe"}, domain.DecisionEscalated},
 		{"wrapper-hidden rm -rf escalates", "bash", "", map[string]any{"command": "sudo rm -rf /data"}, domain.DecisionEscalated},
+		{"misnamed destructive command escalates", "get_data", "shell", map[string]any{"command": "rm -rf /data"}, domain.DecisionEscalated},
+		{"generic HTTP wire POST escalates", "http_request", "network_egress", map[string]any{"url": "https://bank.example/wire-transfers", "method": "POST"}, domain.DecisionEscalated},
 		{"read is allowed", "get_ticker", "market_data", nil, domain.DecisionAllowed},
 		{"add-label is allowed", "add_label", "gmail", nil, domain.DecisionAllowed},
 		// Recoverable (scoped write) is permitted — it is undoable with effort.

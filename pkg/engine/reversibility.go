@@ -88,7 +88,7 @@ func worst(a, b ReversibilityClass) ReversibilityClass {
 //
 // Two kinds of signal are combined:
 //
-//   - AUTHORITATIVE parameter surfaces — the SQL statement, the shell command,
+//   - AUTHORITATIVE parameter surfaces — the SQL statement, a command/cmd
 //     an explicit argv — are the actual action. When present they decide the
 //     class, and an UNINFORMATIVE tool name (one that matched nothing, i.e.
 //     Unknown) does NOT override them: a tool literally named "bash" running
@@ -96,11 +96,9 @@ func worst(a, b ReversibilityClass) ReversibilityClass {
 //     carry a signal (a read verb, a money group, "deploy") is still merged in
 //     worst-wins, so a deploy tool that also shells out stays gated.
 //   - The tool name/group otherwise, plus the outbound HTTP method (GET/HEAD →
-//     Reversible, POST/PUT/PATCH/DELETE → Recoverable, other → Unknown). The
-//     method classifies the egress surface but NOT the endpoint: a GET or POST
-//     to an irreversible URL is only gated when the tool name/group flags it
-//     (a payments group, a "deploy" token). URL-path inspection is a
-//     deliberate non-goal — see the limitations note in the README.
+//     Reversible; mutating and unrecognized methods → Unknown). A method cannot
+//     prove that its endpoint has an undo path, so generic HTTP mutations stay
+//     fail-safe unless a future trusted endpoint classifier supplies that proof.
 //
 // When nothing is recognized anywhere it returns Unknown (fail-safe), never
 // Reversible. The exact mappings live in clearly-declared tables below.
@@ -120,10 +118,10 @@ func ClassifyReversibility(env domain.ActionEnvelope) ReversibilityClass {
 	if sql := firstString(params, "sql"); sql != "" {
 		consider(sqlReversibility(sql))
 	}
-	if isShellTool(strings.ToLower(strings.TrimSpace(env.ToolName))) {
-		if cmd := firstString(params, "command", "cmd"); cmd != "" {
-			consider(shellStringReversibility(cmd))
-		}
+	// command/cmd is itself an execution surface. Parse it regardless of the
+	// declared tool name so an MCP server cannot hide `rm -rf` behind `get_*`.
+	if cmd := firstString(params, "command", "cmd"); cmd != "" {
+		consider(shellStringReversibility(cmd))
 	}
 	if argv, ok := normalizeArgv(params["argv"]); ok && len(argv) > 0 {
 		consider(argvReversibility(argv))
@@ -1696,18 +1694,15 @@ func anyHasPrefix(args []string, prefix string) bool {
 // httpMethodReversibility classifies an outbound HTTP call by its method.
 //
 //   - GET / HEAD / OPTIONS / TRACE → Reversible  (safe, read-only)
-//   - POST / PUT / PATCH           → Recoverable (creates/overwrites a resource)
-//   - DELETE                       → Recoverable (a scoped REST delete is
-//     commonly soft/undoable; a truly irreversible destination — delete_account,
-//     a payments endpoint — is caught by the tool name/group tables instead,
-//     and the worst class wins)
+//   - POST / PUT / PATCH / DELETE  → Unknown (the method proves mutation but
+//     cannot prove an endpoint-specific undo path)
 //   - anything else                → Unknown
 func httpMethodReversibility(method string) ReversibilityClass {
 	switch strings.ToUpper(strings.TrimSpace(method)) {
 	case "GET", "HEAD", "OPTIONS", "TRACE":
 		return Reversible
 	case "POST", "PUT", "PATCH", "DELETE":
-		return Recoverable
+		return Unknown
 	default:
 		return Unknown
 	}
