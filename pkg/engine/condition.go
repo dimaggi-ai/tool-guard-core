@@ -467,6 +467,13 @@ func FlattenEnvelope(env *domain.ActionEnvelope) map[string]interface{} {
 	fields["tool_name"] = env.ToolName
 	fields["tool_group"] = env.ToolGroup
 
+	// Reversibility class — a deterministic (no network / no LLM) signal
+	// derived from the tool name/group and parameter shape. Exposed as the
+	// "reversibility" leaf field so a policy can gate on it, e.g.
+	// {field: reversibility, operator: eq, value: irreversible}. See
+	// reversibility.go and policies/irreversibility_floor.yaml.
+	fields["reversibility"] = string(ClassifyReversibility(*env))
+
 	// Extract amount from parameters. If the envelope sends a
 	// malformed amount (`"amount": "abc"`, `"amount": {}`, negative
 	// value, etc.), Amount() returns an error and we substitute a

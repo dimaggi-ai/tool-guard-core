@@ -38,17 +38,13 @@ func (e *Evaluator) Evaluate(envelope *domain.ActionEnvelope, policies []domain.
 	// Step 2: Flatten envelope to field map for condition evaluation
 	fields := FlattenEnvelope(envelope)
 
-	// Step 3: Evaluate all rules from all matched policies
+	// Step 3: Evaluate all rules from all matched policies, recording each
+	// policy's mode so enforcement and shadow effects can be resolved separately.
 	var allResults []domain.RuleResult
+	var enforcedResults []domain.RuleResult
 	rulesTriggered := 0
-
-	// Track the strictest mode across matched policies
-	// If ANY matched policy is in enforcement mode, use enforcement
-	effectiveMode := mode
+	shadowGatingMatched := false
 	for _, policy := range matched {
-		if policy.Mode == domain.PolicyModeEnforcement {
-			effectiveMode = domain.PolicyModeEnforcement
-		}
 		for _, rule := range policy.Rules {
 			// Skip disabled rules
 			if !rule.IsEnabled() {
@@ -58,26 +54,50 @@ func (e *Evaluator) Evaluate(envelope *domain.ActionEnvelope, policies []domain.
 			allResults = append(allResults, result)
 			if result.Matched {
 				rulesTriggered++
+				// Treat every non-shadow value as enforcement. Loaders reject invalid
+				// modes, but direct engine callers still fail closed.
+				if policy.Mode != domain.PolicyModeShadow {
+					enforcedResults = append(enforcedResults, result)
+				} else if result.Effect == domain.EffectDeny || result.Effect == domain.EffectEscalate {
+					shadowGatingMatched = true
+				}
 			}
 		}
 	}
 
-	// Step 4: Resolve overall decision
+	// Step 4: Resolve overall decision (max effect severity, order-independent).
 	decision := domain.DecisionAllowed
 	if len(allResults) > 0 {
 		decision = ResolveDecision(allResults)
 	}
 
-	// Step 5: Resolve action taken (differs in shadow mode)
-	actionTaken := ResolveActionTaken(decision, effectiveMode)
+	// Step 5: Resolve what actually controls the action. A call-site enforcement
+	// mode applies the aggregate decision. In call-site shadow mode, effects from
+	// enforcement policies still apply, while shadow-policy effects remain
+	// telemetry only. Resolve those enforcement effects independently: otherwise
+	// a higher-severity shadow deny could suppress a lower-severity enforcement
+	// escalation and let the action run.
+	actionDecision := decision
+	effectiveMode := domain.PolicyModeEnforcement // unknown modes fail closed
+	if mode == domain.PolicyModeShadow {
+		enforcedDecision := ResolveDecision(enforcedResults)
+		if enforcedDecision == domain.DecisionAllowed {
+			effectiveMode = domain.PolicyModeShadow
+		} else {
+			actionDecision = enforcedDecision
+		}
+	}
 
-	// Step 6: Determine near-miss
-	// Near-miss = shadow mode only: the action would have been blocked but was allowed through.
-	// In enforcement mode, blocked actions are real blocks, not near-misses.
-	isNearMiss := (effectiveMode == domain.PolicyModeShadow) &&
-		(decision == domain.DecisionDenied || decision == domain.DecisionEscalated)
+	// Step 6: Resolve action taken (differs in shadow mode)
+	actionTaken := ResolveActionTaken(actionDecision, effectiveMode)
 
-	// Step 7: Find primary citation and suggested response
+	// Step 7: Determine near-miss
+	// A near-miss records a matched shadow deny/escalate that was not itself
+	// applied. It can coexist with a different enforcement-policy action (for
+	// example, a shadow deny observed while the floor escalates the same call).
+	isNearMiss := mode == domain.PolicyModeShadow && shadowGatingMatched
+
+	// Step 8: Find primary citation and suggested response
 	primaryCitation := FindPrimaryCitation(allResults)
 	suggestedResponse := ""
 	if decision == domain.DecisionDenied {
@@ -93,8 +113,8 @@ func (e *Evaluator) Evaluate(envelope *domain.ActionEnvelope, policies []domain.
 		suggestedResponse = FindSuggestedResponse(allRules, allResults)
 	}
 
-	// Step 8: Generate decision reason
-	decisionReason := generateDecisionReason(decision, allResults, effectiveMode)
+	// Step 9: Generate decision reason
+	decisionReason := generateDecisionReason(decision, actionDecision, allResults, effectiveMode)
 
 	return &domain.EvaluationResult{
 		Decision:          decision,
@@ -132,7 +152,7 @@ func evaluateRule(rule domain.Rule, policyID string, policyVersion int, fields m
 }
 
 // generateDecisionReason builds a human-readable explanation of the decision.
-func generateDecisionReason(decision domain.Decision, results []domain.RuleResult, mode domain.PolicyMode) string {
+func generateDecisionReason(decision, actionDecision domain.Decision, results []domain.RuleResult, mode domain.PolicyMode) string {
 	if decision == domain.DecisionAllowed {
 		triggered := 0
 		for _, r := range results {
@@ -165,6 +185,8 @@ func generateDecisionReason(decision domain.Decision, results []domain.RuleResul
 
 	if mode == domain.PolicyModeShadow {
 		prefix += " (shadow mode — action was allowed)"
+	} else if actionDecision != decision {
+		prefix += fmt.Sprintf(" (enforced action: %s)", actionDecision)
 	}
 
 	if len(reasons) > 0 {

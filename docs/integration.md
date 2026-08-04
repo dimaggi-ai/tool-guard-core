@@ -452,12 +452,13 @@ tamper-evident.
 
 ## 5. Operational notes
 
-- **Mode policy.** The call-site mode is a floor that callers raise
-  (the `tg` CLI's `-mode`, the proxy's `-default-mode`); the engine
-  takes the strictest of `(call-site mode, every matched policy's
-  mode)`. A policy marked `mode: enforcement` in YAML cannot be
-  downgraded to shadow by either flag. An integration test covers the
-  strictest-mode resolution.
+- **Mode policy.** Call-site `enforcement` applies the aggregate decision.
+  In call-site `shadow`, matched effects from enforcement policies still apply,
+  while shadow-policy effects remain telemetry only. The engine resolves those
+  sets separately, so a higher-severity shadow effect cannot cancel a
+  lower-severity enforcement gate, and an allow-only enforcement policy does not
+  promote an unrelated shadow deny. A policy marked `mode: enforcement` in YAML
+  cannot be downgraded by either flag.
 - **Latency.** Deterministic evaluation is in-process and p99 ≈ 14µs
   on commodity hardware (see `tg benchmark`). The proxy adds one
   HTTP hop plus JSON marshal/unmarshal; expect sub-millisecond round

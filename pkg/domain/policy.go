@@ -125,6 +125,12 @@ type PolicyScope struct {
 	AgentIDs   []string `json:"agent_ids,omitempty"`
 	ToolNames  []string `json:"tool_names,omitempty"`
 	ToolGroups []string `json:"tool_groups,omitempty"`
+	// IntentionallyGlobal declares that the empty tool scope is deliberate:
+	// the policy is meant to evaluate on every tool call (e.g. a floor
+	// policy). It has no effect on matching — an empty scope already matches
+	// everything — it exists so the author's intent is machine-readable and
+	// `tg lint` can distinguish a designed floor from an accidental leak.
+	IntentionallyGlobal bool `json:"intentionally_global,omitempty"`
 }
 
 // SourceDocument references an SOP document that a policy derives from.

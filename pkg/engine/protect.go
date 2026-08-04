@@ -349,16 +349,33 @@ func shellTouchesProtectedRec(cmd string, prefixes []string, depth int) (bool, s
 		if !isMutatingProg(prog, vals) {
 			continue
 		}
+		sawDashDash := false
 		for _, w := range words[1:] {
 			if w.unresolved {
 				return true, shortRaw(w.raw)
 			}
+			if !sawDashDash && w.value == "--" {
+				sawDashDash = true
+				continue
+			}
+			// An option token (leading "-", before any "--" separator) is not
+			// a path operand: canonicalizing "-rf" against the CWD would
+			// fabricate "<cwd>/-rf" and false-positive-deny any mutating
+			// command run with flags while the CWD sits inside a protected
+			// prefix. Glued path-options ("-t/protected", "-o/dev/sda",
+			// --target-directory=/p) still get their embedded path checked
+			// below, so skipping the raw flag can only drop fabricated
+			// candidates, never a real target. After "--" everything is
+			// positional (POSIX), so a file literally named "-rf" is checked.
+			optionToken := !sawDashDash && strings.HasPrefix(w.value, "-") && w.value != "-"
 			// Match the raw arg and, when it carries a glued path-option prefix
 			// (dd of=, cp/mv/ln/install -t / --target-directory=), the path it
 			// wraps. Matching both means the strip can only ADD coverage, never
 			// hide a plain path.
-			if hit, target := matchLiteralPath(w.value, prefixes); hit {
-				return true, target
+			if !optionToken {
+				if hit, target := matchLiteralPath(w.value, prefixes); hit {
+					return true, target
+				}
 			}
 			if stripped := stripPathOption(w.value); stripped != w.value {
 				if hit, target := matchLiteralPath(stripped, prefixes); hit {

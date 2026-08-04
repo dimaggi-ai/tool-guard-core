@@ -73,6 +73,78 @@ the rule, the reason, and a citation back to the source document the
 rule came from. Stage policies in shadow mode against live traffic,
 then promote to enforcement without redeploying agents.
 
+## Reversibility-aware gating
+
+Not every action carries the same risk when an agent gets it wrong. Reading
+a record is free to retry; wiring money, dropping a table, deploying to
+production, or deleting an account cannot be taken back. Core classifies
+every tool call by whether its visible structure appears undoable and provides
+an **irreversibility floor**: calls classified `irreversible` or `unknown` are
+not silently allowed by the reference policy.
+
+`engine.ClassifyReversibility` is deterministic (no network, no LLM). It
+derives a class from the tool name/group and the shape of the parameters,
+reusing the existing destructive-operation detectors (the four-dialect SQL
+classifier, the quote-aware shell tokenizer, HTTP method):
+
+| Class | Meaning | Examples |
+|-------|---------|----------|
+| `reversible` | no lasting effect, or a one-step undo at no cost | read / list / get, add-label, create-draft, HTTP GET, `SELECT` |
+| `recoverable` | undoable only with effort / a restore window | file overwrite, `UPDATE`, `DELETE ... WHERE`, `rm file` |
+| `irreversible` | no ordinary undo path | payments / wire / transfer / refund, deploy / publish, account or data destruction, physical actuation, `DROP`/`TRUNCATE`/unscoped `DELETE`, `rm -rf` |
+| `unknown` | not recognized or not provably undoable — **fail-safe**, treated as caution-worthy | an unrecognized tool; generic HTTP POST/PUT/PATCH/DELETE |
+
+The class is exposed as the ordinary condition field `reversibility`, so any
+rule can gate on it:
+
+```yaml
+conditions:
+  field: reversibility
+  operator: eq
+  value: irreversible
+effect: escalate        # human-in-the-loop; an irreversible action is never auto-allowed
+```
+
+The shipped [`policies/irreversibility_floor.yaml`](policies/irreversibility_floor.yaml)
+is an approved, enforcement-mode reference policy that escalates every
+`irreversible` **and** every `unknown` action to a human reviewer (mapped to
+**EU AI Act Article 14 — human oversight**), and allows `reversible` and
+`recoverable` ones. Escalating `unknown` is the fail-safe that makes this a
+*floor*: an action the classifier cannot positively recognize as safe is never
+waved through to the engine's default-allow, so novelty or obfuscation
+escalates rather than slipping past a gap in name/parameter coverage.
+
+The parameter-shape detectors are adversarially hardened: destructive commands
+hidden behind wrappers (`sudo`/`env`/`timeout … rm -rf`), command substitution
+(`echo $(rm -rf /data)`), and output redirection to a device (`… > /dev/sda`)
+are recognized; SQL is analysed per-statement after comment and string-literal
+content is neutralized, so a data-modifying CTE, an unscoped `UPDATE`, a
+tautological `WHERE 1=1`, a `WHERE` (or a destructive keyword) hidden inside a
+quoted value, or a sibling statement's `WHERE` cannot disguise a whole-relation
+write.
+
+**What it does not do** (deliberate, structural limits — the classifier reads
+call *structure*, not world state): it does not inspect an HTTP URL's path, so
+generic mutating HTTP methods are `unknown` and escalate; even a nominally safe
+`GET` can have a badly designed irreversible endpoint; it cannot see downstream
+side effects (a scoped `DELETE` that fires a settled-payment trigger looks
+recoverable); and parameter-less calls still depend on the declared tool
+name/group. Explicit `command`/`cmd`, SQL, argv, and HTTP surfaces are parsed
+regardless of a misleading tool name. These remain false-negative surfaces of
+pre-execution classification. The class is a necessary structural gate, not a
+proof of safety.
+
+The SQL and shell parameter analysis is deliberately conservative and has been
+hardened against a broad set of obfuscations (comment and literal injection in
+four quoting styles, nested comments, no-semicolon T-SQL batches, tautological
+`WHERE` predicates, command wrappers, substitutions, device-target writes), but
+it is a heuristic, not a full multi-dialect parser: a sufficiently exotic
+always-true predicate or an unlisted write-capable program can still be
+mis-graded. The design leans on two backstops rather than on exhaustive
+recognition: an unrecognized program or statement is `unknown` (escalated), and
+the recommended deployment keeps a raw shell out of the write-capable policy
+scope entirely. Treat the classifier as defense-in-depth, not the sole control.
+
 ## Where Enterprise begins
 
 Core is the decision point. **Tool Guard Enterprise**
@@ -104,6 +176,7 @@ not depend on it.
 - Write classifier (file-write path allow/deny-lists, byte ceiling, denied-content regex)
 - HTTP classifier (egress host/scheme/method/port allow/deny-lists)
 - Local LLM content classifier (Gemma 4 via Ollama — image/audio/text gen)
+- Reversibility classifier + irreversibility floor — deterministically class every call reversible / recoverable / irreversible / unknown, and gate irreversible actions to human oversight ([`policies/irreversibility_floor.yaml`](policies/irreversibility_floor.yaml))
 - `tg coverage` — measures what fraction of an agent's tool calls have any governing policy
 - Battle-test harness (`cmd/battle-test`)
 
@@ -616,4 +689,3 @@ Notable changes per release are recorded in
 ## License
 
 Apache 2.0. See [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
-
