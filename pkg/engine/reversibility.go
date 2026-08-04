@@ -10,10 +10,9 @@ import (
 	"github.com/dimaggi-ai/tool-guard-core/pkg/sqlguard"
 )
 
-// ReversibilityClass names whether a tool call's primary effect can be
-// undone. It is the signal behind the "irreversibility floor": an action
-// that cannot be reversed must never be auto-allowed (see
-// policies/irreversibility_floor.yaml).
+// ReversibilityClass describes the apparent reversibility of a tool call from
+// its declared name, group, and parameter structure. Policies can use it as an
+// input to an irreversibility floor (see policies/irreversibility_floor.yaml).
 //
 // The value is exposed to policy rules as the flattened condition field
 // "reversibility" (see FlattenEnvelope), so an operator writes
@@ -27,8 +26,7 @@ const (
 	Reversible ReversibilityClass = "reversible"
 
 	// Recoverable: undoable, but only with effort, cost, or a restore
-	// window — a file overwrite (recover from VCS/backup), a scoped SQL
-	// UPDATE / DELETE ... WHERE, a REST PUT/PATCH/DELETE of one resource.
+	// window — for example, a file overwrite or scoped SQL UPDATE/DELETE.
 	Recoverable ReversibilityClass = "recoverable"
 
 	// Irreversible: cannot be undone by any ordinary means — a settled
@@ -37,10 +35,9 @@ const (
 	// unscoped DELETE, rm -rf. These are the actions the floor gates.
 	Irreversible ReversibilityClass = "irreversible"
 
-	// Unknown: the effect could not be classified. FAIL-SAFE — an
-	// unrecognized action is treated as caution-worthy, never silently
-	// reversible. It is deliberately distinct from Reversible so a policy
-	// can require positive proof of reversibility before auto-allowing.
+	// Unknown: the visible structure is insufficient to classify the effect.
+	// It remains distinct from Reversible so policies can handle uncertainty
+	// explicitly; the shipped floor escalates it.
 	Unknown ReversibilityClass = "unknown"
 )
 
@@ -81,27 +78,26 @@ func worst(a, b ReversibilityClass) ReversibilityClass {
 	return a
 }
 
-// ClassifyReversibility deterministically classifies a tool call by whether
-// its effect can be undone. It performs NO network calls and invokes NO LLM
-// — the class is derived only from the envelope's tool_name / tool_group and
-// the shape of its parameters (SQL statement, shell command, HTTP method).
+// ClassifyReversibility deterministically classifies a tool call from its
+// envelope. It performs no network calls or LLM inference; the class is derived
+// only from tool_name, tool_group, and parameter structure.
 //
 // Two kinds of signal are combined:
 //
-//   - AUTHORITATIVE parameter surfaces — the SQL statement, a command/cmd
-//     an explicit argv — are the actual action. When present they decide the
+//   - Authoritative parameter surfaces — SQL, command/cmd, and argv — describe
+//     the actual action. When present they decide the
 //     class, and an UNINFORMATIVE tool name (one that matched nothing, i.e.
-//     Unknown) does NOT override them: a tool literally named "bash" running
+//     Unknown) does not override them: a tool literally named "bash" running
 //     `ls` is Reversible, running `rm -rf /` is Irreversible. A name that DID
-//     carry a signal (a read verb, a money group, "deploy") is still merged in
+//     carry a signal (a read verb, a money group, "deploy") is still merged by
 //     worst-wins, so a deploy tool that also shells out stays gated.
 //   - The tool name/group otherwise, plus the outbound HTTP method (GET/HEAD →
 //     Reversible; mutating and unrecognized methods → Unknown). A method cannot
 //     prove that its endpoint has an undo path, so generic HTTP mutations stay
 //     fail-safe unless a future trusted endpoint classifier supplies that proof.
 //
-// When nothing is recognized anywhere it returns Unknown (fail-safe), never
-// Reversible. The exact mappings live in clearly-declared tables below.
+// When nothing is recognized anywhere it returns Unknown. The exact mappings
+// live in the tables below.
 func ClassifyReversibility(env domain.ActionEnvelope) ReversibilityClass {
 	nameClass := nameGroupReversibility(env.ToolName, env.ToolGroup)
 	params := parseParams(env.Parameters)
@@ -846,8 +842,9 @@ func splitComparison(b string) (op, l, r string, ok bool) {
 // dollar-quoted body. Keyword scanning, `;` statement
 // splitting, and WHERE detection all run on the skeleton, so nothing inside a
 // literal or comment can hide a verb, fake a WHERE, or split a statement.
-// Escapes are handled so a quote does not close early: a doubled quote (`”`,
-// `""`, ` “ `) and a backslash escape (`\'`, MySQL) are consumed as content.
+// Escapes are handled so a quote does not close early: doubled single quotes,
+// doubled double quotes, doubled backticks, and MySQL backslash escapes are
+// consumed as content.
 // Malformed / unterminated spans run to end-of-input (safe: the whole tail
 // becomes literal content, and the closing delimiter is absent so nothing after
 // it is misread). Byte length is always preserved.
@@ -1693,7 +1690,7 @@ func anyHasPrefix(args []string, prefix string) bool {
 
 // httpMethodReversibility classifies an outbound HTTP call by its method.
 //
-//   - GET / HEAD / OPTIONS / TRACE → Reversible  (safe, read-only)
+//   - GET / HEAD / OPTIONS / TRACE → Reversible  (conventionally read-only)
 //   - POST / PUT / PATCH / DELETE  → Unknown (the method proves mutation but
 //     cannot prove an endpoint-specific undo path)
 //   - anything else                → Unknown

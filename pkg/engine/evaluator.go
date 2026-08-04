@@ -97,7 +97,7 @@ func (e *Evaluator) Evaluate(envelope *domain.ActionEnvelope, policies []domain.
 	// example, a shadow deny observed while the floor escalates the same call).
 	isNearMiss := mode == domain.PolicyModeShadow && shadowGatingMatched
 
-	// Step 7: Find primary citation and suggested response
+	// Step 8: Find primary citation and suggested response
 	primaryCitation := FindPrimaryCitation(allResults)
 	suggestedResponse := ""
 	if decision == domain.DecisionDenied {
@@ -113,7 +113,7 @@ func (e *Evaluator) Evaluate(envelope *domain.ActionEnvelope, policies []domain.
 		suggestedResponse = FindSuggestedResponse(allRules, allResults)
 	}
 
-	// Step 8: Generate decision reason
+	// Step 9: Generate decision reason
 	decisionReason := generateDecisionReason(decision, actionDecision, allResults, effectiveMode)
 
 	return &domain.EvaluationResult{

@@ -310,7 +310,7 @@ func lintPolicy(p domain.Policy) []LintFinding {
 	// tool_names AND no tool_groups runs on every tool call across the
 	// org, which means every call carries the policy's eval cost and is
 	// a candidate for false-positive denies. Almost never what the
-	// author intended — so a designed floor must SAY so with
+	// author intended — so a designed floor must declare itself with
 	// scope.intentionally_global: true, which suppresses this finding.
 	if len(p.Scope.ToolNames) == 0 && len(p.Scope.ToolGroups) == 0 && !p.Scope.IntentionallyGlobal {
 		out = append(out, LintFinding{
