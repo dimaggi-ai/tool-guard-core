@@ -28,6 +28,7 @@ import (
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/engine"
+	"github.com/dimaggi-ai/tool-guard-core/pkg/policyload"
 )
 
 func TestPolicyCompat(t *testing.T) {
@@ -71,7 +72,7 @@ func TestPolicyCompat(t *testing.T) {
 			}
 
 			t.Run(version+"/"+c.Name, func(t *testing.T) {
-				policy, err := loadPolicyYAML(snapshotPath)
+				policy, err := policyload.Load(snapshotPath)
 				if err != nil {
 					t.Fatalf("load %s policy snapshot %q: %v", version, snapshotPath, err)
 				}

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/engine"
+	"github.com/dimaggi-ai/tool-guard-core/pkg/policyload"
 )
 
 const (
@@ -28,7 +29,8 @@ const (
 	minClaudeExecHookPatch = 139
 )
 
-const codingAgentStarterPolicy = `policy_id: pol-coding-agent-baseline
+const codingAgentStarterPolicy = `schema_version: 1
+policy_id: pol-coding-agent-baseline
 status: approved
 mode: enforcement
 scope:
@@ -186,7 +188,7 @@ func runProtect(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "protect: policy is not a readable file: %s\n", p.policy)
 		return 1
 	}
-	policyToValidate, err := loadPolicyYAML(p.policy)
+	policyToValidate, err := policyload.Load(p.policy)
 	if err != nil {
 		fmt.Fprintln(stderr, "protect: policy is invalid:", err)
 		return 1
@@ -618,7 +620,7 @@ func validPolicyFile(path string) bool {
 	if strings.TrimSpace(path) == "" {
 		return false
 	}
-	policy, err := loadPolicyYAML(path)
+	policy, err := policyload.Load(path)
 	return err == nil && engine.ValidatePolicy(&policy) == nil
 }
 

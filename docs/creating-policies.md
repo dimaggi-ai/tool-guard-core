@@ -1,13 +1,14 @@
 # Creating Policies
 
 A Tool Guard policy is a YAML file with three required sections:
-identity (`policy_id`, `name`, `version`, `status`, `mode`), a
+identity (`schema_version`, `policy_id`, `name`, `version`, `status`, `mode`), a
 **scope** that says which tool calls the policy applies to, and a
 list of **rules** that say what to do.
 
 ## Anatomy
 
 ```yaml
+schema_version: 1                 # Tool Guard policy schema
 policy_id: pol-refund-cap          # unique within the loaded set
 name: refund-cap                   # human label
 description: >
@@ -37,6 +38,35 @@ rules:
       section: "2.3"
       excerpt: "Individual refund transactions exceeding $500 require supervisor approval prior to processing."
 ```
+
+### Schema version and strict fields
+
+`schema_version: 1` is the current policy schema. Include it in new and
+updated policies. An omitted `schema_version` is treated as version 1;
+note that version 1 as of 0.7.0 no longer accepts `deep_evaluation` or
+unknown fields, so a pre-0.7.0 file carrying either needs the migration
+below — run `tg lint` over your whole policy directory before upgrading.
+An explicitly declared version other than 1 is rejected as unsupported.
+
+Because every top-level key must be a policy schema field, there is no
+legal place to declare a standalone YAML anchor at the top level
+(`base: &common {...}` is an unknown-field error). Anchors and aliases
+on schema fields themselves work normally.
+
+Policy loading is strict at every level, in every binary that loads
+policies — `tg lint`, `tg evaluate`, `tg simulate`, `tg coverage`,
+`tg protect`, `tg hook`, and `tg-proxy` all share one loader
+(`pkg/policyload`); the error identifies the nested field path where
+possible. Note the failure consequences differ: `tg-proxy` refuses to
+start on a load error, while `tg hook` in its default configuration
+fails **open** (no policy enforced) — see the upgrade notes in
+`operating.md`. This prevents a typo
+such as `scpoe` or `scope.tool_namse` from being discarded and accidentally
+turning a narrowly scoped policy into a global one.
+
+The former top-level `deep_evaluation` field was removed because no evaluator
+consumed it. Policies that need semantic classification should use an
+`llm_classify` condition.
 
 `tg lint -policy <file>` validates the shape and runs eight
 checks - warnings and errors (see [`tg lint` heuristics](#tg-lint-heuristics)).

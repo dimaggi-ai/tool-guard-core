@@ -240,8 +240,9 @@ at the flag level and cannot be removed by an agent.
 > (or `-fail-closed`).** Without either flag, `tg hook` fails OPEN on any
 > internal error (unparseable stdin, a policy that fails to load, an
 > evaluator panic) — an unattributable tooling glitch never wedges the
-> agent, but it also means an error silently waves the call through with no
-> deny decision at all. That default exists so a transient hiccup on a dev
+> agent, but it also means an error waves the call through with no deny
+> decision at all (as of 0.7.0 the load error is at least reported on
+> stderr — visible, not prevented). That default exists so a transient hiccup on a dev
 > machine doesn't block work; a deployment that's actually meant to enforce
 > policy should not run without one of these flags. The example above
 > already sets `-fail-closed-tools` for exactly this reason — treat it as

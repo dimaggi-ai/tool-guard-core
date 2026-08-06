@@ -5,6 +5,7 @@
 # attack pattern is to swap the beneficiary at the last moment (BEC).
 # This policy is intentionally strict.
 
+schema_version: 1
 policy_id: pol-wire-transfer-guard
 name: wire-transfer-guard
 description: >

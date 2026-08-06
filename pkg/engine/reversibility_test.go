@@ -2,15 +2,13 @@ package engine
 
 import (
 	"encoding/json"
-	"fmt"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
+	"github.com/dimaggi-ai/tool-guard-core/pkg/policyload"
 	_ "github.com/dimaggi-ai/tool-guard-core/pkg/sqlguard/lite" // register SQL dialects
-	"gopkg.in/yaml.v3"
 )
 
 // envFor builds a minimal envelope for a tool call with the given parameters.
@@ -541,53 +539,14 @@ func TestFloorDoesNotNullifyCoLoadedShadowPolicy(t *testing.T) {
 	}
 }
 
-// loadYAMLPolicy loads a shipped YAML policy the same way the proxy loader
-// does (YAML → JSON → domain.Policy), so the engine test exercises the real
-// on-disk policy file.
+// loadYAMLPolicy loads a shipped YAML policy through the production loader.
 func loadYAMLPolicy(t *testing.T, path string) domain.Policy {
 	t.Helper()
-	b, err := os.ReadFile(path)
+	pol, err := policyload.Load(path)
 	if err != nil {
-		t.Fatalf("read policy %s: %v", path, err)
-	}
-	var raw any
-	if err := yaml.Unmarshal(b, &raw); err != nil {
-		t.Fatalf("parse YAML %s: %v", path, err)
-	}
-	js, err := json.Marshal(normalizeYAMLTest(raw))
-	if err != nil {
-		t.Fatalf("yaml→json %s: %v", path, err)
-	}
-	var pol domain.Policy
-	if err := json.Unmarshal(js, &pol); err != nil {
-		t.Fatalf("decode policy %s: %v", path, err)
+		t.Fatalf("load policy %s: %v", path, err)
 	}
 	return pol
-}
-
-// normalizeYAMLTest rewrites any map[any]any nodes into map[string]any so
-// encoding/json can marshal the parsed YAML (mirrors the proxy loader).
-func normalizeYAMLTest(v any) any {
-	switch m := v.(type) {
-	case map[any]any:
-		out := make(map[string]any, len(m))
-		for k, val := range m {
-			out[fmt.Sprint(k)] = normalizeYAMLTest(val)
-		}
-		return out
-	case map[string]any:
-		for k, val := range m {
-			m[k] = normalizeYAMLTest(val)
-		}
-		return m
-	case []any:
-		for i, x := range m {
-			m[i] = normalizeYAMLTest(x)
-		}
-		return m
-	default:
-		return v
-	}
 }
 
 // TestIrreversibilityFloorPolicy is the evaluator-level integration test: it

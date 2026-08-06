@@ -6,6 +6,7 @@
 # closes that surface by reading velocity-aggregated fields on the
 # context.
 
+schema_version: 1
 policy_id: pol-expense-velocity-guard
 name: expense-velocity-guard
 description: >

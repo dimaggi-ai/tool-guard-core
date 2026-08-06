@@ -11,6 +11,7 @@
 #
 # Pairs subject-line and body regex tripwires with structural caps.
 
+schema_version: 1
 policy_id: pol-mass-communication-guard
 name: mass-communication-guard
 description: >

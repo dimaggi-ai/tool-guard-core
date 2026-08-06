@@ -13,10 +13,8 @@
 //     evaluation: which envelope, which policies matched, which rules
 //     triggered, the chosen action, and the hash-chain links.
 //
-// All types are JSON-tagged. YAML loading is handled at the CLI boundary
-// (`cmd/tg`) via a generic-map round-trip so the domain stays JSON-only.
+// All types are JSON-tagged. YAML loading is handled by pkg/policyload via a
+// strict generic-map round-trip so the domain stays JSON-only.
 //
-// Policies opt in to semantic / hybrid evaluation via [DeepEvalConfig];
-// the deterministic engine in this OSS module ignores that field, and
-// the corresponding [DecisionTrace.DeepEvalResult] stays nil.
+// Policy conditions opt in to semantic classification via [LLMClassify].
 package domain
