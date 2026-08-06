@@ -20,6 +20,7 @@ import (
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/engine"
+	"github.com/dimaggi-ai/tool-guard-core/pkg/policyload"
 )
 
 type conformanceCase struct {
@@ -55,7 +56,7 @@ func TestConformance(t *testing.T) {
 				t.Fatalf("parse case: %v", err)
 			}
 
-			policy, err := loadPolicyYAML(filepath.Join(filepath.Dir(file), c.PolicyFile))
+			policy, err := policyload.Load(filepath.Join(filepath.Dir(file), c.PolicyFile))
 			if err != nil {
 				t.Fatalf("load policy %q: %v", c.PolicyFile, err)
 			}

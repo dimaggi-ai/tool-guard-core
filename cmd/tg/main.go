@@ -25,14 +25,13 @@ import (
 	"github.com/dimaggi-ai/tool-guard-core/pkg/audit"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/engine"
+	"github.com/dimaggi-ai/tool-guard-core/pkg/policyload"
 	// Register the default SQL dialect classifiers (postgres/mysql/sqlite via
 	// lite, plus mssql) by side-effect so `tg evaluate`/`tg lint` classify
 	// sql_classify policies for real instead of fail-closing on an
 	// unregistered dialect. Must match cmd/tg-proxy/main.go.
 	_ "github.com/dimaggi-ai/tool-guard-core/pkg/sqlguard/lite"
 	_ "github.com/dimaggi-ai/tool-guard-core/pkg/sqlguard/mssql"
-
-	"gopkg.in/yaml.v3"
 )
 
 const usage = `tg — Tool Guard Core CLI
@@ -149,7 +148,7 @@ func cmdEvaluate(args []string) int {
 		return 2
 	}
 
-	policy, err := loadPolicyYAML(*policyPath)
+	policy, err := policyload.Load(*policyPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "evaluate:", err)
 		return 1
@@ -277,7 +276,7 @@ func cmdLint(args []string) int {
 		fmt.Fprintln(os.Stderr, "lint: -policy is required")
 		return 2
 	}
-	policy, err := loadPolicyYAML(*policyPath)
+	policy, err := policyload.Load(*policyPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "lint:", err)
 		return 1
@@ -759,81 +758,6 @@ func insertionSort(a []time.Duration) {
 			j--
 		}
 		a[j+1] = k
-	}
-}
-
-// ── loaders ────────────────────────────────────────────────────────────────
-
-// loadPolicyYAML reads a policy YAML file and decodes it through the
-// JSON tags the domain types carry. yaml.v3 alone would fall back to
-// lowercase struct names and miss snake_case keys like policy_id /
-// tool_names / operator, so we round-trip via a generic map → JSON.
-// Cost: one extra marshal step per CLI invocation. Benefit: the domain
-// types stay JSON-only and the YAML field names match the canonical
-// snake_case the policies use everywhere.
-func loadPolicyYAML(path string) (domain.Policy, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return domain.Policy{}, fmt.Errorf("read policy: %w", err)
-	}
-	var raw interface{}
-	if err := yaml.Unmarshal(b, &raw); err != nil {
-		return domain.Policy{}, fmt.Errorf("parse policy YAML: %w", err)
-	}
-	raw = normalizeYAML(raw)
-	js, err := json.Marshal(raw)
-	if err != nil {
-		return domain.Policy{}, fmt.Errorf("yaml→json: %w", err)
-	}
-	var p domain.Policy
-	if err := json.Unmarshal(js, &p); err != nil {
-		return domain.Policy{}, fmt.Errorf("decode policy: %w", err)
-	}
-	if p.Status == "" {
-		p.Status = domain.PolicyStatusApproved
-	}
-	if p.Mode == "" {
-		p.Mode = domain.PolicyModeEnforcement
-	}
-	// A misspelled status/mode must not silently demote enforcement or
-	// approval gating — refuse to load.
-	switch p.Status {
-	case domain.PolicyStatusDraft, domain.PolicyStatusReview, domain.PolicyStatusApproved, domain.PolicyStatusArchived:
-	default:
-		return domain.Policy{}, fmt.Errorf("policy %q: unknown status %q (must be draft|review|approved|archived)", p.PolicyID, p.Status)
-	}
-	switch p.Mode {
-	case domain.PolicyModeShadow, domain.PolicyModeEnforcement:
-	default:
-		return domain.Policy{}, fmt.Errorf("policy %q: unknown mode %q (must be shadow|enforcement)", p.PolicyID, p.Mode)
-	}
-	return p, nil
-}
-
-// normalizeYAML walks the yaml.v3 decoded tree and rewrites
-// map[interface{}]interface{} as map[string]interface{} so json.Marshal
-// is happy. yaml.v3 returns the latter for the top level but the former
-// for nested maps when keys are non-string interface{}.
-func normalizeYAML(v interface{}) interface{} {
-	switch m := v.(type) {
-	case map[interface{}]interface{}:
-		out := make(map[string]interface{}, len(m))
-		for k, val := range m {
-			out[fmt.Sprint(k)] = normalizeYAML(val)
-		}
-		return out
-	case map[string]interface{}:
-		for k, val := range m {
-			m[k] = normalizeYAML(val)
-		}
-		return m
-	case []interface{}:
-		for i, x := range m {
-			m[i] = normalizeYAML(x)
-		}
-		return m
-	default:
-		return v
 	}
 }
 

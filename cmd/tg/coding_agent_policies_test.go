@@ -8,6 +8,7 @@ import (
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/engine"
+	"github.com/dimaggi-ai/tool-guard-core/pkg/policyload"
 )
 
 // TestCodingAgentWritesSelfProtection exercises the new shipped-policy
@@ -15,7 +16,7 @@ import (
 // corpus: v0.3.0/v0.4.0 policy snapshots intentionally predate this rule.
 func TestCodingAgentWritesSelfProtection(t *testing.T) {
 	policyPath := filepath.Join("..", "..", "policies", "coding_agent_writes.yaml")
-	policy, err := loadPolicyYAML(policyPath)
+	policy, err := policyload.Load(policyPath)
 	if err != nil {
 		t.Fatalf("load shipped policy: %v", err)
 	}
@@ -88,7 +89,7 @@ func TestCodingAgentWritesSelfProtection(t *testing.T) {
 
 func TestCodingAgentGuardBlocksRecursiveRootDelete(t *testing.T) {
 	policyPath := filepath.Join("..", "..", "examples", "coding-agent-guard", "policy.yaml")
-	policy, err := loadPolicyYAML(policyPath)
+	policy, err := policyload.Load(policyPath)
 	if err != nil {
 		t.Fatalf("load coding-agent policy: %v", err)
 	}

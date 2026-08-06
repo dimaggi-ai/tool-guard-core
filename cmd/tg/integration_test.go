@@ -348,6 +348,28 @@ func TestIntegration_LintExitCodes(t *testing.T) {
 			t.Errorf("expected rule-id-collision finding; got: %s", stdout)
 		}
 	})
+
+	t.Run("unknown field is a load error", func(t *testing.T) {
+		p := writeFile(t, dir, "unknown.yaml", "policy_id: bad\nscpoe:\n  tool_names: [run]\n")
+		code, _, stderr := exitCode(t, "lint", "-policy", p)
+		if code != 1 {
+			t.Fatalf("exit = %d, want 1; stderr=%s", code, stderr)
+		}
+		if !strings.Contains(stderr, `unknown field "scpoe" at scpoe`) {
+			t.Errorf("expected field path in error; got: %s", stderr)
+		}
+	})
+
+	t.Run("unsupported schema version is a load error", func(t *testing.T) {
+		p := writeFile(t, dir, "future.yaml", "schema_version: 2\npolicy_id: future\n")
+		code, _, stderr := exitCode(t, "lint", "-policy", p)
+		if code != 1 {
+			t.Fatalf("exit = %d, want 1; stderr=%s", code, stderr)
+		}
+		if !strings.Contains(stderr, "unsupported schema_version 2") {
+			t.Errorf("expected schema version in error; got: %s", stderr)
+		}
+	})
 }
 
 // ── tg benchmark ───────────────────────────────────────────────────────────
