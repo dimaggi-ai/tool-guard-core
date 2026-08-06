@@ -73,18 +73,29 @@ described below.
   a hardcoded `~/.config/tool-guard`: `$XDG_CONFIG_HOME/tool-guard` on
   POSIX, `%AppData%\tool-guard` on Windows, `~/Library/Application
   Support/tool-guard` on macOS.
-- Legacy discovery: a pre-0.6.0 install at `~/.config/tool-guard` keeps
-  winning while that directory exists and the native root does not, so
-  `status`, re-`protect`, and `unprotect` on an old install still resolve to
-  the files it actually wrote — including an operator-customized policy.
-  Once the native root exists it wins permanently. On Linux with
-  `XDG_CONFIG_HOME` unset, native and legacy are the same directory and
-  nothing moves. Reversibility never depends on this resolution (backup and
-  state sit next to the Claude settings file, recorded as absolute paths).
+- Existing installs are pinned by their managed state: a default re-`protect`
+  reuses the recorded absolute policy and audit paths, so a root that becomes
+  resolvable differently later (native dir created, `XDG_CONFIG_HOME`
+  changed) cannot silently abandon a customized policy or start a new audit
+  chain. `status` and `unprotect` operate on the recorded paths and now work
+  with an explicit `-config` even when `HOME`/`USERPROFILE` is unset.
+- Legacy discovery (fresh resolution only): a pre-0.6.0 install at
+  `~/.config/tool-guard` keeps winning while it shows evidence of a real
+  managed install (a `policies/` or `audit/` subdirectory — an empty or
+  stale directory is not evidence) and the native root does not exist. If
+  the platform root cannot be resolved at all (e.g. `%AppData%` unset,
+  relative `XDG_CONFIG_HOME`), resolution errors unless an evidenced legacy
+  install exists — a fresh install is never silently created in the legacy
+  location. On Linux with `XDG_CONFIG_HOME` unset, native and legacy are the
+  same directory and nothing moves. Reversibility does not depend on root
+  resolution (backup and state sit next to the Claude settings file,
+  recorded as absolute paths).
 - Tests prove native-root selection against a NON-default
   `XDG_CONFIG_HOME` and Windows/macOS roots (the previous fixtures pinned
   XDG to `~/.config`, which a hardcoded path satisfied vacuously), plus
-  legacy-root discovery end-to-end: `cmd/tg/protect_root_test.go` and
+  legacy-root discovery end-to-end, re-protect pinning after the native
+  root appears, unresolvable-root failure modes, and status/unprotect
+  without a home directory: `cmd/tg/protect_root_test.go` and
   `TestProtectCleanProfileLegacyRootDiscovery`. Precedence and migration
   are documented in `docs/protect.md`.
 

@@ -53,22 +53,30 @@ the platform config-directory API (Go's `os.UserConfigDir`):
 
 Precedence, in order:
 
-1. Explicit `-policy` (and the audit path recorded in managed state) always
-   win — the managed root only decides *defaults*.
-2. **Legacy discovery:** if `~/.config/tool-guard` exists from a pre-0.6.0
-   install and the native root does not, the legacy root keeps being used, so
-   `status`, re-`protect`, and `unprotect` on an old install still resolve to
-   the files it actually wrote (including an operator-customized policy).
-3. Otherwise the native root is used.
+1. Explicit `-policy` always wins — the managed root only decides *defaults*.
+2. **Existing install:** a default re-`protect` reuses the absolute policy
+   and audit paths recorded in the managed state, so an already-protected
+   profile never moves — a customized policy is kept and the audit chain
+   continues — regardless of how the root would resolve today. `status` and
+   `unprotect` likewise operate on the recorded absolute paths (and work with
+   an explicit `-config` even when `HOME`/`USERPROFILE` is unset).
+3. **Legacy discovery (fresh resolution only):** if `~/.config/tool-guard`
+   shows evidence of a pre-0.6.0 install — a `policies/` or `audit/`
+   subdirectory; a merely existing empty directory does not count — and the
+   native root does not exist, the legacy root keeps being used.
+4. Otherwise the native root is used. If the platform root cannot be resolved
+   at all (e.g. `%AppData%` unset, or a relative `XDG_CONFIG_HOME`), protect
+   fails with the resolution error unless an evidenced legacy install exists —
+   a fresh install is never silently created in the legacy location.
 
 On Linux with `XDG_CONFIG_HOME` unset the native and legacy roots are the
 same directory, so nothing moves. To migrate a legacy install to the native
 root, run `tg unprotect claude -apply`, move (or delete)
 `~/.config/tool-guard` to the native location, and run
-`tg protect claude -apply` again; once the native root exists it wins
-permanently. Reversibility never depends on this resolution: the pristine
-backup and managed state sit next to the Claude settings file, and the state
-records absolute paths.
+`tg protect claude -apply` again — removing the managed state is what lets
+the root re-resolve. Reversibility does not depend on root resolution: the
+pristine backup and managed state sit next to the Claude settings file, and
+the state records absolute paths.
 
 This exec form does not depend on Bash, PowerShell, or shell quoting, including
 when paths contain spaces. A default-profile install detects Claude Code and

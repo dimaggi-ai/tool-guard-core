@@ -143,6 +143,19 @@ func runProtect(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "protect:", err)
 		return 1
 	}
+	// Re-protect pins the existing install: the absolute policy and audit
+	// paths recorded in managed state win over freshly resolved defaults, so
+	// a root that becomes resolvable differently later (native dir created,
+	// XDG_CONFIG_HOME changed) cannot silently abandon a customized policy or
+	// start a new audit chain. An explicit -policy still overrides.
+	if prior, priorErr := loadProtectState(p.state); priorErr == nil {
+		if *policy == "" && prior.PolicyPath != "" {
+			p.policy = prior.PolicyPath
+		}
+		if prior.AuditPath != "" {
+			p.audit = prior.AuditPath
+		}
+	}
 	original, existed, root, err := readJSONConfig(p.config)
 	if err != nil {
 		fmt.Fprintln(stderr, "protect:", err)
@@ -379,20 +392,24 @@ func protectTarget(args []string, stderr io.Writer, verb string) (string, []stri
 }
 
 func resolveProtectPaths(configOverride, policyOverride, tgOverride string) (protectPaths, bool, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return protectPaths{}, false, err
-	}
 	config := configOverride
 	if config == "" {
+		// The home directory is only required to locate the default Claude
+		// settings; an explicit -config must keep working when HOME or
+		// USERPROFILE is unset but the platform config root is resolvable.
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return protectPaths{}, false, err
+		}
 		config = filepath.Join(home, ".claude", "settings.json")
 	}
 	tgPath := tgOverride
 	if tgPath == "" {
-		tgPath, err = os.Executable()
+		exe, err := os.Executable()
 		if err != nil {
 			return protectPaths{}, false, err
 		}
+		tgPath = exe
 	}
 	defaultPolicy := policyOverride == ""
 	policy := policyOverride
@@ -426,29 +443,45 @@ func resolveProtectPaths(configOverride, policyOverride, tgOverride string) (pro
 // and audit files. Fresh installs use the platform config root reported by
 // os.UserConfigDir — $XDG_CONFIG_HOME (default ~/.config) on POSIX, %AppData%
 // on Windows, ~/Library/Application Support on macOS. A pre-0.6.0 install at
-// the legacy ~/.config/tool-guard root keeps winning while that directory
-// exists and the native root does not, so status, re-protect, and unprotect
-// on an old install still resolve to the files it actually wrote. Once the
-// native root exists (fresh install, or a manual migration by moving the
-// directory), it wins permanently.
+// the legacy ~/.config/tool-guard root keeps winning while it shows evidence
+// of a real managed install (a policies/ or audit/ subdirectory — a merely
+// existing empty or stale directory is not evidence) and the native root does
+// not exist, so a default re-protect on an old install still resolves to the
+// files it actually wrote. Once the native root exists it wins. If the
+// platform root cannot be resolved at all (e.g. %AppData% unset, relative
+// $XDG_CONFIG_HOME), only an evidenced legacy install qualifies as a
+// fallback — a fresh install must never be silently created in the legacy
+// location; the resolution error is surfaced instead.
+//
+// The existence checks are best-effort snapshots (any filesystem probe is);
+// re-protect additionally pins an existing install by reusing the absolute
+// paths recorded in its managed state, so root re-resolution cannot move it.
 func resolveManagedRoot() (string, error) {
 	native, nativeErr := os.UserConfigDir()
-	home, homeErr := os.UserHomeDir()
-	var legacyRoot string
-	if homeErr == nil {
-		legacyRoot = filepath.Join(home, ".config", "tool-guard")
-	}
+	legacyRoot, legacyEvidence := legacyManagedRoot()
 	if nativeErr != nil {
-		if legacyRoot == "" {
-			return "", fmt.Errorf("cannot resolve a config root: %w", nativeErr)
+		if legacyEvidence {
+			return legacyRoot, nil
 		}
-		return legacyRoot, nil
+		return "", fmt.Errorf("cannot resolve a config root: %w", nativeErr)
 	}
 	nativeRoot := filepath.Join(native, "tool-guard")
-	if legacyRoot != "" && legacyRoot != nativeRoot && dirExists(legacyRoot) && !dirExists(nativeRoot) {
+	if legacyEvidence && legacyRoot != nativeRoot && !dirExists(nativeRoot) {
 		return legacyRoot, nil
 	}
 	return nativeRoot, nil
+}
+
+// legacyManagedRoot reports the pre-0.6.0 managed root and whether it holds
+// evidence of a real managed install: the policies/ directory (every default
+// install wrote one) or the audit/ directory (every install appended there).
+func legacyManagedRoot() (string, bool) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", false
+	}
+	root := filepath.Join(home, ".config", "tool-guard")
+	return root, dirExists(filepath.Join(root, "policies")) || dirExists(filepath.Join(root, "audit"))
 }
 
 func dirExists(path string) bool {
