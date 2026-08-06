@@ -5,6 +5,124 @@ per-change record see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## 0.6.0 — 2026-08-05
+
+"Gate on consequence" — a deterministic classifier that judges an action
+by whether it can be undone, an irreversibility floor no permissive
+policy can override, and one-command protection for a coding agent.
+**No breaking changes; no new required config.**
+
+### Highlights
+
+- **Reversibility-aware gating.** Every tool call is now classified —
+  deterministically, with no network call and no LLM — as `reversible`,
+  `recoverable`, `irreversible`, or `unknown`, from its declared name,
+  group, and parameter structure. The class is an ordinary condition
+  field, so any policy can gate on it:
+
+  ```yaml
+  conditions:
+    field: reversibility
+    operator: eq
+    value: irreversible
+  effect: escalate
+  ```
+
+  Signals from different parts of one call merge by keeping the
+  *most-gating* class, and `unknown` deliberately outranks both
+  allow-classes: a call whose structure the classifier does not
+  recognize is escalated, not allowed, because "no rule named it" is
+  not evidence that it is safe.
+
+- **A shipped irreversibility floor:
+  [`policies/irreversibility_floor.yaml`](policies/irreversibility_floor.yaml).**
+  Money movement, account or data destruction, production
+  deploy/publish, physical actuation, and destructive statements (SQL
+  `DROP`/`TRUNCATE`/unscoped `DELETE`, shell `rm -rf`) escalate to a
+  human before they run. The floor's guarantee does not rest on
+  priority or evaluation order — it rests on the engine's max-severity
+  resolution, so a more permissive policy loaded alongside it **cannot**
+  override it. The policy carries an explicit mapping to EU AI Act
+  Article 14 (human oversight of high-risk systems) in its description;
+  that is a documented mapping to a requirement, not a certification.
+
+- **`tg protect claude` — protect a coding agent with one command, and
+  undo it with one.** It merges a shell-free exec-form `PreToolUse` hook
+  into `~/.claude/settings.json` pointing at the running `tg` binary,
+  with self-protection over its own settings, backup, state, and audit
+  directory, and fail-closed behavior for consequential tools:
+
+  ```bash
+  tg protect claude          # dry-run: prints the exact proposed settings.json
+  tg protect claude -apply   # back up, install, enable enforcement
+  tg status claude           # is it installed, drifted, still valid?
+  tg unprotect claude -apply # restore
+  ```
+
+  Preview is the default and nothing is written without `-apply`. The
+  first pre-install backup is never overwritten; unprotect restores the
+  original bytes and permissions exactly when the file is unchanged, and
+  otherwise removes only Tool Guard's own entry while preserving edits
+  you made afterwards. Repeat `-apply` is idempotent, and the starter
+  policy is validated before the hook is ever activated. Requires Claude
+  Code 2.1.139 or newer (the version that introduced exec-form hooks).
+  See [docs/protect.md](docs/protect.md).
+
+- **`api/openapi.yaml`** now documents the `tg-proxy` HTTP surface, with
+  conformance tests that fail CI if the implementation and the spec
+  drift apart. `tg-proxy`'s read-only endpoints also enforce their HTTP
+  method and fail safe on a request that arrives without one.
+
+- **Platform-native config roots.** `tg protect`'s default policy and
+  audit location now follows the platform config directory
+  (`$XDG_CONFIG_HOME/tool-guard`, `%AppData%\tool-guard`,
+  `~/Library/Application Support/tool-guard`) instead of a hardcoded
+  `~/.config/tool-guard` on every OS.
+
+The reversibility work was hardened over eight adversarial QA rounds
+plus fuzzing before this release. The protect and config-root work went
+through an independent pre-release review that returned three real
+blockers — a re-protect that could abandon an existing install's
+customized policy and fork its audit chain, a `status`/`unprotect` that
+failed without a home directory, and an unresolvable config root that
+silently created a fresh install in the legacy location — each fixed
+with its own regression test now checked in. See
+[CHANGELOG.md](CHANGELOG.md) for the full technical record.
+
+### Upgrade notes
+
+**Nothing to do.** Existing policies, CLI flags, and `tg-proxy`
+deployments are unaffected. Reversibility is additive: it changes
+decisions only for policies that opt into the `reversibility` field or
+that load the floor policy — adding
+`policies/irreversibility_floor.yaml` to your policy directory is an
+explicit, opt-in step. If you do adopt it, expect it to escalate
+irreversible and unrecognized actions that were previously allowed;
+run it in `shadow` mode first and read the audit log before switching
+it to `enforcement`.
+
+The managed-root change affects only `tg protect`'s **default** file
+locations, never an install that already exists:
+
+- On Linux with `XDG_CONFIG_HOME` unset — the common case — the native
+  and legacy roots are the same directory and **nothing moves**.
+- An already-protected profile is pinned by its managed state on every
+  platform: a later `tg protect claude -apply` reuses the absolute
+  policy and audit paths recorded at install time, so a customized
+  policy is never abandoned and the audit chain is never forked, no
+  matter how the root would resolve today.
+- A pre-0.6.0 install at `~/.config/tool-guard` is still discovered on
+  a fresh resolution as long as it shows real evidence of an install (a
+  `policies/` or `audit/` directory).
+- `tg status claude` reports the paths actually in use — run it after
+  upgrading if you want to confirm.
+
+To deliberately move a legacy install to the native root: `tg unprotect
+claude -apply`, move or delete `~/.config/tool-guard`, then `tg protect
+claude -apply`.
+
+---
+
 ## 0.5.2 — 2026-07-26
 
 Bug-fix release. **No breaking changes; no new required config.**

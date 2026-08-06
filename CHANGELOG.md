@@ -6,10 +6,22 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-08-05
+
 Feature release: reversibility-aware gating, one-command Claude Code
 protection (`tg protect`), and platform-native config roots. No breaking
 changes to existing policies or CLI flags; new install defaults are
 described below.
+
+**Upgrading:** nothing to do. Existing policies, CLI flags, and
+`tg-proxy` deployments are unaffected, and the reversibility field is
+additive — it only changes decisions for policies that opt into it or
+that load the new floor policy. The managed-root change affects only
+`tg protect`'s *default* file locations: on Linux with `XDG_CONFIG_HOME`
+unset (the common case) nothing moves at all, and an already-protected
+profile is pinned by its managed state regardless of platform, so its
+policy and audit chain stay exactly where they are. Confirm with
+`tg status claude`.
 
 ### Reversibility-aware gating — deterministic classifier + irreversibility floor (`pkg/engine`)
 
@@ -1078,7 +1090,9 @@ Lint heuristics shipped (8):
   documented battle-test catalogue; the strict variants are for
   operators who already accept those build-time costs.
 
-[Unreleased]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.5.2...v0.6.0
+[0.5.2]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.5.0...v0.5.2
 [0.5.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.2.0...v0.3.0

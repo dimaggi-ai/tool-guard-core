@@ -126,6 +126,34 @@ passes have real precedent instead of a starting from scratch.
   narrowly scoping a review to "the new SDK" missed a bug in existing
   code that the SDK's own fix pattern should have prompted a search for.
 
+- **2026-08 · `cmd/tg/protect.go`, v0.6.0 pre-tag review.** An
+  independent review of the platform-native config-root change (issue
+  #13) returned three blockers, all in the same class the checklist
+  exists to catch — *state that outlives the code path that created
+  it*. (1) `runProtect` resolved fresh default paths before loading
+  prior state, so a re-`protect` after the native root came into
+  existence silently abandoned an existing install's customized policy
+  and started a second audit chain; fixed by pinning re-protect to the
+  absolute `PolicyPath`/`AuditPath` recorded in managed state. (2)
+  `status`/`unprotect` called the full resolver, which unconditionally
+  required `os.UserHomeDir`, so both failed with an explicit `-config`
+  when `HOME` was unset — reproduced independently by darwin CI, where
+  `os.UserConfigDir` needs `$HOME`; fixed by giving those verbs a
+  config-only resolver that performs no root resolution at all. (3) A
+  failed platform-root lookup fell back to the legacy path without
+  requiring it to exist, so an unset `%AppData%` or a relative
+  `XDG_CONFIG_HOME` silently created a *fresh* install in the legacy
+  location; fixed by requiring real install evidence (a `policies/` or
+  `audit/` directory) and surfacing the resolution error otherwise.
+  A follow-up pass then caught that the evidence check followed
+  symlinks, so a symlinked legacy root or leaf still qualified —
+  tightened to `Lstat`. → pillars 1 and 6, and a reminder that
+  "reversible by construction" is a property of the *recorded state*,
+  not of the resolver: any change to how default paths are computed
+  must be checked against installs that recorded different ones.
+  Each finding has its own regression test in
+  `cmd/tg/protect_root_test.go`.
+
 ## Where this fits in the release checklist
 
 `RELEASING.md`'s "Before tagging at all" section should include running

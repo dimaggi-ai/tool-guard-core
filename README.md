@@ -599,6 +599,18 @@ Comprehensive docs live in [`docs/`](docs/README.md):
 
 ## Known limitations
 
+> **New in 0.6.0:** reversibility-aware gating — a deterministic,
+> offline classifier exposing `reversibility`
+> (`reversible`/`recoverable`/`irreversible`/`unknown`) as an ordinary
+> policy condition field, plus a shipped
+> [irreversibility floor](policies/irreversibility_floor.yaml) that a
+> more permissive policy cannot override (max-severity resolution) and
+> that escalates `unknown` as well as `irreversible`; `tg protect
+> claude` / `tg status` / `tg unprotect` for one-command, preview-first,
+> exactly-reversible protection of a coding agent; an
+> [OpenAPI spec](api/openapi.yaml) for `tg-proxy` with conformance
+> tests; and platform-native config roots for the managed policy/audit
+> location.
 > **New in 0.5.0:** a per-request evaluator panic on `tg-proxy` now always
 > denies and audits (previously it dropped the connection with no record);
 > `tg-proxy` verifies the full audit chain on startup, not just the tail;
