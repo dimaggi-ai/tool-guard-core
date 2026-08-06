@@ -85,12 +85,17 @@ Example raw model output:
 **Root cause:** the deterministic engine reads structured fields, not
 free text. By design. The reason field is for humans.
 
-**Real-world fix:** none ships today. A semantic consistency check
-between `amount=100` and `"Refund of $1000"` in the reason field
-would need an LLM (or a numeric-extraction pass) comparing the two - the current `llm_classify` rule classifies a single prompt field
-against forbidden content labels and does not do cross-field
-consistency. Treat free-text fields as unenforced: if a value
-matters, put it in a structured field the policy actually reads.
+**Real-world fix:** a deterministic tripwire ships —
+`policies/refund_cap_strict.yaml` carries
+`rule-reason-amount-consistency`, a regex on `parameters.reason` that
+escalates when the free text mentions a large dollar amount — but no
+*semantic* consistency check does. Understanding that `amount=100` and
+`"Refund of $1000"` disagree would need an LLM or numeric-extraction
+pass comparing the two; the current `llm_classify` rule classifies a
+single prompt field against forbidden content labels and does not do
+cross-field consistency. Treat free-text fields as pattern-matched at
+best: if a value matters, put it in a structured field the policy
+actually reads.
 
 ## Bypass class 3 - Semantic smuggling - 5/5 BLOCKED
 

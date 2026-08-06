@@ -22,7 +22,9 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -115,6 +117,99 @@ func TestPolicyCompat(t *testing.T) {
 						c.Description, version, result.ActionTaken, c.Expect.ActionTaken, result.DecisionReason, version)
 				}
 			})
+		}
+	}
+}
+
+// TestPolicyCompatCoverage asserts the snapshot set itself is complete:
+// every release tag from v0.2.0 on has a snapshot directory, and every
+// snapshot contains every policy its tag shipped. Without this, a
+// forgotten snapshot is skipped silently and the regression net thins
+// out one release at a time (exactly what happened between v0.4.0 and
+// v0.6.0). Needs git tags: CI fetches them (fetch-tags in ci.yml); a
+// tag-less local clone skips with an explicit message rather than
+// passing vacuously.
+func TestPolicyCompatCoverage(t *testing.T) {
+	// All git invocations run from the repo root: ls-tree/show pathspecs
+	// are resolved relative to the process CWD inside the repo, and this
+	// test's CWD is cmd/tg — "policies/" from here would silently match
+	// nothing and make the shipped-set checks vacuous.
+	gitCmd := func(args ...string) *exec.Cmd {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = filepath.Join("..", "..")
+		return cmd
+	}
+
+	out, err := gitCmd("tag", "-l", "v*").Output()
+	if err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatalf("git tag unavailable in CI (%v) — the checkout must fetch tags (fetch-depth: 0 + fetch-tags in ci.yml) or this gate silently disappears", err)
+		}
+		t.Skipf("git tag unavailable (%v) — coverage check needs a git checkout with tags", err)
+	}
+	tags := strings.Fields(string(out))
+	if len(tags) == 0 {
+		if os.Getenv("CI") != "" {
+			t.Fatal("no release tags in the CI checkout — the checkout must fetch tags (fetch-depth: 0 + fetch-tags in ci.yml) or this gate silently disappears")
+		}
+		t.Skip("no release tags in this checkout — coverage check needs fetched tags (see fetch-tags in ci.yml)")
+	}
+
+	compatRoot := filepath.Join("..", "..", "testdata", "policy-compat")
+	for _, tag := range tags {
+		if strings.HasPrefix(tag, "v0.1.") {
+			continue // pre-net releases: v0.1.x predates the snapshot scheme
+		}
+		dir := filepath.Join(compatRoot, tag)
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			t.Errorf("release tag %s has no snapshot directory — run scripts/snapshot-policies.sh %s", tag, tag)
+			continue
+		}
+
+		lsOut, err := gitCmd("ls-tree", "-r", "--name-only", tag, "--", "policies/").Output()
+		if err != nil {
+			t.Errorf("git ls-tree %s: %v", tag, err)
+			continue
+		}
+		shipped := map[string]bool{}
+		for _, f := range strings.Fields(string(lsOut)) {
+			base := filepath.Base(f)
+			if base == "README.md" {
+				continue
+			}
+			shipped[base] = true
+			got, err := os.ReadFile(filepath.Join(dir, base))
+			if os.IsNotExist(err) {
+				t.Errorf("snapshot %s is missing %s, which tag %s shipped — re-run scripts/snapshot-policies.sh %s", tag, base, tag, tag)
+				continue
+			}
+			if err != nil {
+				t.Errorf("read snapshot %s/%s: %v", tag, base, err)
+				continue
+			}
+			// Byte-equality, not just presence: a hand-edited or "migrated"
+			// snapshot that still loads would otherwise satisfy the gate
+			// while no longer being what the tag shipped.
+			want, err := gitCmd("show", tag+":"+f).Output()
+			if err != nil {
+				t.Errorf("git show %s:%s: %v", tag, f, err)
+				continue
+			}
+			if string(got) != string(want) {
+				t.Errorf("snapshot %s/%s differs from what tag %s shipped — snapshots are frozen copies; re-run scripts/snapshot-policies.sh %s", tag, base, tag, tag)
+			}
+		}
+		// No stale extras: a file in the snapshot the tag never shipped is
+		// not a snapshot of that tag.
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Errorf("read snapshot dir %s: %v", tag, err)
+			continue
+		}
+		for _, e := range entries {
+			if !shipped[e.Name()] {
+				t.Errorf("snapshot %s contains %s, which tag %s never shipped — re-run scripts/snapshot-policies.sh %s", tag, e.Name(), tag, tag)
+			}
 		}
 	}
 }

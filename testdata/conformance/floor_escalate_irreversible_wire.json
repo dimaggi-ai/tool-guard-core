@@ -1,0 +1,12 @@
+{
+  "name": "floor_escalate_irreversible_wire",
+  "description": "A wire transfer is classified irreversible (money leaves) — the floor escalates it to a human instead of auto-allowing.",
+  "policy_file": "../../policies/irreversibility_floor.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "wire_transfer",
+    "tool_group": "banking",
+    "parameters": {"amount": 2500, "currency": "USD", "beneficiary": "acct-9"}
+  },
+  "expect": {"decision": "escalated", "action_taken": "escalated"}
+}

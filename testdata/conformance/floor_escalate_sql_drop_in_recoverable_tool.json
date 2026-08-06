@@ -1,0 +1,11 @@
+{
+  "name": "floor_escalate_sql_drop_in_recoverable_tool",
+  "description": "Signals merge by keeping the most-gating class: an update-verb tool (recoverable by name) carrying a destructive SQL statement in its `sql` parameter is irreversible, and the floor escalates it.",
+  "policy_file": "../../policies/irreversibility_floor.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "update_records",
+    "parameters": {"sql": "DROP TABLE users"}
+  },
+  "expect": {"decision": "escalated", "action_taken": "escalated"}
+}

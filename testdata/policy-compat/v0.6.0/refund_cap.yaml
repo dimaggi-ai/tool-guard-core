@@ -1,0 +1,28 @@
+policy_id: pol-example-refund
+name: refund-cap-example
+description: Deny refunds over $500. The deliberately narrow scope (issue_refund only) demonstrates the tool-substitution bypass class — run `tg lint` to see the warning.
+version: 1
+status: approved
+mode: enforcement
+
+scope:
+  tool_names:
+    - issue_refund
+  # NOTE: tool_groups intentionally omitted — `tg lint` will flag this.
+
+rules:
+  - rule_id: rule-amount-cap
+    name: Single refund amount limit
+    rule_type: threshold
+    conditions:
+      field: amount
+      operator: gt
+      value: 500
+    effect: deny
+    effect_config:
+      severity: high
+      suggested_response: "Refunds over $500 require supervisor approval."
+    citation:
+      document_id: doc-refund-sop
+      section: "2.3"
+      excerpt: "Individual refund transactions exceeding $500 require supervisor approval prior to processing."

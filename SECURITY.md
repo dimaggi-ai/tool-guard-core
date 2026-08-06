@@ -104,10 +104,13 @@ engine does not block on its own:
   sibling tool the policy author forgot to scope. Mitigation: `tg lint`
   warns with `scope-no-tool-group`.
 - **Amount fragmentation** — an agent passes `amount: 100` but writes
-  `"refund of $1000"` in the free-text reason field. The deterministic
-  engine reads structured fields only. Mitigation: keep values that
-  matter in structured fields the policy reads; free text is
-  unenforced.
+  `"refund of $1000"` in the free-text reason field. No *semantic
+  cross-field consistency* check ships: the engine cannot know the two
+  refer to the same quantity. A deterministic tripwire does ship —
+  `refund_cap_strict.yaml`'s `rule-reason-amount-consistency` escalates
+  when the reason text matches a large dollar amount — but it is a
+  pattern match, not understanding. Mitigation: keep values that matter
+  in structured fields the policy reads.
 
 Both are documented limits of a deterministic engine, not
 vulnerabilities. A case where the engine misses a structured-field
