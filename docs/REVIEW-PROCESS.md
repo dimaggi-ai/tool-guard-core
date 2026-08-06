@@ -73,8 +73,9 @@ the SDK, audit integrity, or a release workflow, the per-pillar
 checklist above is run as a **panel**: several frontier models from
 different vendors, each with a distinct brief, reviewing the same change
 in parallel. The panel runs **on the pull request, before merge** — its
-disposition stamp is a merge prerequisite for qualifying PRs, and the
-pre-tag checklist in `RELEASING.md` verifies it happened. This is still
+disposition stamp is a merge prerequisite for qualifying PRs (enforced
+by maintainer practice, not by CI), and the pre-tag checklist in
+`RELEASING.md` verifies it happened. This is still
 maintainer-run review, not independent third-party review — the same
 honesty rule as everything else in this document (pillar 5).
 
