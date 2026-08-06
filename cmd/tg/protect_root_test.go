@@ -168,6 +168,30 @@ func TestResolveManagedRootIgnoresSymlinkedLegacyEvidence(t *testing.T) {
 	}
 }
 
+func TestResolveManagedRootIgnoresSymlinkedLegacyRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires elevation on Windows")
+	}
+	native, legacy := managedRootFixture(t)
+	realRoot := filepath.Join(os.Getenv("HOME"), "elsewhere-root")
+	if err := os.MkdirAll(filepath.Join(realRoot, "policies"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(legacy), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realRoot, legacy); err != nil {
+		t.Fatal(err)
+	}
+	got, err := resolveManagedRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Clean(got) != filepath.Clean(native) {
+		t.Fatalf("a symlinked legacy root must not count as evidence: root=%q, want native %q", got, native)
+	}
+}
+
 func TestResolveManagedRootIgnoresLegacyFileImpostor(t *testing.T) {
 	native, legacy := managedRootFixture(t)
 	if err := os.MkdirAll(filepath.Dir(legacy), 0o700); err != nil {
