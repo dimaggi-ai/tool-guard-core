@@ -98,3 +98,36 @@ func assertErrorContains(t *testing.T, err error, want string) {
 		t.Fatalf("error = %v, want substring %q", err, want)
 	}
 }
+
+func TestLoadRejectsMultiDocumentYAML(t *testing.T) {
+	_, err := loadText(t, "policy_id: shell\n---\npolicy_id: real\nscope:\n  tool_names: [run]\n")
+	assertErrorContains(t, err, "exactly one YAML document")
+}
+
+func TestLoadSchemaVersionTypeErrors(t *testing.T) {
+	tests := []struct {
+		name      string
+		line      string
+		wantError string
+	}{
+		{name: "quoted", line: "schema_version: \"1\"\n", wantError: "must be an unquoted integer"},
+		{name: "boolean", line: "schema_version: yes\n", wantError: "must be an unquoted integer"},
+		{name: "fractional", line: "schema_version: 1.5\n", wantError: "must be an unquoted integer"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := loadText(t, test.line+"policy_id: test\nrules: []\n")
+			assertErrorContains(t, err, test.wantError)
+		})
+	}
+	if _, err := loadText(t, "schema_version: 1.0\npolicy_id: test\nrules: []\n"); err != nil {
+		t.Fatalf("whole-valued 1.0 must load: %v", err)
+	}
+}
+
+func TestLoadFutureVersionWinsOverFieldGuidance(t *testing.T) {
+	// A schema_version 2 file may legitimately contain fields v1 removed;
+	// it must get the unsupported-version error, not v1 migration advice.
+	_, err := loadText(t, "schema_version: 2\npolicy_id: test\ndeep_evaluation:\n  model: x\n")
+	assertErrorContains(t, err, "unsupported schema_version 2")
+}

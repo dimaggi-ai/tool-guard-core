@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"reflect"
 	"strings"
@@ -12,6 +13,20 @@ import (
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 	"gopkg.in/yaml.v3"
 )
+
+// asWholeInt accepts the YAML scalar shapes an author can plausibly write
+// for an integer version (1, or the whole-valued 1.0) and nothing else.
+func asWholeInt(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case float64:
+		if n == float64(int(n)) {
+			return int(n), true
+		}
+	}
+	return 0, false
+}
 
 const currentSchemaVersion = 1
 
@@ -26,12 +41,36 @@ func Load(path string) (domain.Policy, error) {
 		return domain.Policy{}, fmt.Errorf("read policy: %w", err)
 	}
 
+	// Exactly one YAML document: yaml.Unmarshal would silently take the
+	// first document and drop everything after a `---` separator — a
+	// policy whose scope and rules live in a second document would load
+	// as an empty (and therefore permissive) shell.
+	dec := yaml.NewDecoder(bytes.NewReader(b))
 	var raw any
-	if err := yaml.Unmarshal(b, &raw); err != nil {
+	if err := dec.Decode(&raw); err != nil && err != io.EOF {
 		return domain.Policy{}, fmt.Errorf("parse policy YAML: %w", err)
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		return domain.Policy{}, fmt.Errorf("parse policy YAML: a policy file is exactly one YAML document; content after a `---` separator would be silently ignored")
 	}
 	raw = normalizeYAML(raw)
 	root, _ := raw.(map[string]any)
+
+	// Validate schema_version from the raw document, before any other
+	// schema check: a future-versioned file must get the unsupported-
+	// version error (not v1 migration guidance for fields it may
+	// legitimately contain), and a mistyped value must get a contract
+	// error, not a Go decoding internal.
+	if v, present := root["schema_version"]; present {
+		n, ok := asWholeInt(v)
+		if !ok {
+			return domain.Policy{}, fmt.Errorf("unsupported schema_version %v (supported: %d; must be an unquoted integer)", v, currentSchemaVersion)
+		}
+		if n != currentSchemaVersion {
+			return domain.Policy{}, fmt.Errorf("unsupported schema_version %d (supported: %d)", n, currentSchemaVersion)
+		}
+	}
 	if _, present := root["deep_evaluation"]; present {
 		return domain.Policy{}, fmt.Errorf("decode policy: field %q was removed; use the %q condition in a rule instead", "deep_evaluation", "llm_classify")
 	}

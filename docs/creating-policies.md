@@ -42,9 +42,16 @@ rules:
 ### Schema version and strict fields
 
 `schema_version: 1` is the current policy schema. Include it in new and
-updated policies. Policies created before this field was introduced remain
-compatible: an omitted `schema_version` is silently treated as version 1.
+updated policies. An omitted `schema_version` is treated as version 1;
+note that version 1 as of 0.7.0 no longer accepts `deep_evaluation` or
+unknown fields, so a pre-0.7.0 file carrying either needs the migration
+below — run `tg lint` over your whole policy directory before upgrading.
 An explicitly declared version other than 1 is rejected as unsupported.
+
+Because every top-level key must be a policy schema field, there is no
+legal place to declare a standalone YAML anchor at the top level
+(`base: &common {...}` is an unknown-field error). Anchors and aliases
+on schema fields themselves work normally.
 
 Policy loading is strict at every level. Unknown fields are load errors in
 `tg lint`, `tg evaluate`, `tg simulate`, `tg protect`, and `tg-proxy`; the

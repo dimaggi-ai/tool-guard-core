@@ -15,9 +15,23 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   so unknown or misspelled fields are rejected with a field path instead of
   being silently discarded. Migration: add `schema_version: 1` and fix every
   unknown-field error reported by `tg lint`.
+  **Consequence to plan for:** a single unknown field in any file of a
+  policy directory now fails the whole set to load. `tg-proxy` refuses to
+  start (and a failed reload keeps the previous set), but `tg hook` in its
+  default fail-open configuration then enforces **no policy at all** — a
+  deny that worked under 0.6.0 becomes an allow. The hook now reports the
+  load error on stderr instead of failing silently; still, run `tg lint`
+  on every file in your policy directory **before** upgrading.
 - Removed the parsed-but-unused top-level `deep_evaluation` policy field and
   its Go type. Policies that declare it now fail with targeted guidance;
   migrate semantic checks to a rule with an `llm_classify` condition.
+- A policy file must be exactly one YAML document: content after a `---`
+  separator was previously silently ignored (a policy whose scope and rules
+  sat in a second document loaded as an empty, permissive shell) and is now
+  a load error. A mistyped `schema_version` (quoted, non-integer) gets a
+  contract error naming the field, not a Go decoding internal, and a
+  future-versioned file gets the unsupported-version error before any
+  field-level guidance.
 
 ## [0.6.0] — 2026-08-05
 
