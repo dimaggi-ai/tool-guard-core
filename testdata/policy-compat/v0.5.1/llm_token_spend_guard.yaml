@@ -1,0 +1,69 @@
+# LLM Token Spend Guard — caps agent LLM cost burn at the tool-call
+# boundary. Reads the velocity-aggregated llm_cost_usd_1h, llm_cost_usd_24h,
+# and token_count_24h fields off the verified context. Pairs with an upstream
+# system that records agent_llm_cost_usd on each decision trace.
+#
+# Cross-cutting scope: empty tool_names + empty tool_groups would lint as
+# policy-scope-leak, so we name the broadest sensible group instead.
+policy_id: pol-llm-token-spend-guard
+name: llm-token-spend-guard
+description: >
+  Per-agent LLM cost ceilings. Escalates at $50/h, denies past $300/day,
+  flags 10M+ tokens/day. Designed to catch retry-loop blow-ups and
+  prompt-drift cost spikes.
+version: 1
+status: approved
+mode: enforcement
+
+scope:
+  tool_groups:
+    - llm_usage
+
+rules:
+  - rule_id: rule-llm-cost-hourly
+    name: Agent LLM cost — hourly escalate
+    rule_type: threshold
+    conditions:
+      field: context.verified.agent_velocity.llm_cost_usd_1h
+      operator: gt
+      value: 50
+    effect: escalate
+    effect_config:
+      severity: medium
+      escalate_to: approver
+      timeout_minutes: 15
+    citation:
+      document_id: doc-llm-spend
+      section: "2.1"
+      excerpt: "Per-agent LLM spend exceeding $50 in any rolling 1h window must be paused for human review (retry-loop signature)."
+
+  - rule_id: rule-llm-cost-daily
+    name: Agent LLM cost — daily ceiling
+    rule_type: threshold
+    conditions:
+      field: context.verified.agent_velocity.llm_cost_usd_24h
+      operator: gt
+      value: 300
+    effect: deny
+    effect_config:
+      severity: critical
+      suggested_response: "Agent LLM spend has exceeded the daily $300 ceiling. Subsequent calls are blocked until 00:00 UTC."
+    citation:
+      document_id: doc-llm-spend
+      section: "2.2"
+      excerpt: "Per-agent LLM spend ceiling is $300/day; calls past the cap are denied until 00:00 UTC reset."
+
+  - rule_id: rule-llm-tokens-daily
+    name: Agent token volume — daily cap
+    rule_type: threshold
+    conditions:
+      field: context.verified.agent_velocity.token_count_24h
+      operator: gt
+      value: 10000000
+    effect: flag
+    effect_config:
+      severity: high
+    citation:
+      document_id: doc-llm-spend
+      section: "3.1"
+      excerpt: "Daily token volume above 10M per agent is flagged for prompt-engineering review (prompt drift or unbounded context)."

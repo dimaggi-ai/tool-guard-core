@@ -30,6 +30,10 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
+        with:
+          # TestPolicyCompatCoverage needs the release tags to assert every
+          # tag has a policy snapshot; without them it skips, not passes.
+          fetch-tags: true
 
       - name: Set up Go
         uses: actions/setup-go@v5

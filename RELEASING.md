@@ -35,7 +35,17 @@ guard catching it after the fact — do it right the first time.
    git push origin vX.Y.Z
    ```
 
-4. **Watch the Release workflow.** Its first real step verifies the
+4. **Snapshot the tagged policies** for the compatibility net — this is
+   a release step, not archaeology; `TestPolicyCompatCoverage` fails CI
+   for every tag that skips it:
+   ```bash
+   scripts/snapshot-policies.sh vX.Y.Z
+   git add testdata/policy-compat/vX.Y.Z
+   git commit -m "test: policy-compat snapshot for vX.Y.Z"
+   git push origin main
+   ```
+
+5. **Watch the Release workflow.** Its first real step verifies the
    tag is reachable from `origin/main` and fails immediately, before
    any build/publish work, if it isn't. If it fails: `main` is behind
    the tag — go back to step 1, fast-forward `main`, push it, then

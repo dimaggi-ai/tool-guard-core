@@ -22,7 +22,9 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -115,6 +117,52 @@ func TestPolicyCompat(t *testing.T) {
 						c.Description, version, result.ActionTaken, c.Expect.ActionTaken, result.DecisionReason, version)
 				}
 			})
+		}
+	}
+}
+
+// TestPolicyCompatCoverage asserts the snapshot set itself is complete:
+// every release tag from v0.2.0 on has a snapshot directory, and every
+// snapshot contains every policy its tag shipped. Without this, a
+// forgotten snapshot is skipped silently and the regression net thins
+// out one release at a time (exactly what happened between v0.4.0 and
+// v0.6.0). Needs git tags: CI fetches them (fetch-tags in ci.yml); a
+// tag-less local clone skips with an explicit message rather than
+// passing vacuously.
+func TestPolicyCompatCoverage(t *testing.T) {
+	out, err := exec.Command("git", "tag", "-l", "v*").Output()
+	if err != nil {
+		t.Skipf("git tag unavailable (%v) — coverage check needs a git checkout with tags", err)
+	}
+	tags := strings.Fields(string(out))
+	if len(tags) == 0 {
+		t.Skip("no release tags in this checkout — coverage check needs fetched tags (see fetch-tags in ci.yml)")
+	}
+
+	compatRoot := filepath.Join("..", "..", "testdata", "policy-compat")
+	for _, tag := range tags {
+		if strings.HasPrefix(tag, "v0.1.") {
+			continue // pre-net releases: v0.1.x predates the snapshot scheme
+		}
+		dir := filepath.Join(compatRoot, tag)
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			t.Errorf("release tag %s has no snapshot directory — run scripts/snapshot-policies.sh %s", tag, tag)
+			continue
+		}
+
+		lsOut, err := exec.Command("git", "ls-tree", "-r", "--name-only", tag, "--", "policies/").Output()
+		if err != nil {
+			t.Errorf("git ls-tree %s: %v", tag, err)
+			continue
+		}
+		for _, f := range strings.Fields(string(lsOut)) {
+			base := filepath.Base(f)
+			if base == "README.md" {
+				continue
+			}
+			if _, err := os.Stat(filepath.Join(dir, base)); os.IsNotExist(err) {
+				t.Errorf("snapshot %s is missing %s, which tag %s shipped — re-run scripts/snapshot-policies.sh %s", tag, base, tag, tag)
+			}
 		}
 	}
 }

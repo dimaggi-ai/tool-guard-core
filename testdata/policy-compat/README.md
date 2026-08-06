@@ -20,13 +20,17 @@ After tagging a release (see `RELEASING.md`), snapshot the policies as
 they shipped at that tag:
 
 ```bash
-mkdir -p testdata/policy-compat/vX.Y.Z
-for f in $(git ls-tree -r --name-only vX.Y.Z -- policies/ | grep -v README.md); do
-  git show "vX.Y.Z:$f" > "testdata/policy-compat/vX.Y.Z/$(basename "$f")"
-done
+scripts/snapshot-policies.sh vX.Y.Z
 ```
 
 `TestPolicyCompat` picks up any new `<version>/` directory automatically
 — no test code changes needed. A case is skipped for a version whose
 snapshot doesn't contain that policy's filename yet (the policy didn't
 exist at that tag) rather than failing.
+
+Forgetting the snapshot is no longer silent: `TestPolicyCompatCoverage`
+(same file) fails when any release tag from v0.2.0 on has no snapshot
+directory, or when a snapshot is missing a policy that its tag shipped.
+It compares against `git tag` / `git ls-tree`, so it needs a checkout
+with tags (CI fetches them via `fetch-tags` in `ci.yml`; a tag-less
+clone skips with a message instead of passing vacuously).

@@ -1,0 +1,94 @@
+policy_id: coding-agent-writes
+name: coding-agent-writes
+description: >
+  Govern a coding agent's file writes: keep them off system paths, cap
+  runaway dumps, and refuse to write private-key material. Portable
+  (deny-only). For a stricter posture, add
+  require.allowed_path_prefixes: [/path/to/your/workspace/] and drop the
+  denied list.
+version: 1
+status: approved
+mode: enforcement
+
+scope:
+  tool_names: [write, edit, notebookedit, apply_patch, multiedit]
+  tool_groups: [filesystem_writes]
+
+rules:
+  - rule_id: rule-write-surface
+    name: writes stay off system paths, bounded, no key material
+    rule_type: write
+    conditions:
+      write_classify:
+        require:
+          # Protect the shipped policy bundle and the standard Core/hook
+          # audit-log names wherever the integration is installed.
+          # Runtime -protect-self remains the unconditional protection.
+          denied_path_prefixes:
+            - /etc/
+            - /root/
+            - /usr/
+            - /bin/
+            - /sbin/
+            - /boot/
+            - /var/
+            - policies/
+            - /**/policies/
+            - coding_agent_writes.yaml
+            - /**/coding_agent_writes.yaml
+            - decisions.jsonl
+            - /**/decisions.jsonl
+            - tg-hook-audit.jsonl
+            - /**/tg-hook-audit.jsonl
+            - tg-guard-audit.jsonl
+            - /**/tg-guard-audit.jsonl
+          resolve_symlinks: true
+          max_bytes: 5242880   # 5 MiB — an agent editing source never needs more
+          denied_content_regex:
+            - '(?i)-----BEGIN (RSA|OPENSSH|EC|DSA|PGP) PRIVATE KEY-----'
+    effect: deny
+    effect_config:
+      severity: high
+      suggested_response: "Write blocked: a system path, an oversized dump, or private-key material."
+    citation:
+      document_id: SEC-WRITE
+      section: "1"
+      excerpt: "Coding-agent file writes are confined to the working tree; system paths, oversized writes, and private-key material are not permitted."
+
+  - rule_id: rule-self-protection
+    name: policy and audit files are immutable to the guarded agent
+    rule_type: path
+    conditions:
+      and:
+        # path_classify intentionally fails closed on a missing field. Gate it
+        # on presence so integrations using the equivalent parameters.path
+        # shape continue to the write_classify rule instead of being denied.
+        - field: parameters.file_path
+          operator: neq
+          value: ""
+        - path_classify:
+            field: parameters.file_path
+            require:
+              clean_first: true
+              denied_canonical_prefixes:
+                - /etc/tool-guard/
+                - /var/lib/tool-guard/
+                - /var/log/tool-guard/
+                - policies/
+                - /**/policies/
+                - coding_agent_writes.yaml
+                - /**/coding_agent_writes.yaml
+                - decisions.jsonl
+                - /**/decisions.jsonl
+                - tg-hook-audit.jsonl
+                - /**/tg-hook-audit.jsonl
+                - tg-guard-audit.jsonl
+                - /**/tg-guard-audit.jsonl
+    effect: deny
+    effect_config:
+      severity: critical
+      suggested_response: "Write blocked: Tool Guard policy and audit files are self-protected."
+    citation:
+      document_id: SEC-WRITE
+      section: "2"
+      excerpt: "The guarded agent may not modify its governing policy or tamper-evident audit log."

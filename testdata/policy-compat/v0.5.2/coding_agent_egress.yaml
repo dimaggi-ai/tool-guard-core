@@ -1,0 +1,32 @@
+policy_id: coding-agent-egress
+name: coding-agent-egress
+description: >
+  Govern a coding agent's outbound HTTP: block the cloud metadata
+  endpoint and force https. Portable (deny-only). For a strict allow-list,
+  add require.allowed_hosts: [api.internal, .githubusercontent.com] so only
+  named destinations are reachable.
+version: 1
+status: approved
+mode: enforcement
+
+scope:
+  tool_names: [http, fetch, webfetch]
+  tool_groups: [network_egress]
+
+rules:
+  - rule_id: rule-egress
+    name: no metadata endpoint, https only
+    rule_type: http
+    conditions:
+      http_classify:
+        require:
+          denied_hosts: [169.254.169.254, metadata.google.internal, metadata.goog]
+          allowed_schemes: [https]
+    effect: deny
+    effect_config:
+      severity: high
+      suggested_response: "Egress blocked: the cloud metadata endpoint or a non-https destination."
+    citation:
+      document_id: SEC-EGRESS
+      section: "1"
+      excerpt: "Agent HTTP egress may not reach cloud instance-metadata endpoints and must use TLS."
