@@ -359,12 +359,25 @@ will remain `tg verify`-able forever.
 To upgrade:
 
 1. `git pull && make build`.
-2. Stop the old proxy.
-3. Start the new proxy. It resumes the chain from the same tail.
+2. **Lint every policy file the new binaries will load** (`tg lint` on
+   each file in every `-policy-dir`/`-policy` path) — *before* stopping
+   the old proxy. As of 0.7.0 the loader is strict: an unknown or
+   misspelled field, a removed field (`deep_evaluation`), or a second
+   YAML document in any one file is a load error that fails the whole
+   policy set. `tg-proxy` refuses to start on a failed load, but
+   `tg hook` without `-fail-closed`/`-fail-closed-tools` enforces
+   **no policy at all** when the load fails — a deny that worked under
+   0.6.0 becomes an allow. Fix every lint error first.
+3. Stop the old proxy.
+4. Start the new proxy. It resumes the chain from the same tail.
 
-There is no migration step. Policy files do not change shape between
-patch versions; minor versions may add new condition forms (e.g.
-`llm_classify` shipped in 0.1.x) but existing policies continue to
+Migration steps for 0.6.0 → 0.7.0: remove any `deep_evaluation` block
+(move semantic checks to a rule with an `llm_classify` condition), split
+multi-document files into one file per policy, correct every
+unknown-field error `tg lint` reports, and optionally declare
+`schema_version: 1` (files that omit it load as version 1). Within a
+schema version, minor releases may add new condition forms (e.g.
+`llm_classify` shipped in 0.1.x) and existing policies continue to
 load.
 
 ## Common operational issues

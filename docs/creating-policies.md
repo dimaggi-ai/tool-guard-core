@@ -53,9 +53,14 @@ legal place to declare a standalone YAML anchor at the top level
 (`base: &common {...}` is an unknown-field error). Anchors and aliases
 on schema fields themselves work normally.
 
-Policy loading is strict at every level. Unknown fields are load errors in
-`tg lint`, `tg evaluate`, `tg simulate`, `tg protect`, and `tg-proxy`; the
-error identifies the nested field path where possible. This prevents a typo
+Policy loading is strict at every level, in every binary that loads
+policies — `tg lint`, `tg evaluate`, `tg simulate`, `tg coverage`,
+`tg protect`, `tg hook`, and `tg-proxy` all share one loader
+(`pkg/policyload`); the error identifies the nested field path where
+possible. Note the failure consequences differ: `tg-proxy` refuses to
+start on a load error, while `tg hook` in its default configuration
+fails **open** (no policy enforced) — see the upgrade notes in
+`operating.md`. This prevents a typo
 such as `scpoe` or `scope.tool_namse` from being discarded and accidentally
 turning a narrowly scoped policy into a global one.
 

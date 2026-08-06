@@ -28,10 +28,11 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 - A policy file must be exactly one YAML document: content after a `---`
   separator was previously silently ignored (a policy whose scope and rules
   sat in a second document loaded as an empty, permissive shell) and is now
-  a load error. A mistyped `schema_version` (quoted, non-integer) gets a
-  contract error naming the field, not a Go decoding internal, and a
-  future-versioned file gets the unsupported-version error before any
-  field-level guidance.
+  a load error; a trailing bare `---` with nothing after it still loads,
+  since there is no content to lose. A mistyped `schema_version` (quoted,
+  boolean, fractional) gets a contract error naming the field, not a Go
+  decoding internal, and a future-versioned file gets the
+  unsupported-version error before any field-level guidance.
 
 ## [0.6.0] — 2026-08-05
 

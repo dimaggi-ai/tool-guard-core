@@ -104,15 +104,31 @@ func TestLoadRejectsMultiDocumentYAML(t *testing.T) {
 	assertErrorContains(t, err, "exactly one YAML document")
 }
 
+func TestLoadAcceptsEmptyTrailingDocument(t *testing.T) {
+	// A trailing bare `---` (or `--- # comment`) yields an empty second
+	// document; 0.6.0 loaded such files and there is no content to lose.
+	for _, text := range []string{
+		"policy_id: test\nrules: []\n---\n",
+		"policy_id: test\nrules: []\n---\n# trailing comment\n",
+	} {
+		if _, err := loadText(t, text); err != nil {
+			t.Fatalf("empty trailing document must load, got: %v", err)
+		}
+	}
+	// But a later document with content is still rejected.
+	_, err := loadText(t, "policy_id: test\nrules: []\n---\n---\npolicy_id: real\n")
+	assertErrorContains(t, err, "exactly one YAML document")
+}
+
 func TestLoadSchemaVersionTypeErrors(t *testing.T) {
 	tests := []struct {
 		name      string
 		line      string
 		wantError string
 	}{
-		{name: "quoted", line: "schema_version: \"1\"\n", wantError: "must be an unquoted integer"},
-		{name: "boolean", line: "schema_version: yes\n", wantError: "must be an unquoted integer"},
-		{name: "fractional", line: "schema_version: 1.5\n", wantError: "must be an unquoted integer"},
+		{name: "quoted", line: "schema_version: \"1\"\n", wantError: "must be an unquoted whole number"},
+		{name: "boolean", line: "schema_version: yes\n", wantError: "must be an unquoted whole number"},
+		{name: "fractional", line: "schema_version: 1.5\n", wantError: "must be an unquoted whole number"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

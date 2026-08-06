@@ -50,9 +50,17 @@ func Load(path string) (domain.Policy, error) {
 	if err := dec.Decode(&raw); err != nil && err != io.EOF {
 		return domain.Policy{}, fmt.Errorf("parse policy YAML: %w", err)
 	}
-	var extra any
-	if err := dec.Decode(&extra); err != io.EOF {
-		return domain.Policy{}, fmt.Errorf("parse policy YAML: a policy file is exactly one YAML document; content after a `---` separator would be silently ignored")
+	// A trailing bare `---` yields an empty extra document; only reject
+	// when a later document carries actual content.
+	for {
+		var extra any
+		err := dec.Decode(&extra)
+		if err == io.EOF {
+			break
+		}
+		if err != nil || extra != nil {
+			return domain.Policy{}, fmt.Errorf("parse policy YAML: a policy file is exactly one YAML document; content after a `---` separator would be silently ignored")
+		}
 	}
 	raw = normalizeYAML(raw)
 	root, _ := raw.(map[string]any)
@@ -65,7 +73,7 @@ func Load(path string) (domain.Policy, error) {
 	if v, present := root["schema_version"]; present {
 		n, ok := asWholeInt(v)
 		if !ok {
-			return domain.Policy{}, fmt.Errorf("unsupported schema_version %v (supported: %d; must be an unquoted integer)", v, currentSchemaVersion)
+			return domain.Policy{}, fmt.Errorf("unsupported schema_version %v (supported: %d; must be an unquoted whole number)", v, currentSchemaVersion)
 		}
 		if n != currentSchemaVersion {
 			return domain.Policy{}, fmt.Errorf("unsupported schema_version %d (supported: %d)", n, currentSchemaVersion)
@@ -92,6 +100,9 @@ func Load(path string) (domain.Policy, error) {
 	if _, present := root["schema_version"]; !present {
 		policy.SchemaVersion = currentSchemaVersion
 	}
+	// Unreachable if the pre-decode validation above held (present values
+	// are checked there, absent ones defaulted here); kept as a fail-safe
+	// invariant guard, not a live code path.
 	if policy.SchemaVersion != currentSchemaVersion {
 		return domain.Policy{}, fmt.Errorf("unsupported schema_version %d (supported: %d)", policy.SchemaVersion, currentSchemaVersion)
 	}
@@ -114,6 +125,13 @@ func Load(path string) (domain.Policy, error) {
 	return policy, nil
 }
 
+// rejectUnknownFields walks the decoded document against the target
+// struct's json tags. Known limitations, deliberate for now: a type
+// implementing json.Unmarshaler is not descended into (its unmarshaler
+// owns its shape — adding one to a policy type re-opens unknown-field
+// bypass at that boundary), and embedded/`json:",inline"` fields are
+// not resolved. domain.Policy currently has neither; keep it that way
+// or extend this walker first.
 func rejectUnknownFields(value any, typ reflect.Type, path string) error {
 	for typ.Kind() == reflect.Pointer {
 		typ = typ.Elem()
