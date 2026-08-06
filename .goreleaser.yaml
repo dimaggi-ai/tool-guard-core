@@ -12,8 +12,9 @@
 # Produces:
 #   - linux/{amd64,arm64} + darwin/{amd64,arm64} + windows/amd64
 #     tarballs + checksums.txt
-#   - multi-arch container image at ghcr.io/dimaggi-ai/tool-guard-core
-#     (images are NOT signed; verify by digest from the release notes)
+#   - multi-arch container image at ghcr.io/dimaggi-ai/tool-guard-core,
+#     signed keyless with cosign in the release workflow
+#     (cosign verify — see the verify command in the release notes)
 #   - SBOM (syft, configured in the release workflow)
 #   - GitHub Release with auto-generated notes
 
@@ -35,11 +36,15 @@ builds:
       - CGO_ENABLED=0
     flags:
       - -trimpath
+    # Commit-derived timestamps everywhere: two builds of the same commit
+    # produce the same bytes, a prerequisite for the rebuild-and-diff
+    # reproducibility verifier the 1.0 roadmap still owes.
+    mod_timestamp: "{{ .CommitTimestamp }}"
     ldflags:
       - -s -w
       - -X main.Version={{.Version}}
       - -X main.Commit={{.Commit}}
-      - -X main.BuildDate={{.Date}}
+      - -X main.BuildDate={{.CommitDate}}
     goos:
       - linux
       - darwin
@@ -58,11 +63,15 @@ builds:
       - CGO_ENABLED=0
     flags:
       - -trimpath
+    # Commit-derived timestamps everywhere: two builds of the same commit
+    # produce the same bytes, a prerequisite for the rebuild-and-diff
+    # reproducibility verifier the 1.0 roadmap still owes.
+    mod_timestamp: "{{ .CommitTimestamp }}"
     ldflags:
       - -s -w
       - -X main.Version={{.Version}}
       - -X main.Commit={{.Commit}}
-      - -X main.BuildDate={{.Date}}
+      - -X main.BuildDate={{.CommitDate}}
     goos:
       - linux
       - darwin
@@ -124,7 +133,7 @@ dockers:
       - tg-proxy
     build_flag_templates:
       - "--platform=linux/amd64"
-      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.created={{.CommitDate}}"
       - "--label=org.opencontainers.image.version={{.Version}}"
       - "--label=org.opencontainers.image.revision={{.FullCommit}}"
       - "--label=org.opencontainers.image.source=https://github.com/dimaggi-ai/tool-guard-core"
@@ -142,7 +151,7 @@ dockers:
       - tg-proxy
     build_flag_templates:
       - "--platform=linux/arm64"
-      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.created={{.CommitDate}}"
       - "--label=org.opencontainers.image.version={{.Version}}"
       - "--label=org.opencontainers.image.revision={{.FullCommit}}"
       - "--label=org.opencontainers.image.source=https://github.com/dimaggi-ai/tool-guard-core"

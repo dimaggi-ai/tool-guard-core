@@ -42,7 +42,9 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.25.11"
+          # Keep in lockstep with go.mod and ci.yml — a release built on a
+          # different toolchain than CI tested is untested code.
+          go-version: "1.25.12"
           cache: true
 
       - name: Set up QEMU (for cross-arch container builds)
@@ -90,3 +92,27 @@ jobs:
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: "dist/*.tar.gz,dist/*.zip,dist/checksums.txt"
+
+      # Closes the gap between what the archives get (Sigstore provenance,
+      # above) and what the container images got (nothing): sign the
+      # multi-arch manifests keyless with the same GitHub OIDC identity.
+      # Signing by digest, not tag — a tag is mutable, the digest is what
+      # a verifier actually pins. Verify with:
+      #
+      #   cosign verify ghcr.io/dimaggi-ai/tool-guard-core:<version> \
+      #     --certificate-identity-regexp 'github.com/dimaggi-ai/tool-guard-core' \
+      #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign container images (keyless, by digest)
+        env:
+          IMAGE: ghcr.io/dimaggi-ai/tool-guard-core
+          TAG: ${{ github.ref_name }}
+        run: |
+          ver="${TAG#v}"
+          for ref in "${IMAGE}:${ver}" "${IMAGE}:latest"; do
+            digest=$(docker buildx imagetools inspect "$ref" --format '{{ .Manifest.Digest }}')
+            echo "signing ${ref} => ${digest}"
+            cosign sign --yes "${IMAGE}@${digest}"
+          done
