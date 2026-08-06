@@ -77,12 +77,15 @@ described below.
   reuses the recorded absolute policy and audit paths, so a root that becomes
   resolvable differently later (native dir created, `XDG_CONFIG_HOME`
   changed) cannot silently abandon a customized policy or start a new audit
-  chain. `status` and `unprotect` operate on the recorded paths and now work
-  with an explicit `-config` even when `HOME`/`USERPROFILE` is unset.
+  chain. `status` and `unprotect` perform no root resolution at all — they
+  operate on the config-adjacent state and its recorded absolute paths, so
+  an explicit `-config` works even with no home or config-root environment
+  variables set.
 - Legacy discovery (fresh resolution only): a pre-0.6.0 install at
   `~/.config/tool-guard` keeps winning while it shows evidence of a real
-  managed install (a `policies/` or `audit/` subdirectory — an empty or
-  stale directory is not evidence) and the native root does not exist. If
+  managed install (a real `policies/` or `audit/` subdirectory — an empty
+  or stale directory, or a symlink, is not evidence) and the native root
+  does not exist. If
   the platform root cannot be resolved at all (e.g. `%AppData%` unset,
   relative `XDG_CONFIG_HOME`), resolution errors unless an evidenced legacy
   install exists — a fresh install is never silently created in the legacy

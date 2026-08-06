@@ -58,11 +58,13 @@ Precedence, in order:
    and audit paths recorded in the managed state, so an already-protected
    profile never moves — a customized policy is kept and the audit chain
    continues — regardless of how the root would resolve today. `status` and
-   `unprotect` likewise operate on the recorded absolute paths (and work with
-   an explicit `-config` even when `HOME`/`USERPROFILE` is unset).
+   `unprotect` perform no root resolution at all — they operate on the
+   config-adjacent state and its recorded absolute paths, so an explicit
+   `-config` works even with no home or config-root environment variables
+   set.
 3. **Legacy discovery (fresh resolution only):** if `~/.config/tool-guard`
-   shows evidence of a pre-0.6.0 install — a `policies/` or `audit/`
-   subdirectory; a merely existing empty directory does not count — and the
+   shows evidence of a pre-0.6.0 install — a real `policies/` or `audit/`
+   subdirectory; an empty directory or a symlink does not count — and the
    native root does not exist, the legacy root keeps being used.
 4. Otherwise the native root is used. If the platform root cannot be resolved
    at all (e.g. `%AppData%` unset, or a relative `XDG_CONFIG_HOME`), protect

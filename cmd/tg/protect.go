@@ -264,21 +264,21 @@ func runProtectStatus(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	p, _, err := resolveProtectPaths(*config, "", "")
+	configPath, err := resolveConfigPath(*config)
 	if err != nil {
 		fmt.Fprintln(stderr, "status:", err)
 		return 1
 	}
-	state, err := loadProtectState(p.state)
+	state, err := loadProtectState(configPath + ".tool-guard-state.json")
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			fmt.Fprintf(stdout, "{\"target\":\"claude\",\"protected\":false,\"config_path\":%q}\n", p.config)
+			fmt.Fprintf(stdout, "{\"target\":\"claude\",\"protected\":false,\"config_path\":%q}\n", configPath)
 			return 3
 		}
 		fmt.Fprintln(stderr, "status:", err)
 		return 1
 	}
-	raw, _, root, err := readJSONConfig(p.config)
+	raw, _, root, err := readJSONConfig(configPath)
 	if err != nil {
 		fmt.Fprintln(stderr, "status:", err)
 		return 1
@@ -287,7 +287,7 @@ func runProtectStatus(args []string, stdout, stderr io.Writer) int {
 	executableOK := state.Version == 1 || validateTGExecutable(state.Command) == nil
 	policyOK := validPolicyFile(state.PolicyPath)
 	installed := markerInstalled && executableOK && policyOK
-	result := map[string]any{"target": claudeTarget, "protected": installed, "config_path": p.config, "policy_path": state.PolicyPath, "drifted": digest(raw) != state.InstalledSHA256, "executable_ok": executableOK, "policy_ok": policyOK}
+	result := map[string]any{"target": claudeTarget, "protected": installed, "config_path": configPath, "policy_path": state.PolicyPath, "drifted": digest(raw) != state.InstalledSHA256, "executable_ok": executableOK, "policy_ok": policyOK}
 	b, _ := json.Marshal(result)
 	fmt.Fprintln(stdout, string(b))
 	if !installed {
@@ -312,17 +312,18 @@ func runUnprotect(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(rest); err != nil {
 		return 2
 	}
-	p, _, err := resolveProtectPaths(*config, "", "")
+	configPath, err := resolveConfigPath(*config)
 	if err != nil {
 		fmt.Fprintln(stderr, "unprotect:", err)
 		return 1
 	}
-	state, err := loadProtectState(p.state)
+	statePath := configPath + ".tool-guard-state.json"
+	state, err := loadProtectState(statePath)
 	if err != nil {
 		fmt.Fprintln(stderr, "unprotect: no managed installation found:", err)
 		return 1
 	}
-	raw, _, root, err := readJSONConfig(p.config)
+	raw, _, root, err := readJSONConfig(configPath)
 	if err != nil {
 		fmt.Fprintln(stderr, "unprotect:", err)
 		return 1
@@ -332,7 +333,7 @@ func runUnprotect(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "unprotect: managed hook is missing; refusing to alter the configuration")
 		return 1
 	}
-	plan := protectPlan{Action: "unprotect", Target: target, Apply: *apply, Changed: true, ConfigPath: p.config, BackupPath: state.BackupPath, Config: cleaned}
+	plan := protectPlan{Action: "unprotect", Target: target, Apply: *apply, Changed: true, ConfigPath: configPath, BackupPath: state.BackupPath, Config: cleaned}
 	if !*apply {
 		return writePlan(stdout, plan)
 	}
@@ -347,11 +348,11 @@ func runUnprotect(args []string, stdout, stderr io.Writer) int {
 			if mode == 0 {
 				mode = 0o600
 			}
-			if err := atomicWrite(p.config, backup, mode); err != nil {
+			if err := atomicWrite(configPath, backup, mode); err != nil {
 				fmt.Fprintln(stderr, "unprotect:", err)
 				return 1
 			}
-		} else if err := os.Remove(p.config); err != nil && !errors.Is(err, os.ErrNotExist) {
+		} else if err := os.Remove(configPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			fmt.Fprintln(stderr, "unprotect:", err)
 			return 1
 		}
@@ -365,16 +366,16 @@ func runUnprotect(args []string, stdout, stderr io.Writer) int {
 		if state.OriginalExisted && state.OriginalMode != 0 {
 			mode = os.FileMode(state.OriginalMode)
 		}
-		if err := atomicWrite(p.config, append(encoded, '\n'), mode); err != nil {
+		if err := atomicWrite(configPath, append(encoded, '\n'), mode); err != nil {
 			fmt.Fprintln(stderr, "unprotect:", err)
 			return 1
 		}
 	}
-	if err := os.Remove(p.state); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := os.Remove(statePath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		fmt.Fprintln(stderr, "unprotect: hook removed, but state cleanup failed:", err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "unprotected claude: %s\n", p.config)
+	fmt.Fprintf(stdout, "unprotected claude: %s\n", configPath)
 	return 0
 }
 
@@ -389,6 +390,24 @@ func protectTarget(args []string, stderr io.Writer, verb string) (string, []stri
 		return "", nil, false
 	}
 	return target, args[1:], true
+}
+
+// resolveConfigPath resolves only the Claude settings path. status and
+// unprotect use it instead of the full resolver: they operate on the
+// config-adjacent managed state and its recorded absolute paths, so they must
+// not depend on home-directory or platform-config-root resolution at all — an
+// explicit -config keeps them working when HOME, USERPROFILE, XDG_CONFIG_HOME,
+// and APPDATA are all unavailable.
+func resolveConfigPath(configOverride string) (string, error) {
+	config := configOverride
+	if config == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		config = filepath.Join(home, ".claude", "settings.json")
+	}
+	return filepath.Abs(filepath.Clean(config))
 }
 
 func resolveProtectPaths(configOverride, policyOverride, tgOverride string) (protectPaths, bool, error) {
@@ -481,11 +500,19 @@ func legacyManagedRoot() (string, bool) {
 		return "", false
 	}
 	root := filepath.Join(home, ".config", "tool-guard")
-	return root, dirExists(filepath.Join(root, "policies")) || dirExists(filepath.Join(root, "audit"))
+	return root, realDirExists(filepath.Join(root, "policies")) || realDirExists(filepath.Join(root, "audit"))
 }
 
 func dirExists(path string) bool {
 	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
+
+// realDirExists requires an actual directory (Lstat, no symlink following):
+// legacy-install evidence must not be satisfiable by a planted symlink that
+// would divert a fresh install's policy and audit files elsewhere.
+func realDirExists(path string) bool {
+	info, err := os.Lstat(path)
 	return err == nil && info.IsDir()
 }
 

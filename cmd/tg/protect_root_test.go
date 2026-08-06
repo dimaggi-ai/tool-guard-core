@@ -144,6 +144,30 @@ func TestResolveManagedRootFallsBackToEvidencedLegacyWhenNativeUnresolvable(t *t
 	}
 }
 
+func TestResolveManagedRootIgnoresSymlinkedLegacyEvidence(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires elevation on Windows")
+	}
+	native, legacy := managedRootFixture(t)
+	realDir := filepath.Join(os.Getenv("HOME"), "elsewhere", "policies")
+	if err := os.MkdirAll(realDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(legacy, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realDir, filepath.Join(legacy, "policies")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := resolveManagedRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Clean(got) != filepath.Clean(native) {
+		t.Fatalf("a symlinked policies/ dir must not count as legacy evidence: root=%q, want native %q", got, native)
+	}
+}
+
 func TestResolveManagedRootIgnoresLegacyFileImpostor(t *testing.T) {
 	native, legacy := managedRootFixture(t)
 	if err := os.MkdirAll(filepath.Dir(legacy), 0o700); err != nil {
@@ -247,10 +271,17 @@ func TestStatusAndUnprotectWorkWithoutHome(t *testing.T) {
 		t.Fatalf("apply code=%d stderr=%s", code, errOut.String())
 	}
 
+	// Unset every home AND config-root variable: status/unprotect with an
+	// explicit -config must not perform home or managed-root resolution at
+	// all (darwin's os.UserConfigDir ignores XDG and needs $HOME, which is
+	// how a root-resolving implementation fails there).
 	t.Setenv("HOME", "")
 	t.Setenv("USERPROFILE", "")
 	t.Setenv("HOMEDRIVE", "")
 	t.Setenv("HOMEPATH", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("APPDATA", "")
+	t.Setenv("LOCALAPPDATA", "")
 
 	out.Reset()
 	errOut.Reset()
