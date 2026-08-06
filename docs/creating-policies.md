@@ -1,13 +1,14 @@
 # Creating Policies
 
 A Tool Guard policy is a YAML file with three required sections:
-identity (`policy_id`, `name`, `version`, `status`, `mode`), a
+identity (`schema_version`, `policy_id`, `name`, `version`, `status`, `mode`), a
 **scope** that says which tool calls the policy applies to, and a
 list of **rules** that say what to do.
 
 ## Anatomy
 
 ```yaml
+schema_version: 1                 # Tool Guard policy schema
 policy_id: pol-refund-cap          # unique within the loaded set
 name: refund-cap                   # human label
 description: >
@@ -37,6 +38,23 @@ rules:
       section: "2.3"
       excerpt: "Individual refund transactions exceeding $500 require supervisor approval prior to processing."
 ```
+
+### Schema version and strict fields
+
+`schema_version: 1` is the current policy schema. Include it in new and
+updated policies. Policies created before this field was introduced remain
+compatible: an omitted `schema_version` is silently treated as version 1.
+An explicitly declared version other than 1 is rejected as unsupported.
+
+Policy loading is strict at every level. Unknown fields are load errors in
+`tg lint`, `tg evaluate`, `tg simulate`, `tg protect`, and `tg-proxy`; the
+error identifies the nested field path where possible. This prevents a typo
+such as `scpoe` or `scope.tool_namse` from being discarded and accidentally
+turning a narrowly scoped policy into a global one.
+
+The former top-level `deep_evaluation` field was removed because no evaluator
+consumed it. Policies that need semantic classification should use an
+`llm_classify` condition.
 
 `tg lint -policy <file>` validates the shape and runs eight
 checks - warnings and errors (see [`tg lint` heuristics](#tg-lint-heuristics)).

@@ -18,6 +18,7 @@
 # rooted at `/`, a top-level system dir, or $HOME/~ (deny outranks escalate).
 # This is why `rm -rf /`, `rm -r -f /`, `rm --recursive --force /`, and
 # `rm -fR /home` are all caught — bundled, separated, long-form, or uppercase.
+schema_version: 1
 policy_id: pol-coding-agent-guard
 status: approved
 mode: enforcement

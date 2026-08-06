@@ -5,6 +5,7 @@
 #
 # Cross-cutting scope: empty tool_names + empty tool_groups would lint as
 # policy-scope-leak, so we name the broadest sensible group instead.
+schema_version: 1
 policy_id: pol-llm-token-spend-guard
 name: llm-token-spend-guard
 description: >

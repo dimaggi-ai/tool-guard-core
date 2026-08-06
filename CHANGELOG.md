@@ -6,6 +6,19 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Policy schema freeze
+
+- Policy YAML now has `schema_version: 1`. Newly shipped policies declare it;
+  policies that omit it continue to load as version 1 for backward
+  compatibility, while explicit unsupported versions fail to load. `tg`,
+  `tg-proxy`, linting, simulation, and protection now share one strict loader,
+  so unknown or misspelled fields are rejected with a field path instead of
+  being silently discarded. Migration: add `schema_version: 1` and fix every
+  unknown-field error reported by `tg lint`.
+- Removed the parsed-but-unused top-level `deep_evaluation` policy field and
+  its Go type. Policies that declare it now fail with targeted guidance;
+  migrate semantic checks to a rule with an `llm_classify` condition.
+
 ## [0.6.0] — 2026-08-05
 
 Feature release: reversibility-aware gating, one-command Claude Code

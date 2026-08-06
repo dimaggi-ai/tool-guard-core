@@ -19,6 +19,7 @@
 # pulled (gemma4:e4b is the default; gemma4:12b is more accurate but
 # slower). See examples/content-gen/README.md.
 
+schema_version: 1
 policy_id: pol-image-gen-guard # docker variant
 name: image-generation-guard
 description: >

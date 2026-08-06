@@ -114,6 +114,7 @@ Bad: `unsafe` (too broad), `cat1` (opaque), `harm,abuse` (comma).
 
 ```yaml
 # my_video_gen_guard.yaml
+schema_version: 1
 policy_id: pol-video-gen-guard
 name: video-generation-guard
 version: 1

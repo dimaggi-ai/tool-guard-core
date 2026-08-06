@@ -280,6 +280,7 @@ is build-tagged and excluded from the default binary.
 **1. Define a policy** (`policies/refund_cap.yaml`):
 
 ```yaml
+schema_version: 1
 policy_id: pol-example-refund
 name: refund-cap-example
 version: 1

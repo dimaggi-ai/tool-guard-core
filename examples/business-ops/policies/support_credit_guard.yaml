@@ -8,6 +8,7 @@
 # This pairs structural amount caps with a per-ticket cumulative cap
 # and a regex tripwire on the reason field.
 
+schema_version: 1
 policy_id: pol-support-credit-guard
 name: support-credit-guard
 description: >
