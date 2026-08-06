@@ -1,0 +1,11 @@
+{
+  "name": "floor_escalate_unknown_fail_safe",
+  "description": "A tool the reversibility classifier cannot recognize is `unknown`, and the floor escalates it — the fail-safe: unrecognized structure is never auto-allowed merely because no rule named it.",
+  "policy_file": "../../policies/irreversibility_floor.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "frobnicate_widget",
+    "parameters": {"widget_id": "w-17"}
+  },
+  "expect": {"decision": "escalated", "action_taken": "escalated"}
+}

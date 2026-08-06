@@ -6,6 +6,18 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- **Conformance corpus: completeness gate + irreversibility-floor cases**
+  (#19, partial). Seven new cases pin the 0.6.0 floor policy's contract:
+  irreversible (wire transfer), the `unknown → escalate` fail-safe,
+  reversible-read allow, recoverable-write default-allow, most-gating
+  merge (recoverable tool name + destructive SQL / recursive shell
+  delete in parameters), and the self-protection escalate on writes to
+  policy locations. New `TestConformanceCompleteness` fails when any
+  shipped policy has zero corpus cases, when case names collide, or when
+  a case name doesn't match its filename — the exact drift 0.6.0 shipped
+  through. Still open in #19: shadow-mode cases (blocked on the mode-
+  precedence decision, #16) and full operator/reversibility-tier
+  coverage.
 - **Policy-compat net now covers every release tag** (#20). Snapshots
   added for v0.5.0, v0.5.1, v0.5.2, and v0.6.0 — the net had silently
   stopped at v0.4.0. New `TestPolicyCompatCoverage` fails when a

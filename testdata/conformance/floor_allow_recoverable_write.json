@@ -1,0 +1,12 @@
+{
+  "name": "floor_allow_recoverable_write",
+  "description": "A scoped content write is classified recoverable (undoable with effort); the floor has no rule gating recoverable, so it is permitted by default as the policy documents.",
+  "policy_file": "../../policies/irreversibility_floor.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "update_document",
+    "tool_group": "content_writes",
+    "parameters": {"document_id": "d-3", "body": "revised text"}
+  },
+  "expect": {"decision": "allowed", "action_taken": "allowed"}
+}
