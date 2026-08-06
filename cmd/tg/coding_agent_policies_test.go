@@ -85,3 +85,26 @@ func TestCodingAgentWritesSelfProtection(t *testing.T) {
 		})
 	}
 }
+
+func TestCodingAgentGuardBlocksRecursiveRootDelete(t *testing.T) {
+	policyPath := filepath.Join("..", "..", "examples", "coding-agent-guard", "policy.yaml")
+	policy, err := loadPolicyYAML(policyPath)
+	if err != nil {
+		t.Fatalf("load coding-agent policy: %v", err)
+	}
+	if err := engine.ValidatePolicy(&policy); err != nil {
+		t.Fatalf("validate coding-agent policy: %v", err)
+	}
+	parameters, _ := json.Marshal(map[string]any{"command": "rm -rf /"})
+	envelope := domain.ActionEnvelope{
+		EnvelopeID: "root-delete-regression",
+		Timestamp:  time.Now().UTC(),
+		ToolName:   "bash",
+		ToolGroup:  "shell",
+		Parameters: parameters,
+	}
+	result := engine.NewEvaluator().Evaluate(&envelope, []domain.Policy{policy}, domain.PolicyModeEnforcement)
+	if result.Decision != domain.DecisionDenied {
+		t.Fatalf("rm -rf / decision=%q, want denied (reason: %s)", result.Decision, result.DecisionReason)
+	}
+}

@@ -165,7 +165,33 @@ Tool Guard coverage — 3 policies, 3705 tool calls
 `-min-coverage 90` exits 3 when coverage drops below the threshold (a CI gate
 against a growing agent outrunning its policy); `-json` for machines.
 
-## 6. Guard a coding agent with `tg hook`
+## 6. Guard Claude Code with `tg protect`
+
+The native workflow is preview-first and reversible:
+
+```sh
+./bin/tg protect claude
+./bin/tg protect claude -apply
+./bin/tg status claude
+```
+
+It merges one managed `PreToolUse` entry into `~/.claude/settings.json`,
+preserves unrelated settings and hooks, installs a starter policy, enables
+self-protection and consequential-tool fail-closed behavior, and records a
+hash-chained audit log. Preview shows the complete proposed configuration and
+writes nothing.
+
+To remove it, preview and then apply rollback:
+
+```sh
+./bin/tg unprotect claude
+./bin/tg unprotect claude -apply
+```
+
+See [protect.md](protect.md) for paths, overrides, backup behavior, and current
+target support.
+
+## 6b. Wire another agent with `tg hook`
 
 `tg hook` is the batteries-included alternative to the hand-rolled shell
 adapters in `examples/coding-agent-guard/`. It reads one PreToolUse JSON
@@ -199,6 +225,7 @@ Key flags:
 | `-policy-dir DIR` | Load all `*.yaml` policies from this directory |
 | `-policy FILE` | Load a single policy file (mutually exclusive with `-policy-dir`) |
 | `-protect-self` | Unconditionally protect the policy dir and `$HOME/.claude` from writes — the agent cannot edit this away |
+| `-protect-path PATH` | Protect one exact prefix; repeat for multiple paths (preserves commas in names) |
 | `-protect-paths P1,P2` | Additional prefixes to protect (comma-separated) |
 | `-fail-closed` | Deny on any internal error (tooling glitch, bad policy load) |
 | `-fail-closed-tools bash,write,edit,notebookedit` | Deny only these tools on error; others fail open |

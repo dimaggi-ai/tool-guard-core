@@ -251,6 +251,20 @@ func TestHook_ProtectPaths_DenyBeforePolicy(t *testing.T) {
 	}
 }
 
+func TestHook_RepeatableProtectPathPreservesComma(t *testing.T) {
+	stdin := `{"tool_name":"write","tool_input":{"file_path":"/guarded,exact/policy.yaml"}}`
+	out, code := runHookStr(t, stdin,
+		"-protect-path", "/other",
+		"-protect-path", "/guarded,exact",
+	)
+	if code != 0 {
+		t.Errorf("exit must be 0, got %d", code)
+	}
+	if d := hookDecision(t, out); d != "deny" {
+		t.Errorf("repeatable -protect-path must preserve and deny a comma-containing path, got %q", d)
+	}
+}
+
 func TestHook_ProtectPaths_AllowUnprotected(t *testing.T) {
 	// Writing to an unprotected path with -protect-paths set and no policy
 	// → no protect violation → falls through to no-policy → fail-open → allow.
