@@ -16,6 +16,12 @@ func protectFixture(t *testing.T) (home, config, tgPath string, original []byte)
 	home = t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
+	// Pin every platform config-root variable inside the fixture so the
+	// managed root resolves hermetically (and, on POSIX, to a non-default
+	// XDG location) instead of inheriting the developer's real environment.
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg-config"))
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+	t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
 	config = filepath.Join(home, ".claude", "settings.json")
 	if err := os.MkdirAll(filepath.Dir(config), 0o700); err != nil {
 		t.Fatal(err)
@@ -107,9 +113,18 @@ func TestProtectClaudeApplyPreservesAndIsIdempotent(t *testing.T) {
 	if err != nil || !bytes.Equal(backup, original) {
 		t.Fatalf("backup is not pristine: err=%v got=%s", err, backup)
 	}
-	policy := filepath.Join(home, ".config", "tool-guard", "policies", "coding-agent-baseline.yaml")
+	cfgDir, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := filepath.Join(cfgDir, "tool-guard", "policies", "coding-agent-baseline.yaml")
 	if data, err := os.ReadFile(policy); err != nil || !bytes.Contains(data, []byte("deny-recursive-root-delete")) {
 		t.Fatalf("starter policy missing/invalid: err=%v data=%s", err, data)
+	}
+	if legacy := filepath.Join(home, ".config", "tool-guard"); filepath.Clean(legacy) != filepath.Clean(filepath.Join(cfgDir, "tool-guard")) {
+		if _, statErr := os.Stat(legacy); !os.IsNotExist(statErr) {
+			t.Fatalf("fresh install must not create the legacy root %s (stat err=%v)", legacy, statErr)
+		}
 	}
 	if runtime.GOOS != "windows" {
 		if info, _ := os.Stat(config); info.Mode().Perm() != 0o600 {

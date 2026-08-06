@@ -396,7 +396,10 @@ func resolveProtectPaths(configOverride, policyOverride, tgOverride string) (pro
 	}
 	defaultPolicy := policyOverride == ""
 	policy := policyOverride
-	base := filepath.Join(home, ".config", "tool-guard")
+	base, err := resolveManagedRoot()
+	if err != nil {
+		return protectPaths{}, false, err
+	}
 	if defaultPolicy {
 		policy = filepath.Join(base, "policies", "coding-agent-baseline.yaml")
 	}
@@ -417,6 +420,40 @@ func resolveProtectPaths(configOverride, policyOverride, tgOverride string) (pro
 		return protectPaths{}, false, err
 	}
 	return protectPaths{config: config, policy: policy, audit: filepath.Join(base, "audit", "claude.jsonl"), backup: config + ".tool-guard.bak", state: config + ".tool-guard-state.json", tg: tgPath}, defaultPolicy, nil
+}
+
+// resolveManagedRoot picks the directory holding the managed default policy
+// and audit files. Fresh installs use the platform config root reported by
+// os.UserConfigDir — $XDG_CONFIG_HOME (default ~/.config) on POSIX, %AppData%
+// on Windows, ~/Library/Application Support on macOS. A pre-0.6.0 install at
+// the legacy ~/.config/tool-guard root keeps winning while that directory
+// exists and the native root does not, so status, re-protect, and unprotect
+// on an old install still resolve to the files it actually wrote. Once the
+// native root exists (fresh install, or a manual migration by moving the
+// directory), it wins permanently.
+func resolveManagedRoot() (string, error) {
+	native, nativeErr := os.UserConfigDir()
+	home, homeErr := os.UserHomeDir()
+	var legacyRoot string
+	if homeErr == nil {
+		legacyRoot = filepath.Join(home, ".config", "tool-guard")
+	}
+	if nativeErr != nil {
+		if legacyRoot == "" {
+			return "", fmt.Errorf("cannot resolve a config root: %w", nativeErr)
+		}
+		return legacyRoot, nil
+	}
+	nativeRoot := filepath.Join(native, "tool-guard")
+	if legacyRoot != "" && legacyRoot != nativeRoot && dirExists(legacyRoot) && !dirExists(nativeRoot) {
+		return legacyRoot, nil
+	}
+	return nativeRoot, nil
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 func validateTGExecutable(path string) error {

@@ -35,10 +35,40 @@ The default installation creates:
 | Artifact | Default path |
 |---|---|
 | Claude settings | `~/.claude/settings.json` |
-| Starter policy | `~/.config/tool-guard/policies/coding-agent-baseline.yaml` |
-| Audit chain | `~/.config/tool-guard/audit/claude.jsonl` |
+| Starter policy | `<managed root>/policies/coding-agent-baseline.yaml` |
+| Audit chain | `<managed root>/audit/claude.jsonl` |
 | Pristine backup | `~/.claude/settings.json.tool-guard.bak` |
 | Managed state | `~/.claude/settings.json.tool-guard-state.json` |
+
+### Where the managed root lives
+
+The managed root is `<platform config directory>/tool-guard`, resolved through
+the platform config-directory API (Go's `os.UserConfigDir`):
+
+| OS | Native managed root |
+|---|---|
+| Linux / BSD | `$XDG_CONFIG_HOME/tool-guard` (default `~/.config/tool-guard`) |
+| Windows | `%AppData%\tool-guard` |
+| macOS | `~/Library/Application Support/tool-guard` |
+
+Precedence, in order:
+
+1. Explicit `-policy` (and the audit path recorded in managed state) always
+   win — the managed root only decides *defaults*.
+2. **Legacy discovery:** if `~/.config/tool-guard` exists from a pre-0.6.0
+   install and the native root does not, the legacy root keeps being used, so
+   `status`, re-`protect`, and `unprotect` on an old install still resolve to
+   the files it actually wrote (including an operator-customized policy).
+3. Otherwise the native root is used.
+
+On Linux with `XDG_CONFIG_HOME` unset the native and legacy roots are the
+same directory, so nothing moves. To migrate a legacy install to the native
+root, run `tg unprotect claude -apply`, move (or delete)
+`~/.config/tool-guard` to the native location, and run
+`tg protect claude -apply` again; once the native root exists it wins
+permanently. Reversibility never depends on this resolution: the pristine
+backup and managed state sit next to the Claude settings file, and the state
+records absolute paths.
 
 This exec form does not depend on Bash, PowerShell, or shell quoting, including
 when paths contain spaces. A default-profile install detects Claude Code and
