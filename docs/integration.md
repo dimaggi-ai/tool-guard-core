@@ -463,6 +463,8 @@ tamper-evident.
   on commodity hardware (see `tg benchmark`). The proxy adds one
   HTTP hop plus JSON marshal/unmarshal; expect sub-millisecond round
   trips on a local Unix socket and 1–3 ms across a Kubernetes pod.
+  Measurement conditions and the nightly-asserted throughput floor
+  are documented in [performance.md](performance.md).
 - **Failure mode.** Run with `-fail-closed=true` (the default). On
   policy load failure the proxy refuses new requests; an upstream
   Envoy / NGINX can then route to a "blocked by policy" handler.
