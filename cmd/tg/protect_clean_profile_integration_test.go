@@ -50,7 +50,8 @@ func TestProtectCleanProfileActivation(t *testing.T) {
 	env := cleanProfileEnvironment(home)
 	statePath := config + ".tool-guard-state.json"
 	backupPath := config + ".tool-guard.bak"
-	toolGuardHome := filepath.Join(home, ".config", "tool-guard")
+	toolGuardHome := cleanProfileNativeRoot(home)
+	legacyHome := filepath.Join(home, ".config", "tool-guard")
 
 	t.Run("protect dry-run writes nothing", func(t *testing.T) {
 		result := runCleanProfileTG(t, env, nil,
@@ -69,6 +70,7 @@ func TestProtectCleanProfileActivation(t *testing.T) {
 		assertPathAbsent(t, statePath)
 		assertPathAbsent(t, backupPath)
 		assertPathAbsent(t, toolGuardHome)
+		assertPathAbsent(t, legacyHome)
 	})
 
 	var state protectState
@@ -95,6 +97,9 @@ func TestProtectCleanProfileActivation(t *testing.T) {
 		if !strings.Contains(state.PolicyPath, "clean profile") || !strings.Contains(state.AuditPath, "clean profile") {
 			t.Fatalf("fixture did not exercise spaces in hook arguments: policy=%q audit=%q", state.PolicyPath, state.AuditPath)
 		}
+		assertPathWithin(t, toolGuardHome, state.PolicyPath)
+		assertPathWithin(t, toolGuardHome, state.AuditPath)
+		assertPathAbsent(t, legacyHome)
 		if !filepath.IsAbs(state.Command) || filepath.Clean(state.Command) != filepath.Clean(tgBinary) {
 			t.Fatalf("generated command=%q, want absolute tg path %q", state.Command, tgBinary)
 		}
@@ -145,6 +150,104 @@ func TestProtectCleanProfileActivation(t *testing.T) {
 	})
 }
 
+// TestProtectCleanProfileLegacyRootDiscovery simulates a pre-0.6.0 install
+// whose managed files live under the legacy ~/.config/tool-guard root while
+// the platform-native root points elsewhere. Protect must keep using the
+// legacy root (preserving an operator-customized policy), and unprotect must
+// remain fully reversible — the native root is never created.
+func TestProtectCleanProfileLegacyRootDiscovery(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "legacy profile '$`")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(config), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := []byte("{\n  \"theme\": \"legacy-profile\"\n}\n")
+	if err := os.WriteFile(config, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	env := cleanProfileEnvironment(home)
+	nativeRoot := cleanProfileNativeRoot(home)
+	legacyRoot := filepath.Join(home, ".config", "tool-guard")
+	if filepath.Clean(nativeRoot) == filepath.Clean(legacyRoot) {
+		t.Fatalf("fixture must separate native root %q from legacy root %q", nativeRoot, legacyRoot)
+	}
+	legacyPolicy := filepath.Join(legacyRoot, "policies", "coding-agent-baseline.yaml")
+	if err := os.MkdirAll(filepath.Dir(legacyPolicy), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// An operator-customized policy proves protect reuses the legacy install's
+	// files instead of abandoning them for a fresh starter under the native root.
+	customized := strings.Replace(codingAgentStarterPolicy,
+		"policy_id: pol-coding-agent-baseline", "policy_id: pol-legacy-customized", 1)
+	if customized == codingAgentStarterPolicy {
+		t.Fatal("failed to customize the starter policy fixture")
+	}
+	if err := os.WriteFile(legacyPolicy, []byte(customized), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result := runCleanProfileTG(t, env, nil,
+		"protect", "claude", "-apply", "-config", config, "-tg", tgBinary)
+	if !bytes.Contains(result.stdout, []byte("protected claude:")) {
+		t.Fatalf("unexpected apply output: stdout=%s stderr=%s", result.stdout, result.stderr)
+	}
+	state, err := loadProtectState(config + ".tool-guard-state.json")
+	if err != nil {
+		t.Fatalf("load protection state: %v", err)
+	}
+	assertPathWithin(t, legacyRoot, state.PolicyPath)
+	assertPathWithin(t, legacyRoot, state.AuditPath)
+	assertPathAbsent(t, nativeRoot)
+	kept, err := os.ReadFile(legacyPolicy)
+	if err != nil || !bytes.Contains(kept, []byte("pol-legacy-customized")) {
+		t.Fatalf("legacy customized policy was not preserved: err=%v data=%s", err, kept)
+	}
+
+	status := runCleanProfileTG(t, env, nil, "status", "claude", "-config", config)
+	var got map[string]any
+	if err := json.Unmarshal(status.stdout, &got); err != nil {
+		t.Fatalf("decode status: %v\nstdout=%s\nstderr=%s", err, status.stdout, status.stderr)
+	}
+	if got["protected"] != true {
+		t.Fatalf("legacy install must stay discoverable via status: %s", status.stdout)
+	}
+
+	unprotect := runCleanProfileTG(t, env, nil, "unprotect", "claude", "-apply", "-config", config)
+	if !bytes.Contains(unprotect.stdout, []byte("unprotected claude:")) {
+		t.Fatalf("unexpected unprotect output: stdout=%s stderr=%s", unprotect.stdout, unprotect.stderr)
+	}
+	restored, err := os.ReadFile(config)
+	if err != nil || !bytes.Equal(restored, original) {
+		t.Fatalf("legacy install did not restore exactly: err=%v got=%s", err, restored)
+	}
+	assertPathAbsent(t, nativeRoot)
+}
+
+// cleanProfileNativeRoot mirrors what os.UserConfigDir resolves to inside the
+// environment built by cleanProfileEnvironment, per OS.
+func cleanProfileNativeRoot(home string) string {
+	switch runtime.GOOS {
+	case "windows":
+		return filepath.Join(home, "AppData", "Roaming", "tool-guard")
+	case "darwin":
+		return filepath.Join(home, "Library", "Application Support", "tool-guard")
+	default:
+		return filepath.Join(home, "xdg-config", "tool-guard")
+	}
+}
+
+func assertPathWithin(t *testing.T, root, path string) {
+	t.Helper()
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		t.Fatalf("path %q is not inside %q (rel=%q err=%v)", path, root, rel, err)
+	}
+}
+
 func runCleanProfileTG(t *testing.T, env []string, stdin []byte, args ...string) cleanProfileCommandResult {
 	t.Helper()
 	return runCleanProfileCommand(t, env, stdin, tgBinary, args...)
@@ -185,10 +288,13 @@ func cleanProfileEnvironment(home string) []string {
 			env = append(env, item)
 		}
 	}
+	// XDG_CONFIG_HOME deliberately points at a NON-default subdirectory so a
+	// passing run proves the platform config-directory API is honored rather
+	// than a hardcoded ~/.config coinciding with it.
 	env = append(env,
 		"HOME="+home,
 		"USERPROFILE="+home,
-		"XDG_CONFIG_HOME="+filepath.Join(home, ".config"),
+		"XDG_CONFIG_HOME="+filepath.Join(home, "xdg-config"),
 		"APPDATA="+filepath.Join(home, "AppData", "Roaming"),
 		"LOCALAPPDATA="+filepath.Join(home, "AppData", "Local"),
 	)

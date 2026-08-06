@@ -6,6 +6,102 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+Feature release: reversibility-aware gating, one-command Claude Code
+protection (`tg protect`), and platform-native config roots. No breaking
+changes to existing policies or CLI flags; new install defaults are
+described below.
+
+### Reversibility-aware gating — deterministic classifier + irreversibility floor (`pkg/engine`)
+
+- New deterministic reversibility classifier (no network, no LLM): every
+  tool call is classified from its declared name, group, and parameter
+  structure as `reversible`, `recoverable`, `irreversible`, or `unknown`,
+  exposed to policy rules as the flattened condition field `reversibility` —
+  `{field: reversibility, operator: eq, value: irreversible}` works like any
+  other leaf. Signals from different parts of a call merge by keeping the
+  most-gating class, and `unknown` deliberately outranks both allow-classes:
+  an unrecognized structural shape cannot be certified safe, so it is never
+  auto-allowed merely because no rule named it.
+- Shipped floor policy `policies/irreversibility_floor.yaml`: money movement,
+  account/data destruction, production deploy/publish, physical actuation,
+  and destructive statements (SQL `DROP`/`TRUNCATE`/unscoped `DELETE`, shell
+  `rm -rf`) are escalated to a human before they run; `unknown` is escalated
+  too (fail-safe). The guarantee rests on the engine's max-severity
+  resolution — a more permissive policy cannot override the floor's
+  `escalate` regardless of priority.
+- Hardened through eight adversarial QA rounds plus fuzzing; floor-bypass
+  fixes and a protected-paths option-token false positive are included.
+  `tg lint` gains a global-scope heuristic
+  (`cmd/tg/lint_global_scope_test.go`).
+- `tg-proxy` read-only handlers (`/healthz`, `/readyz`, `/policies`,
+  `/metrics`) now enforce their HTTP method and fail safe on calls without
+  one; error bodies are uniform JSON.
+
+### `tg protect` — one-command, reversible Claude Code protection (`cmd/tg`)
+
+- New verbs: `tg protect claude` (preview by default, `-apply` to install),
+  `tg status claude`, `tg unprotect claude`. Protect merges a shell-free
+  exec-form PreToolUse hook into `~/.claude/settings.json` — no Bash or
+  PowerShell quoting, safe with spaces in paths — pointing at the running
+  `tg` binary with `-protect-path` args covering the settings file, pristine
+  backup, managed state, and audit directory, plus `-protect-self` and
+  `-fail-closed-tools bash,write,edit,notebookedit`. Requires Claude Code
+  ≥ 2.1.139 (exec-form hook support); `-config` bypasses detection for
+  isolated/advanced profiles.
+- Reversibility by construction: the first pre-install backup is never
+  overwritten, managed state records absolute paths and the installed
+  config's SHA-256, and `unprotect` restores the exact original bytes and
+  mode when the file is unchanged — otherwise it removes only the managed
+  entry and preserves later user edits. Unrelated settings and hooks are
+  always preserved; repeat `-apply` is idempotent. A default starter policy
+  (`coding-agent-baseline.yaml`: deny recursive root/HOME deletion, escalate
+  forced deletes and outbound/history-rewriting Git) is installed if none is
+  given and validated before activation.
+- `tg hook` gains a repeatable `-protect-path` flag (exact paths, commas
+  allowed); the legacy comma-separated `-protect-paths` remains supported.
+- New `api/openapi.yaml` documents the tg-proxy HTTP surface, with
+  conformance tests (`api/openapi_test.go`); `./api/...` joins the standard
+  test set. New guide: `docs/protect.md`.
+- OS-matrix integration coverage: clean-profile activation, policy
+  enforcement through the installed hook, and exact-restore unprotect run on
+  Linux, macOS, and Windows CI (`cmd/tg/protect_clean_profile_integration_test.go`).
+
+### Platform-native config roots with legacy discovery (`cmd/tg`) — #13
+
+- The managed root for the default policy and audit chain now resolves
+  through the platform config-directory API (`os.UserConfigDir`) instead of
+  a hardcoded `~/.config/tool-guard`: `$XDG_CONFIG_HOME/tool-guard` on
+  POSIX, `%AppData%\tool-guard` on Windows, `~/Library/Application
+  Support/tool-guard` on macOS.
+- Existing installs are pinned by their managed state: a default re-`protect`
+  reuses the recorded absolute policy and audit paths, so a root that becomes
+  resolvable differently later (native dir created, `XDG_CONFIG_HOME`
+  changed) cannot silently abandon a customized policy or start a new audit
+  chain. `status` and `unprotect` perform no root resolution at all — they
+  operate on the config-adjacent state and its recorded absolute paths, so
+  an explicit `-config` works even with no home or config-root environment
+  variables set.
+- Legacy discovery (fresh resolution only): a pre-0.6.0 install at
+  `~/.config/tool-guard` keeps winning while it shows evidence of a real
+  managed install (a real `policies/` or `audit/` subdirectory — an empty
+  or stale directory, or a symlink, is not evidence) and the native root
+  does not exist. If
+  the platform root cannot be resolved at all (e.g. `%AppData%` unset,
+  relative `XDG_CONFIG_HOME`), resolution errors unless an evidenced legacy
+  install exists — a fresh install is never silently created in the legacy
+  location. On Linux with `XDG_CONFIG_HOME` unset, native and legacy are the
+  same directory and nothing moves. Reversibility does not depend on root
+  resolution (backup and state sit next to the Claude settings file,
+  recorded as absolute paths).
+- Tests prove native-root selection against a NON-default
+  `XDG_CONFIG_HOME` and Windows/macOS roots (the previous fixtures pinned
+  XDG to `~/.config`, which a hardcoded path satisfied vacuously), plus
+  legacy-root discovery end-to-end, re-protect pinning after the native
+  root appears, unresolvable-root failure modes, and status/unprotect
+  without a home directory: `cmd/tg/protect_root_test.go` and
+  `TestProtectCleanProfileLegacyRootDiscovery`. Precedence and migration
+  are documented in `docs/protect.md`.
+
 ## [0.5.2] — 2026-07-26
 
 Bug-fix release. No breaking changes; no new required config.
