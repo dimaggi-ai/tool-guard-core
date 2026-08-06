@@ -7,12 +7,15 @@ re-runs the conformance corpus (`testdata/conformance/*.json`) against
 these frozen snapshots instead of the live `policies/` directory, and
 asserts the exact same decision comes out.
 
-This is a **partial** implementation of the "frozen policy schema" item
-on the public 1.0 roadmap: there is no version field on policy YAML, no
-migration step, and no compatibility guarantee enforced at parse time —
-just a regression net that fails loudly if a future engine or loader
-change would silently change how an old, unmodified policy file behaves.
-Full schema versioning is still open.
+This is the **behavioral** half of the "frozen policy schema" item on
+the public 1.0 roadmap. The structural half — `schema_version` on policy
+YAML, enforced strictly at parse time, with migration guidance for
+removed fields — ships in 0.7.0 (#15/#17). These snapshots are the
+complementary net: they fail loudly if a future engine or loader change
+would silently change how an old, unmodified policy file *behaves*,
+which no parse-time check can catch. Snapshots from pre-0.7.0 tags
+deliberately carry no `schema_version` — loading them exercises the
+omitted-version-is-v1 compatibility path.
 
 ## Adding a snapshot for a release
 

@@ -100,8 +100,12 @@ jobs:
       # a verifier actually pins. Verify with:
       #
       #   cosign verify ghcr.io/dimaggi-ai/tool-guard-core:<version> \
-      #     --certificate-identity-regexp '^https://github\.com/dimaggi-ai/tool-guard-core/\.github/workflows/release\.yml@refs/tags/v' \
+      #     --certificate-identity-regexp '^https://github\.com/dimaggi-ai/tool-guard-core/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$' \
       #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+      #
+      # The regexp is end-anchored to full semver so an identity minted
+      # for some other tag shape (v0.7.0-anything) can never satisfy the
+      # documented verification.
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
 
@@ -115,4 +119,22 @@ jobs:
             digest=$(docker buildx imagetools inspect "$ref" --format '{{ .Manifest.Digest }}')
             echo "signing ${ref} => ${digest}"
             cosign sign --yes "${IMAGE}@${digest}"
+          done
+
+      # The GitHub Release (published by GoReleaser, above) already
+      # claims the images are signed — so prove it before the workflow
+      # goes green: verify both manifests against the exact documented
+      # identity. A failed or skipped signing step fails the release
+      # here instead of shipping release notes that overclaim.
+      - name: Verify container signatures (fail release if unsigned)
+        env:
+          IMAGE: ghcr.io/dimaggi-ai/tool-guard-core
+          TAG: ${{ github.ref_name }}
+        run: |
+          ver="${TAG#v}"
+          for ref in "${IMAGE}:${ver}" "${IMAGE}:latest"; do
+            digest=$(docker buildx imagetools inspect "$ref" --format '{{ .Manifest.Digest }}')
+            cosign verify "${IMAGE}@${digest}" \
+              --certificate-identity-regexp '^https://github\.com/dimaggi-ai/tool-guard-core/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$' \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com
           done

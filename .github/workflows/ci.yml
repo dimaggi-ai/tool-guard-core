@@ -166,7 +166,8 @@ jobs:
                    examples/postgres-attack/policies/*.yaml \
                    examples/sample-app/policies/*.yaml \
                    examples/content-gen/policies/*.yaml \
-                   examples/content-gen/policies-docker/*.yaml; do
+                   examples/content-gen/policies-docker/*.yaml \
+                   examples/coding-agent-guard/policy.yaml; do
             out=$(./bin/tg lint -policy "$p" 2>&1)
             # refund_cap.yaml intentionally lints with 2 warnings;
             # accept that file specifically.

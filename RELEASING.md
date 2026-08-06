@@ -43,7 +43,9 @@ guard catching it after the fact — do it right the first time.
 
 4. **Push the tag** (this triggers `.github/workflows/release.yml`,
    which builds, runs GoReleaser, and publishes the GitHub Release +
-   container image + SBOMs):
+   container image + SBOMs, then attests build provenance and
+   cosign-signs the container manifests — the workflow verifies the
+   signatures before going green):
    ```bash
    git push origin vX.Y.Z
    ```

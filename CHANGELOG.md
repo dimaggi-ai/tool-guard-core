@@ -6,6 +6,8 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Evidence, gates, and supply chain
+
 - **Conformance corpus: completeness gate + irreversibility-floor cases**
   (#19, partial). Seven new cases pin the 0.6.0 floor policy's contract:
   irreversible (wire transfer), the `unknown → escalate` fail-safe,
