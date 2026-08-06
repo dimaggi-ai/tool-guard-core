@@ -57,9 +57,11 @@ guard catching it after the fact — do it right the first time.
   earlier this session."
 - No `v X.Y.Z` tag already exists locally or on `origin`
   (`git tag --list vX.Y.Z`).
-- Any decision-path, SDK, or release-workflow change in this release has
-  been run through the internal review checklist in
-  `docs/REVIEW-PROCESS.md`, and any findings are logged there.
+- Any decision-path, policy-loader, SDK, or release-workflow change in
+  this release has been run through the internal review checklist in
+  `docs/REVIEW-PROCESS.md` — as a multi-model **panel review** (see
+  "Panel review" there) with the disposition table posted on the PR —
+  and any findings are logged there.
 
 ## Why this exists
 

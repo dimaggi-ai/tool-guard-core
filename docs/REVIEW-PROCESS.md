@@ -66,6 +66,48 @@ anything touching the decision path.
    remembers to invoke it locally? Check the workflow YAML, don't
    assume.
 
+## Panel review (multi-model)
+
+For release-bound changes touching the decision path, the policy loader,
+the SDK, or a release workflow, the per-pillar checklist above is run as
+a **panel**: several independent frontier models, each with a distinct
+brief, reviewing the same change in parallel. This is still
+maintainer-run review, not independent third-party review — the same
+honesty rule as everything else in this document.
+
+The seats and why they differ:
+
+- **Release engineer** (repo access, may execute): walks changed
+  workflows/process files as a timeline — what runs at the tag, what is
+  immutable when — and reproduces suspicions with real commands.
+- **Adversarial verifier** (repo access, may execute): reports nothing
+  unreproduced and clears nothing unprobed; builds live probes and
+  publishes a "checked and cleared" list alongside findings, which kills
+  the panel's false positives.
+- **Cold reader** (diff only, deliberately no repo access): represents a
+  future outside contributor; what it cannot verify from the diff is
+  treated as a gap in what the change demonstrates.
+- **Second reader** (diff only): fast independent pass to break ties;
+  its findings require corroboration before any fix lands.
+
+Panel mechanics:
+
+- Every seat returns `VERDICT: APPROVE | APPROVE-WITH-NITS |
+  REQUEST-CHANGES` plus ranked findings with file:line, severity, and a
+  concrete fix.
+- The maintainer **verifies every finding before acting** and
+  dispositions each one: fixed / refuted-with-evidence /
+  declined-with-reason / deferred-to-issue.
+- The disposition table is posted as a review comment ("stamp") on the
+  PR, so the record of what was found, what was refuted, and why is
+  public next to the change (see PRs #24/#25 for the format).
+
+First run (2026-08-06, the 0.7.0 PRs) caught a release-pipeline
+deadlock, a silent enforcement collapse in `tg hook`, and a
+multi-document YAML loader bypass — and refuted six plausible-sounding
+findings that would otherwise have driven unnecessary churn. Both halves
+are the point.
+
 ## Findings log
 
 Entries here are load-bearing history, not a changelog duplicate — they
