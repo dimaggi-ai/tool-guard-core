@@ -19,8 +19,8 @@ and still be wrong in a real deployment.
 
 ## Per-pillar checklist
 
-Run against any change touching policy evaluation, the SDK, audit
-integrity, or a release workflow. Not every pillar applies to every
+Run against any change touching policy evaluation, the policy loader,
+the SDK, audit integrity, or a release workflow. Not every pillar applies to every
 change — judge relevance, but default to running all of them for
 anything touching the decision path.
 
@@ -65,6 +65,69 @@ anything touching the decision path.
    PR vs. nightly vs. release), or does it only run when someone
    remembers to invoke it locally? Check the workflow YAML, don't
    assume.
+
+## Panel review (multi-model)
+
+For release-bound changes touching policy evaluation, the policy loader,
+the SDK, audit integrity, or a release workflow, the per-pillar
+checklist above is run as a **panel**: several frontier models from
+different vendors, each with a distinct brief, reviewing the same change
+in parallel. The panel runs **on the pull request, before merge** — its
+disposition stamp is a merge prerequisite for qualifying PRs (enforced
+by maintainer practice, not by CI), and the pre-tag checklist in
+`RELEASING.md` verifies it happened. This is still
+maintainer-run review, not independent third-party review — the same
+honesty rule as everything else in this document (pillar 5).
+
+The seats and why they differ:
+
+- **Release engineer** (repo access, may execute): walks changed
+  workflows/process files as a timeline — what runs at the tag, what is
+  immutable when — and reproduces suspicions with real commands.
+- **Adversarial verifier** (repo access, may execute): reports nothing
+  unreproduced and clears nothing unprobed; builds live probes and
+  publishes a "checked and cleared" list alongside findings, which
+  removes most of the panel's false positives.
+- **Cold reader** (diff only, deliberately no repo access): represents a
+  future outside contributor. Anything it cannot verify from the diff it
+  reports as a finding ("cannot verify from diff"), dispositioned like
+  any other — when such a finding recurs, the usual fix is making the
+  change self-evident, not refuting the reader.
+- **Second reader** (diff only): fast independent pass over the same
+  diff; where it independently agrees with the cold reader, a real gap
+  is near-certain.
+
+A strategy/positioning pass (product framing, claim boundaries) may also
+run; it is advisory and sits outside the verdict contract below.
+
+Panel mechanics:
+
+- Every reviewing seat returns `VERDICT: APPROVE | APPROVE-WITH-NITS |
+  REQUEST-CHANGES` plus ranked findings with file:line, severity, and a
+  concrete fix. `REQUEST-CHANGES` means at least one finding must be
+  dispositioned before merge; `APPROVE-WITH-NITS` means the findings are
+  minor and may be declined with reason; `APPROVE` means none.
+- There is no vote. The maintainer synthesizes the verdicts,
+  **verifies every finding before acting**, and dispositions each one:
+  fixed / refuted-with-evidence / declined-with-reason /
+  deferred-to-issue. Deferral is not available to blocker or major
+  findings. A single-source finding from a diff-only seat is
+  corroborated before a fix lands, or the stamp records why not.
+  Conflicts between seats are resolved by evidence and recorded in the
+  disposition table.
+- The disposition table is posted as a top-level PR comment ("stamp"),
+  so the record of what was found, what was refuted, and why is public
+  next to the change (see PRs #24/#25 for the format; stamps are keyed
+  by reviewer, and seat assignment is per-run). Findings that meet the
+  bar for the findings log below are logged there as well — the stamp
+  is additional to the log, never a substitute.
+
+First run (2026-08-06, the 0.7.0 PRs) caught a release-pipeline
+deadlock, a silent enforcement collapse in `tg hook`, and a
+multi-document YAML loader bypass — and refuted eight plausible-sounding
+findings that would otherwise have driven unnecessary churn. Both halves
+are the point: real bugs fixed, and churn kept out of the tree. The
+catches are logged below.
 
 ## Findings log
 
@@ -126,8 +189,8 @@ passes have real precedent instead of a starting from scratch.
   narrowly scoping a review to "the new SDK" missed a bug in existing
   code that the SDK's own fix pattern should have prompted a search for.
 
-- **2026-08 · `cmd/tg/protect.go`, v0.6.0 pre-tag review.** An
-  independent review of the platform-native config-root change (issue
+- **2026-08 · `cmd/tg/protect.go`, v0.6.0 pre-tag review.** A
+  pre-tag review pass on the platform-native config-root change (issue
   #13) returned three blockers, all in the same class the checklist
   exists to catch — *state that outlives the code path that created
   it*. (1) `runProtect` resolved fresh default paths before loading
@@ -154,9 +217,36 @@ passes have real precedent instead of a starting from scratch.
   Each finding has its own regression test in
   `cmd/tg/protect_root_test.go`.
 
+- **2026-08 · `RELEASING.md`/`release.yml`, 0.7.0 pre-merge panel.** The
+  release checklist put the policy-compat snapshot step *after* the tag
+  push, but the tag-triggered workflow runs the test suite at the tag
+  and `TestPolicyCompatCoverage` requires the tag's own snapshot to
+  exist in the tagged tree — every future release would have failed
+  before GoReleaser. Caught by walking the release as a timeline rather
+  than reading steps in isolation; the snapshot now happens before
+  tagging, from the release commit. → pillar 6.
+
+- **2026-08 · `cmd/tg/hook.go`, 0.7.0 pre-merge panel.** Strict policy
+  decoding plus the hook's default fail-open meant one stale field in
+  any policy file collapsed enforcement silently: the load failure
+  dropped every policy, and `rm -rf /` went from **deny** to **allow**
+  with empty stderr. The hook now reports the load failure and the
+  offending file on stderr. The load-failure branch still fails open by
+  design — the failure mode is now visible, not gone. → pillars 4
+  and 2.
+
+- **2026-08 · `pkg/policyload`, 0.7.0 pre-merge panel.** The YAML loader
+  decoded only the first document of a multi-document stream, so a
+  policy whose scope/rules sat after a `---` separator loaded as an
+  empty permissive shell that `tg lint` accepted. Trailing documents
+  are now a load error. → pillar 2: a shape the loader does not
+  recognize must fail safe, not fail open.
+
 ## Where this fits in the release checklist
 
 `RELEASING.md`'s "Before tagging at all" section should include running
-this checklist for any release containing a decision-path, SDK, or
-release-workflow change — add findings to the log above rather than
-letting them live only in a PR description or commit message.
+this checklist — as a panel review for qualifying changes — for any
+release containing a change to policy evaluation, the policy loader,
+the SDK, audit integrity, or a release workflow. Add findings to the
+log above rather than letting them live only in a PR description or
+commit message.
