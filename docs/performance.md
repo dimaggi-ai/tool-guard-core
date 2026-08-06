@@ -18,8 +18,9 @@ The p99 ≈ 14µs figure quoted in the README and
 7700 (16 threads). It is a point measurement on one machine, not a
 floor: run `tg benchmark` on your own hardware and use that number.
 The proxy adds one HTTP hop plus JSON marshal/unmarshal on top —
-expect sub-millisecond round trips on a local Unix socket and 1–3 ms
-across a Kubernetes pod.
+expect sub-millisecond round trips over loopback TCP on the same host
+(`tg-proxy` listens on a TCP `host:port`) and 1–3 ms across a
+Kubernetes pod.
 
 ## 2. Published `tg-proxy` floor (asserted nightly)
 
@@ -36,9 +37,9 @@ Methodology, exactly as the workflow runs it:
   then an overload phase (2,000 in-flight) that must fail *closed*
   (clean rejections — never a 200 with the wrong decision, never a
   hang).
-- **Correctness under load:** after every phase the harness shells out
-  to `tg verify` and asserts the audit hash chain written by the
-  concurrent goroutines is still intact.
+- **Correctness under load:** after the load and overload phases
+  complete, the harness shells out to `tg verify` and asserts the audit
+  hash chain written by the concurrent goroutines is still intact.
 - **Hardware:** GitHub-hosted `ubuntu-latest` runners — shared-tenant
   machines with real variance. Identical code has measured anywhere
   from ~10k to ~26k req/s at concurrency 50 depending on runner load.

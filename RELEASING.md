@@ -23,26 +23,29 @@ guard catching it after the fact — do it right the first time.
    diverged — resolve that with a real merge/rebase before continuing.
    Don't tag a branch that isn't `main`.
 
-2. **Tag `main`'s new HEAD:**
+2. **Snapshot the policies from the release commit — BEFORE tagging.**
+   The tag-triggered release workflow runs the test suite at the tag,
+   and `TestPolicyCompatCoverage` requires the tag's own snapshot to
+   exist in that tree — a snapshot committed after tagging can never
+   reach the immutable tag, and every release would fail before
+   GoReleaser. So the snapshot commit must be the commit you tag:
+   ```bash
+   scripts/snapshot-policies.sh vX.Y.Z HEAD
+   git add testdata/policy-compat/vX.Y.Z
+   git commit -m "test: policy-compat snapshot for vX.Y.Z"
+   git push origin main
+   ```
+
+3. **Tag `main`'s new HEAD:**
    ```bash
    git tag -a vX.Y.Z -m "Tool Guard Core vX.Y.Z"
    ```
 
-3. **Push the tag** (this triggers `.github/workflows/release.yml`,
+4. **Push the tag** (this triggers `.github/workflows/release.yml`,
    which builds, runs GoReleaser, and publishes the GitHub Release +
    container image + SBOMs):
    ```bash
    git push origin vX.Y.Z
-   ```
-
-4. **Snapshot the tagged policies** for the compatibility net — this is
-   a release step, not archaeology; `TestPolicyCompatCoverage` fails CI
-   for every tag that skips it:
-   ```bash
-   scripts/snapshot-policies.sh vX.Y.Z
-   git add testdata/policy-compat/vX.Y.Z
-   git commit -m "test: policy-compat snapshot for vX.Y.Z"
-   git push origin main
    ```
 
 5. **Watch the Release workflow.** Its first real step verifies the

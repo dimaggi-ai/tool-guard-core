@@ -100,7 +100,7 @@ jobs:
       # a verifier actually pins. Verify with:
       #
       #   cosign verify ghcr.io/dimaggi-ai/tool-guard-core:<version> \
-      #     --certificate-identity-regexp 'github.com/dimaggi-ai/tool-guard-core' \
+      #     --certificate-identity-regexp '^https://github\.com/dimaggi-ai/tool-guard-core/\.github/workflows/release\.yml@refs/tags/v' \
       #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
       - name: Install cosign
         uses: sigstore/cosign-installer@v3

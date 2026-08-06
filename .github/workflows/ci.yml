@@ -31,8 +31,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # TestPolicyCompatCoverage needs the release tags to assert every
-          # tag has a policy snapshot; without them it skips, not passes.
+          # TestPolicyCompatCoverage needs the release tags (and their tree
+          # objects, for git ls-tree/show) to assert every tag has a policy
+          # snapshot; without them it skips, not passes. fetch-tags alone at
+          # the default depth 1 does not reliably deliver historical tags on
+          # PR commits — full history does.
+          fetch-depth: 0
           fetch-tags: true
 
       - name: Set up Go

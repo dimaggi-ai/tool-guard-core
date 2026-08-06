@@ -14,14 +14,18 @@ just a regression net that fails loudly if a future engine or loader
 change would silently change how an old, unmodified policy file behaves.
 Full schema versioning is still open.
 
-## Adding a snapshot after a release
+## Adding a snapshot for a release
 
-After tagging a release (see `RELEASING.md`), snapshot the policies as
-they shipped at that tag:
+**Before tagging** (see `RELEASING.md` — the tag's own CI requires its
+snapshot, so the snapshot commit must be the commit that gets tagged),
+snapshot the policies from the release commit:
 
 ```bash
-scripts/snapshot-policies.sh vX.Y.Z
+scripts/snapshot-policies.sh vX.Y.Z HEAD
 ```
+
+To backfill a snapshot for an already-existing tag, omit the ref:
+`scripts/snapshot-policies.sh vX.Y.Z` reads from the tag itself.
 
 `TestPolicyCompat` picks up any new `<version>/` directory automatically
 — no test code changes needed. A case is skipped for a version whose
@@ -30,7 +34,9 @@ exist at that tag) rather than failing.
 
 Forgetting the snapshot is no longer silent: `TestPolicyCompatCoverage`
 (same file) fails when any release tag from v0.2.0 on has no snapshot
-directory, or when a snapshot is missing a policy that its tag shipped.
+directory, when a snapshot is missing a policy that its tag shipped,
+when a snapshot file's bytes differ from what the tag shipped, or when
+a snapshot contains a file its tag never shipped.
 It compares against `git tag` / `git ls-tree`, so it needs a checkout
 with tags (CI fetches them via `fetch-tags` in `ci.yml`; a tag-less
 clone skips with a message instead of passing vacuously).

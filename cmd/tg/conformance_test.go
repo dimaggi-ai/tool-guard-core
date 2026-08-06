@@ -141,7 +141,13 @@ func TestConformanceCompleteness(t *testing.T) {
 		if want := strings.TrimSuffix(filepath.Base(file), ".json"); c.Name != want {
 			t.Errorf("case %s: name %q must match its filename (%q)", filepath.Base(file), c.Name, want)
 		}
-		covered[filepath.Base(c.PolicyFile)]++
+		// Credit coverage only when policy_file resolves to the shipped
+		// policies/ directory — a case pointing at a same-named fixture or
+		// snapshot elsewhere must not mark the real policy as covered.
+		resolved := filepath.Clean(filepath.Join(filepath.Dir(file), c.PolicyFile))
+		if filepath.Dir(resolved) == filepath.Clean(filepath.Join("..", "..", "policies")) {
+			covered[filepath.Base(resolved)]++
+		}
 	}
 
 	for _, pf := range policyFiles {
