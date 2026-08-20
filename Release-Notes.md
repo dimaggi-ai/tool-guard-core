@@ -5,11 +5,11 @@ per-change record see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## 0.7.0 — 2026-08-19
+## 0.7.0 — 2026-08-20
 
 "Load strictly, prove it shipped" — policy loading becomes strict
 everywhere, and the release itself gains verifiable evidence: signed
-images, reproducible stamps, and coverage gates that fail when the
+images, commit-derived build stamps, and coverage gates that fail when the
 safety corpus drifts. **One breaking change (policy loading); no engine
 or trace-format changes.**
 
@@ -31,12 +31,14 @@ or trace-format changes.**
   tag (it had silently stopped at v0.4.0) and fails when a tag has no
   snapshot or is missing a policy it shipped.
 
-- **Signed, reproducible releases.** Container images are cosign-signed
-  keyless by digest with the same OIDC identity that attests the
-  archives. Build stamps (`BuildDate`, image-created labels, mod
-  timestamps) now derive from the commit rather than the build clock, so
-  two builds of one commit produce the same bytes — groundwork for a
-  rebuild-and-diff verifier that does not exist yet.
+- **Signed releases, commit-derived build stamps.** Container images are
+  cosign-signed keyless by digest with the same OIDC identity that attests
+  the archives. Build stamps (`BuildDate`, image-created labels, mod
+  timestamps) now derive from the commit rather than the build clock, so the
+  compiled binaries are byte-identical across rebuilds. This is provenance
+  plus deterministic stamping, not verified bit-for-bit reproducibility: the
+  release archives are not yet deterministic, and the rebuild-and-diff
+  verifier that would prove full reproducibility does not exist yet.
 
 - **Honest docs + a formal review panel.** README and
   `docs/oss-vs-enterprise.md` no longer deny features that already

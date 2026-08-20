@@ -36,9 +36,10 @@ builds:
       - CGO_ENABLED=0
     flags:
       - -trimpath
-    # Commit-derived timestamps everywhere: two builds of the same commit
-    # produce the same bytes, a prerequisite for the rebuild-and-diff
-    # reproducibility verifier the 1.0 roadmap still owes.
+    # Commit-derived timestamps everywhere so the compiled binaries are
+    # byte-identical across rebuilds (the archives are not yet deterministic);
+    # groundwork for the rebuild-and-diff reproducibility verifier the 1.0
+    # roadmap still owes.
     mod_timestamp: "{{ .CommitTimestamp }}"
     ldflags:
       - -s -w
@@ -63,9 +64,10 @@ builds:
       - CGO_ENABLED=0
     flags:
       - -trimpath
-    # Commit-derived timestamps everywhere: two builds of the same commit
-    # produce the same bytes, a prerequisite for the rebuild-and-diff
-    # reproducibility verifier the 1.0 roadmap still owes.
+    # Commit-derived timestamps everywhere so the compiled binaries are
+    # byte-identical across rebuilds (the archives are not yet deterministic);
+    # groundwork for the rebuild-and-diff reproducibility verifier the 1.0
+    # roadmap still owes.
     mod_timestamp: "{{ .CommitTimestamp }}"
     ldflags:
       - -s -w

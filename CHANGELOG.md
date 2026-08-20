@@ -4,7 +4,7 @@ All notable changes to Tool Guard Core are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 the project adheres to [Semantic Versioning](https://semver.org/).
 
-## [0.7.0] — 2026-08-19
+## [0.7.0] — 2026-08-20
 
 Release focus: **policy-loading hardening** and **release-integrity
 evidence**. One breaking change — policy loading is now strict
@@ -22,7 +22,7 @@ while `tg hook` in its default fail-open configuration then enforces no
 policy at all. The load error is now reported on stderr instead of
 being swallowed. Everything else in this release is additive:
 conformance/compat coverage gates, cosign-signed container images,
-commit-derived reproducible build stamps, honest docs, and a formalized
+commit-derived build stamps, honest docs, and a formalized
 multi-model panel review.
 
 ### Policy schema freeze
@@ -80,9 +80,10 @@ multi-model panel review.
   verify command is documented in the workflow. Release/nightly
   workflows align on Go 1.25.12 (matching `go.mod` and CI), and
   `BuildDate`/image-created labels/mod timestamps now derive from the
-  commit rather than the build clock, so two builds of the same commit
-  produce the same bytes — groundwork for the rebuild-and-diff
-  reproducibility verifier, which still does not exist.
+  commit rather than the build clock, so the compiled binaries are
+  byte-identical across rebuilds (the release archives are not yet
+  deterministic) — groundwork for the rebuild-and-diff reproducibility
+  verifier, which still does not exist.
 - **Docs stopped denying shipped features** (#23). README "Known
   limitations" and `docs/oss-vs-enterprise.md` no longer claim there is
   no OpenAPI spec (shipped in 0.6.0) or no SDK (shipped in 0.5.0). New
