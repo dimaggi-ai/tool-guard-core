@@ -8,9 +8,10 @@
 //
 // What it measures
 //   - Throughput and p50/p95/p99/max latency at each concurrency level in
-//     -concurrency, firing a realistic mix of allow/deny decisions against
-//     a real policy so both code paths run under load, not just the cheap
-//     one.
+//     -concurrency, firing a realistic mix of under- and over-cap refunds
+//     against the shipped policy set so every engine path (allow, escalate,
+//     deny, and the escalate→deny saturation downgrade) runs under load, not
+//     just the cheap one.
 //   - A brief overload phase at -overload concurrency: does tg-proxy fail
 //     CLOSED (reject cleanly — connection refused, timeout, or 5xx) or fail
 //     OPEN (silently return 200 with a wrong decision, hang forever, or
@@ -35,9 +36,9 @@
 //   - One results line per concurrency level (req/s, latency percentiles,
 //     error breakdown by cause).
 //   - One line for the overload phase, classified as PASS (failed closed:
-//     rejected or errored, never wrong-decision) or FAIL (served a
-//     seemingly-successful response with the wrong decision, or hung past
-//     -overload-timeout).
+//     rejected, errored, or denied — never auto-allowed an over-cap refund) or
+//     FAIL (let an over-cap refund back through with a 200 that wasn't a deny,
+//     or hung past -overload-timeout).
 //   - A final PASS/FAIL verdict from `tg verify` on the resulting audit log.
 package main
 
@@ -78,11 +79,11 @@ type evalResult struct {
 }
 
 type reqOutcome struct {
-	latency    time.Duration
-	statusCode int
-	err        error
-	decision   string
-	wantDeny   bool
+	latency      time.Duration
+	statusCode   int
+	err          error
+	decision     string
+	mustNotAllow bool
 }
 
 func main() {
@@ -233,8 +234,8 @@ func runLevel(target string, concurrency int, duration time.Duration, perReqTime
 				default:
 				}
 
-				env, wantDeny := buildEnvelope(rng)
-				out := fire(client, target, env, wantDeny, perReqTimeout)
+				env, mustNotAllow := buildEnvelope(rng)
+				out := fire(client, target, env, mustNotAllow, perReqTimeout)
 				localTotal++
 				if out.err != nil {
 					if isTimeout(out.err) {
@@ -250,8 +251,14 @@ func runLevel(target string, concurrency int, duration time.Duration, perReqTime
 				localStatus[out.statusCode]++
 				if out.statusCode == http.StatusOK {
 					local = append(local, out.latency)
-					gotDeny := out.decision == "denied"
-					if gotDeny != wantDeny {
+					// Fail-open = an over-cap refund that came back 200 without
+					// being denied (auto-allowed, or a corrupt/empty decision).
+					// A denial is fail-CLOSED and safe — including the
+					// escalate→deny downgrade the proxy performs when the
+					// pending-escalation store saturates under overload. Under-cap
+					// outcomes vary with the loaded policy set (allow vs escalate),
+					// so they are deliberately not asserted here.
+					if out.mustNotAllow && out.decision != "denied" {
 						localWrong++
 					}
 				}
@@ -263,20 +270,27 @@ func runLevel(target string, concurrency int, duration time.Duration, perReqTime
 }
 
 func buildEnvelope(rng *rand.Rand) (envelope, bool) {
-	// issue_refund against policies/refund_cap.yaml: amount > 500 denies.
-	// Mix allow/deny roughly 50/50 so both engine paths run under load,
-	// plus a slice of near-boundary amounts (499-501) to stress the
-	// threshold comparison itself, not just the obviously-clear cases.
+	// issue_refund is money movement, so the shipped ./policies set guards it
+	// in depth: refund_cap.yaml denies any single amount over $500, while the
+	// irreversibility floor escalates under-cap money movement — and when the
+	// pending-escalation store saturates under sustained load, the proxy
+	// fail-CLOSES by downgrading that escalate to a deny. The one decision that
+	// is load-independent and always safety-critical is the per-call cap: an
+	// over-cap refund must never come back auto-allowed. We still fire a mix of
+	// amounts (a near-boundary 499-501 slice, clearly-under, clearly-over) so
+	// every engine path runs under load; we just assert the invariant that
+	// holds regardless of which policies happen to be loaded. See the worker
+	// loop and judgeOverload.
 	var amount int
 	switch rng.Intn(4) {
 	case 0:
-		amount = 499 + rng.Intn(3) // 499, 500, 501 — boundary
+		amount = 499 + rng.Intn(3) // 499, 500, 501 — straddles the cap
 	case 1:
-		amount = 10 + rng.Intn(400) // clearly allow
+		amount = 10 + rng.Intn(400) // under the cap
 	default:
-		amount = 600 + rng.Intn(5000) // clearly deny
+		amount = 600 + rng.Intn(5000) // over the cap — must never be allowed
 	}
-	wantDeny := amount > 500
+	mustNotAllow := amount > 500 // over the per-call cap: deny or escalate, never allow
 
 	params, _ := json.Marshal(map[string]any{"amount": amount, "account_id": "acct-stress-test"})
 	return envelope{
@@ -288,10 +302,10 @@ func buildEnvelope(rng *rand.Rand) (envelope, bool) {
 		ToolName:   "issue_refund",
 		ToolGroup:  "monetary_outflow",
 		Parameters: params,
-	}, wantDeny
+	}, mustNotAllow
 }
 
-func fire(client *http.Client, target string, env envelope, wantDeny bool, timeout time.Duration) reqOutcome {
+func fire(client *http.Client, target string, env envelope, mustNotAllow bool, timeout time.Duration) reqOutcome {
 	body, _ := json.Marshal(env)
 	ctx := context.Background()
 	var cancel context.CancelFunc
@@ -306,11 +320,11 @@ func fire(client *http.Client, target string, env envelope, wantDeny bool, timeo
 	resp, err := client.Do(req)
 	elapsed := time.Since(start)
 	if err != nil {
-		return reqOutcome{latency: elapsed, err: err, wantDeny: wantDeny}
+		return reqOutcome{latency: elapsed, err: err, mustNotAllow: mustNotAllow}
 	}
 	defer resp.Body.Close()
 
-	out := reqOutcome{latency: elapsed, statusCode: resp.StatusCode, wantDeny: wantDeny}
+	out := reqOutcome{latency: elapsed, statusCode: resp.StatusCode, mustNotAllow: mustNotAllow}
 	if resp.StatusCode == http.StatusOK {
 		var r evalResult
 		if err := json.NewDecoder(resp.Body).Decode(&r); err == nil {
@@ -401,20 +415,22 @@ func printLevel(concurrency int, duration time.Duration, r levelResult) {
 		strings.Join(statusStr, ","),
 	)
 	if r.wrongDec > 0 {
-		fmt.Printf("  ⚠ %d responses had a 200 OK with the WRONG decision for the amount sent — this is a correctness bug, not a load issue\n", r.wrongDec)
+		fmt.Printf("  ⚠ %d over-cap refunds returned 200 OK without being denied — a genuine fail-open, not a load issue\n", r.wrongDec)
 	}
 }
 
 // judgeOverload decides whether the overload phase demonstrates fail-closed
 // behavior. Any of these count as "failed closed": connection refused,
-// context-deadline timeouts, non-2xx status codes. What must NEVER happen:
-// a 200 OK carrying the wrong decision (silent fail-open) or a request that
-// outlives -overload-timeout (a hang, which in production would exhaust a
-// caller's own timeout budget and likely get treated as fail-open by
-// whatever's calling tg-proxy).
+// context-deadline timeouts, non-2xx status codes, and — importantly — a
+// deny (including the escalate→deny downgrade the proxy performs when the
+// pending-escalation store saturates under load). What must NEVER happen: an
+// over-cap refund coming back 200 without a deny (auto-allowed or a corrupt
+// decision — silent fail-open), or a request that outlives -overload-timeout
+// (a hang, which in production would exhaust a caller's own timeout budget and
+// likely get treated as fail-open by whatever's calling tg-proxy).
 func judgeOverload(r levelResult) (bool, string) {
 	if r.wrongDec > 0 {
-		return false, fmt.Sprintf("%d requests got a 200 with the wrong decision under overload — silent fail-open", r.wrongDec)
+		return false, fmt.Sprintf("%d over-cap refunds returned 200 without a deny under overload — silent fail-open", r.wrongDec)
 	}
 	if r.worstHang > 0 {
 		return false, fmt.Sprintf("at least one request hung past the overload timeout (worst observed: %s) instead of erroring", r.worstHang)

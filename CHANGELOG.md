@@ -91,6 +91,18 @@ multi-model panel review.
   2000 req/s / p99 ≤ 200 ms at concurrency 50 asserted nightly, with
   the hardware-variance rationale for nightly-not-per-PR gating; every
   quoted number links to it.
+- **`cmd/stress-test` correctness oracle corrected.** The load/overload
+  phase judged decisions with a stale `amount > 500 ⇒ deny` model that
+  predated the 0.6.0 irreversibility floor. Against the full shipped
+  `./policies` set, under-cap money movement escalates, and when the
+  pending-escalation store saturates under sustained load the proxy
+  fail-CLOSES by downgrading that escalate to a deny — which the old
+  oracle miscounted as a "wrong decision" and even reported as a silent
+  fail-open. It now asserts the load-independent safety invariant that
+  actually matters — an over-cap refund must never come back
+  auto-allowed — so a genuine fail-open still fails the suite while the
+  fail-closed downgrade correctly passes. Harness-only; no proxy or
+  engine behavior changed.
 
 ## [0.6.0] — 2026-08-05
 
