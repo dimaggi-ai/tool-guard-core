@@ -30,6 +30,14 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
+        with:
+          # TestPolicyCompatCoverage needs the release tags (and their tree
+          # objects, for git ls-tree/show) to assert every tag has a policy
+          # snapshot; without them it skips, not passes. fetch-tags alone at
+          # the default depth 1 does not reliably deliver historical tags on
+          # PR commits — full history does.
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -152,6 +160,12 @@ jobs:
           go build -o bin/ollama-agent ./examples/ollama-agent
       - name: Lint all shipped policy bundles
         run: |
+          # examples/coding-agent-guard/policy.yaml is deliberately not
+          # gated here: it relies on flag-level self-protection
+          # (-protect-self / -protect-paths, per its docs), which lint
+          # cannot see, so it always carries a warn-severity finding and
+          # this gate fails on any finding. Gating it needs a
+          # warn-tolerant mode first.
           for p in policies/*.yaml \
                    examples/finance-cfo/policies/*.yaml \
                    examples/business-ops/policies/*.yaml \

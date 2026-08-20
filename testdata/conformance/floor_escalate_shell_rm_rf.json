@@ -1,0 +1,11 @@
+{
+  "name": "floor_escalate_shell_rm_rf",
+  "description": "An apply-verb tool (recoverable by name) whose `command` parameter contains a recursive force delete is irreversible by parameter shape, and the floor escalates it.",
+  "policy_file": "../../policies/irreversibility_floor.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "apply_changes",
+    "parameters": {"command": "rm -rf /var/data"}
+  },
+  "expect": {"decision": "escalated", "action_taken": "escalated"}
+}

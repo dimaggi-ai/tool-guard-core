@@ -1,0 +1,11 @@
+{
+  "name": "floor_allow_reversible_read",
+  "description": "A read-verb query is classified reversible and explicitly allowed — the floor gates irreversibility, it does not tax reads.",
+  "policy_file": "../../policies/irreversibility_floor.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "get_invoice_status",
+    "parameters": {"invoice_id": "inv-42"}
+  },
+  "expect": {"decision": "allowed", "action_taken": "allowed"}
+}

@@ -60,8 +60,12 @@ These features are not built in either edition today:
 - **Managed hosting / SaaS.** Both editions are self-hosted. No
   hosted service exists, and no latency SLO is quoted for
   infrastructure that isn't running.
-- **Client SDKs / OpenAPI spec.** The HTTP APIs are small and
-  documented; hand-writing a client takes an afternoon.
+- **Node client SDK / gRPC.** Core ships a Python SDK
+  (`sdk/python/`, LangChain/AutoGen/native/MCP adapters) and an
+  OpenAPI spec for `tg-proxy` (`api/openapi.yaml`); other languages
+  hand-write a client against that spec — the shapes are small enough
+  that it takes an afternoon. There is no Node SDK and no gRPC
+  variant in either edition.
 - **24/7 SLA.** DIMAGGI is a small team. Enterprise support is a
   contract conversation, not a 24/7 NOC.
 

@@ -361,7 +361,9 @@ echo $?
 ```
 
 p99 ~14µs on an AMD Ryzen 7 7700 — about three orders of magnitude
-below a 25 ms budget.
+below a 25 ms budget. This is a point measurement, not a promise; the
+published proxy floor and its methodology are in
+[docs/performance.md](docs/performance.md).
 
 **6. See the audit chain do its job:**
 
@@ -669,12 +671,14 @@ Features absent from this repo today:
 - **No managed hosting.** You run the proxy. You run Ollama. You own
   the operations. There is no hosted version.
 - **No gRPC variant.** REST `POST /evaluate` only.
-- **No Node client SDK and no OpenAPI spec.** A Python SDK ships at
+- **No Node client SDK.** A Python SDK ships at
   [`sdk/python/`](sdk/python/README.md) (`pip install` from source —
   not yet on PyPI) with adapters for LangChain, AutoGen, native
-  OpenAI/Anthropic tool use, and MCP. For other languages, the HTTP
-  API is documented in `docs/integration.md`; the request/response
-  shapes are small enough to hand-write a client.
+  OpenAI/Anthropic tool use, and MCP. For other languages, the
+  `tg-proxy` HTTP surface is specified in
+  [`api/openapi.yaml`](api/openapi.yaml) (with conformance tests) and
+  documented in `docs/integration.md`; the request/response shapes are
+  small enough to hand-write a client.
 - **Battle-test catalogue is Gemma-4-only.** Today's bypass numbers
   reflect Gemma's failure modes specifically; other models will
   fail differently.

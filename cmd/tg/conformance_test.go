@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -100,5 +101,60 @@ func TestConformance(t *testing.T) {
 					c.Description, result.ActionTaken, c.Expect.ActionTaken, result.DecisionReason)
 			}
 		})
+	}
+}
+
+// TestConformanceCompleteness asserts the corpus can't silently drift from
+// the shipped policy set again: every policies/*.yaml must have at least
+// one conformance case, case names must be unique, and each case's name
+// must match its filename. This is exactly the gap 0.6.0 shipped through —
+// irreversibility_floor.yaml landed with zero corpus cases and CI stayed
+// green.
+func TestConformanceCompleteness(t *testing.T) {
+	policyFiles, err := filepath.Glob(filepath.Join("..", "..", "policies", "*.yaml"))
+	if err != nil {
+		t.Fatalf("glob policies: %v", err)
+	}
+	if len(policyFiles) == 0 {
+		t.Fatal("no shipped policies found under policies/")
+	}
+
+	caseFiles, err := filepath.Glob(filepath.Join("..", "..", "testdata", "conformance", "*.json"))
+	if err != nil {
+		t.Fatalf("glob conformance cases: %v", err)
+	}
+
+	covered := map[string]int{}
+	seenNames := map[string]string{}
+	for _, file := range caseFiles {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatalf("read case %s: %v", file, err)
+		}
+		var c conformanceCase
+		if err := json.Unmarshal(raw, &c); err != nil {
+			t.Fatalf("parse case %s: %v", file, err)
+		}
+		if prev, dup := seenNames[c.Name]; dup {
+			t.Errorf("duplicate case name %q in %s (already used by %s)", c.Name, filepath.Base(file), prev)
+		}
+		seenNames[c.Name] = filepath.Base(file)
+		if want := strings.TrimSuffix(filepath.Base(file), ".json"); c.Name != want {
+			t.Errorf("case %s: name %q must match its filename (%q)", filepath.Base(file), c.Name, want)
+		}
+		// Credit coverage only when policy_file resolves to the shipped
+		// policies/ directory — a case pointing at a same-named fixture or
+		// snapshot elsewhere must not mark the real policy as covered.
+		resolved := filepath.Clean(filepath.Join(filepath.Dir(file), c.PolicyFile))
+		if filepath.Dir(resolved) == filepath.Clean(filepath.Join("..", "..", "policies")) {
+			covered[filepath.Base(resolved)]++
+		}
+	}
+
+	for _, pf := range policyFiles {
+		base := filepath.Base(pf)
+		if covered[base] == 0 {
+			t.Errorf("shipped policy %s has no conformance case — add at least one to testdata/conformance/ (see its README)", base)
+		}
 	}
 }
