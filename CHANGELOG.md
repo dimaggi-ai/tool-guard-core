@@ -4,7 +4,26 @@ All notable changes to Tool Guard Core are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 the project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.7.0] — 2026-08-19
+
+Release focus: **policy-loading hardening** and **release-integrity
+evidence**. One breaking change — policy loading is now strict
+everywhere: unknown or misspelled fields and the removed
+`deep_evaluation` field are hard errors, a policy directory with any
+invalid file fails to load as a set, and a policy file must be exactly
+one YAML document. No changes to engine decision semantics or the
+canonical trace format.
+
+**Upgrading:** add `schema_version: 1` to your policies and run
+`tg lint` on **every** file in your policy directory before upgrading —
+under the strict loader a single unknown field fails the whole set, and
+`tg-proxy` refuses to start (a failed reload keeps the previous set)
+while `tg hook` in its default fail-open configuration then enforces no
+policy at all. The load error is now reported on stderr instead of
+being swallowed. Everything else in this release is additive:
+conformance/compat coverage gates, cosign-signed container images,
+commit-derived reproducible build stamps, honest docs, and a formalized
+multi-model panel review.
 
 ### Policy schema freeze
 
@@ -1157,7 +1176,8 @@ Lint heuristics shipped (8):
   documented battle-test catalogue; the strict variants are for
   operators who already accept those build-time costs.
 
-[Unreleased]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.5.0...v0.5.2
 [0.5.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.4.0...v0.5.0

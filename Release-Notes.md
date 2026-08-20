@@ -5,6 +5,59 @@ per-change record see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## 0.7.0 — 2026-08-19
+
+"Load strictly, prove it shipped" — policy loading becomes strict
+everywhere, and the release itself gains verifiable evidence: signed
+images, reproducible stamps, and coverage gates that fail when the
+safety corpus drifts. **One breaking change (policy loading); no engine
+or trace-format changes.**
+
+### Highlights
+
+- **Policy schema freeze (breaking).** Policy YAML now carries
+  `schema_version: 1`. One strict loader is shared by `tg`, `tg-proxy`,
+  linting, simulation, and protection, so unknown or misspelled fields
+  are rejected with a field path instead of being silently discarded.
+  The parsed-but-unused `deep_evaluation` field is gone (migrate
+  semantic checks to an `llm_classify` rule), and a policy file must be
+  exactly one YAML document — content after a `---` separator used to be
+  silently ignored and is now a load error.
+
+- **Conformance & compat coverage gates.** A completeness gate fails
+  when any shipped policy has zero conformance cases, when case names
+  collide, or when a name doesn't match its file — the exact drift 0.6.0
+  shipped through. The policy-compat net now snapshots **every** release
+  tag (it had silently stopped at v0.4.0) and fails when a tag has no
+  snapshot or is missing a policy it shipped.
+
+- **Signed, reproducible releases.** Container images are cosign-signed
+  keyless by digest with the same OIDC identity that attests the
+  archives. Build stamps (`BuildDate`, image-created labels, mod
+  timestamps) now derive from the commit rather than the build clock, so
+  two builds of one commit produce the same bytes — groundwork for a
+  rebuild-and-diff verifier that does not exist yet.
+
+- **Honest docs + a formal review panel.** README and
+  `docs/oss-vs-enterprise.md` no longer deny features that already
+  shipped (OpenAPI in 0.6.0, SDK in 0.5.0); `docs/performance.md` records
+  the perf methodology behind every quoted number. The multi-model panel
+  review is now a documented, required step for qualifying PRs
+  (`docs/REVIEW-PROCESS.md`).
+
+### Upgrading
+
+Add `schema_version: 1` to your policies and run `tg lint` on **every**
+file in your policy directory **before** upgrading. Under the strict
+loader a single unknown field fails the whole set: `tg-proxy` refuses to
+start (a failed reload keeps the previous set), but `tg hook` in its
+default fail-open configuration then enforces no policy at all — a deny
+that worked under 0.6.0 would become an allow. The load error is now
+printed on stderr instead of being swallowed. Everything else is
+additive.
+
+---
+
 ## 0.6.0 — 2026-08-05
 
 "Gate on consequence" — a deterministic classifier that judges an action
