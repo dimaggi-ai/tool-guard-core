@@ -44,7 +44,7 @@ jobs:
         with:
           # Keep in lockstep with go.mod and ci.yml — a release built on a
           # different toolchain than CI tested is untested code.
-          go-version: "1.25.12"
+          go-version: "1.25.13"
           cache: true
 
       - name: Set up QEMU (for cross-arch container builds)

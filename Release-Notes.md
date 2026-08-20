@@ -40,6 +40,11 @@ or trace-format changes.**
   release archives are not yet deterministic, and the rebuild-and-diff
   verifier that would prove full reproducibility does not exist yet.
 
+- **Go 1.25.13 toolchain.** CI, release, and nightly workflows and
+  `go.mod` move to Go 1.25.13, patching five reachable standard-library
+  vulnerabilities (`net/url`, `crypto/tls`, `net/http` ×2, `encoding/asn1`)
+  that 1.25.12 was exposed to. `govulncheck` is clean on 1.25.13.
+
 - **Honest docs + a formal review panel.** README and
   `docs/oss-vs-enterprise.md` no longer deny features that already
   shipped (OpenAPI in 0.6.0, SDK in 0.5.0); `docs/performance.md` records

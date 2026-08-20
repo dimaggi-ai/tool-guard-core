@@ -77,9 +77,13 @@ multi-model panel review.
 - **Container images are cosign-signed** (#21). The release workflow
   signs the multi-arch ghcr.io manifests keyless (by digest) with the
   same GitHub OIDC identity that already attests the archives; the
-  verify command is documented in the workflow. Release/nightly
-  workflows align on Go 1.25.12 (matching `go.mod` and CI), and
-  `BuildDate`/image-created labels/mod timestamps now derive from the
+  verify command is documented in the workflow. CI, release, and nightly
+  workflows and `go.mod` align on Go 1.25.13, which patches five
+  reachable standard-library vulnerabilities that 1.25.12 was exposed to
+  (GO-2026-6218 `net/url`, GO-2026-6090 `crypto/tls`, GO-2026-6089 and
+  GO-2026-5026 `net/http`, GO-2026-5972 `encoding/asn1`); `govulncheck`
+  is clean on 1.25.13. `BuildDate`/image-created labels/mod timestamps
+  now derive from the
   commit rather than the build clock, so the compiled binaries are
   byte-identical across rebuilds (the release archives are not yet
   deterministic) — groundwork for the rebuild-and-diff reproducibility
