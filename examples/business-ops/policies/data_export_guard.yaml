@@ -12,6 +12,7 @@
 # This policy lints clean and runs against the standard ActionEnvelope
 # shape — no schema extensions required.
 
+schema_version: 1
 policy_id: pol-data-export-guard
 name: customer-data-export-guard
 description: >

@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
+	"github.com/dimaggi-ai/tool-guard-core/pkg/policyload"
 )
 
 func FuzzActionEnvelopeDecode(f *testing.F) {
@@ -92,6 +93,6 @@ func FuzzPolicyYAML(f *testing.F) {
 		// Same "never panic" property as the other two — a parse error
 		// here is the correct, already-handled outcome (tg-proxy logs it
 		// and skips the file at startup); this only checks for a crash.
-		_, _ = loadPolicyYAML(path)
+		_, _ = policyload.Load(path)
 	})
 }

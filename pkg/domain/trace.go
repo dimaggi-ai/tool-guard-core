@@ -95,12 +95,9 @@ type DecisionTrace struct {
 	AgentTokensOut  int     `json:"agent_tokens_out,omitempty"`
 	AgentLLMCostUSD float64 `json:"agent_llm_cost_usd,omitempty"`
 
-	// DeepEvalResult, when non-nil, records the Gemma 4 hybrid-eval outcome
-	// that ran alongside the deterministic rule match. Captured here so the
-	// audit chain (and the eventual evidence pack) can prove the AI second
-	// opinion happened, what it returned, and how the engine combined it
-	// with the deterministic result. Always populated for policies that
-	// declared `DeepEvaluation`; absent for pure-deterministic policies.
+	// DeepEvalResult, when non-nil, records a hybrid-eval outcome supplied by
+	// an integration. Captured here so the audit chain can preserve historical
+	// outcomes even though the policy schema no longer accepts deep_evaluation.
 	DeepEvalResult *DeepEvalRecord `json:"deep_eval_result,omitempty"`
 }
 

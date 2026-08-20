@@ -13,6 +13,7 @@
 # with a free-text regex tripwire on parameters.justification so lint
 # does not warn amount-without-semantic-check.
 
+schema_version: 1
 policy_id: pol-purchase-guard
 name: purchase-order-guard
 description: >

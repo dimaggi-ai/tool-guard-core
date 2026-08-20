@@ -192,6 +192,17 @@ func evalHook(policyDir, policyFile string, env *domain.ActionEnvelope, mode dom
 
 	policies, err := loadPolicySet(policyDir, policyFile)
 	if err != nil || len(policies) == 0 {
+		// Say so on stderr, always: in the default fail-open configuration
+		// this branch means NO policy is enforced for this call, and with
+		// strict decoding a single stale field in one file fails the whole
+		// set. A silent allow here turns a working deny into nothing on
+		// upgrade; Claude Code surfaces hook stderr, so the operator at
+		// least sees why.
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "tg hook: policy load failed — no policy enforced for this call: %v\n", err)
+		} else {
+			fmt.Fprintln(os.Stderr, "tg hook: no policies loaded — no policy enforced for this call")
+		}
 		return failDecide(env.ToolName)
 	}
 

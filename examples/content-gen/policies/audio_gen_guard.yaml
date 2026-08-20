@@ -14,6 +14,7 @@
 # The Gemma classifier catches the obvious cases. It reads the PROMPT
 # only -- it cannot compare against a reference voice sample.
 
+schema_version: 1
 policy_id: pol-audio-gen-guard
 name: audio-generation-guard
 description: >

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
+	"github.com/dimaggi-ai/tool-guard-core/pkg/policyload"
 )
 
 // ── E: writable-scope-no-self-protection heuristic ────────────────────────
@@ -180,7 +181,7 @@ func TestLint_WritableScopeNoSelfProtection_NotFiredByReadOnlyTools(t *testing.T
 func TestLint_WritableScopeNoSelfProtection_ShippedRefundPoliciesClean(t *testing.T) {
 	for _, name := range []string{"refund_cap.yaml", "refund_cap_strict.yaml"} {
 		t.Run(name, func(t *testing.T) {
-			policy, err := loadPolicyYAML(filepath.Join("..", "..", "policies", name))
+			policy, err := policyload.Load(filepath.Join("..", "..", "policies", name))
 			if err != nil {
 				t.Fatalf("load %s: %v", name, err)
 			}

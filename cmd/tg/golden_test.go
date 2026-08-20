@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
+	"github.com/dimaggi-ai/tool-guard-core/pkg/policyload"
 )
 
 // TestGolden_LintPublicExample pins the exact lint rule names emitted on
@@ -14,7 +15,7 @@ import (
 // docs become wrong — pairs with TestGolden_AllLintRulesHaveStableNames
 // to catch the full class of doc-vs-CLI drift.
 func TestGolden_LintPublicExample(t *testing.T) {
-	policy, err := loadPolicyYAML(filepath.Join("..", "..", "policies", "refund_cap.yaml"))
+	policy, err := policyload.Load(filepath.Join("..", "..", "policies", "refund_cap.yaml"))
 	if err != nil {
 		t.Fatalf("load example policy: %v", err)
 	}
@@ -57,7 +58,7 @@ func TestGolden_LintPublicExample(t *testing.T) {
 // If either suppression breaks, this test fails before the README is
 // silently wrong.
 func TestGolden_LintStrictPolicyClean(t *testing.T) {
-	policy, err := loadPolicyYAML(filepath.Join("..", "..", "policies", "refund_cap_strict.yaml"))
+	policy, err := policyload.Load(filepath.Join("..", "..", "policies", "refund_cap_strict.yaml"))
 	if err != nil {
 		t.Fatalf("load strict policy: %v", err)
 	}

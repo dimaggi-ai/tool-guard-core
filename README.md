@@ -280,6 +280,7 @@ is build-tagged and excluded from the default binary.
 **1. Define a policy** (`policies/refund_cap.yaml`):
 
 ```yaml
+schema_version: 1
 policy_id: pol-example-refund
 name: refund-cap-example
 version: 1
@@ -599,6 +600,15 @@ Comprehensive docs live in [`docs/`](docs/README.md):
 
 ## Known limitations
 
+> **New in 0.7.0 (breaking):** policy loading is strict everywhere —
+> `schema_version: 1` declared (omitted still loads as v1), unknown or
+> misspelled fields are load errors, the no-op `deep_evaluation` field
+> is removed, and a policy file must be exactly one YAML document. One
+> bad file fails its whole policy set: `tg-proxy` refuses to start,
+> while `tg hook` without `-fail-closed`/`-fail-closed-tools` enforces
+> **nothing** on a failed load (the error is reported on stderr). Run
+> `tg lint` on every policy file **before** upgrading; migration notes
+> in [docs/operating.md](docs/operating.md).
 > **New in 0.6.0:** reversibility-aware gating — a deterministic,
 > offline classifier exposing `reversibility`
 > (`reversible`/`recoverable`/`irreversible`/`unknown`) as an ordinary

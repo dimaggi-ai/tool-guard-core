@@ -1,7 +1,6 @@
 package domain
 
 import (
-	"encoding/json"
 	"time"
 )
 
@@ -80,14 +79,15 @@ const (
 // Policy represents a versioned, citation-backed policy object.
 // Spec: 02_Policy_Object_v0
 type Policy struct {
-	PolicyID    string       `json:"policy_id"`
-	OrgID       string       `json:"org_id"`
-	Name        string       `json:"name"`
-	Description string       `json:"description"`
-	Version     int          `json:"version"`
-	Priority    int          `json:"priority,omitempty"` // 1 = highest priority, default 100
-	Status      PolicyStatus `json:"status"`
-	Mode        PolicyMode   `json:"mode"`
+	SchemaVersion int          `json:"schema_version"`
+	PolicyID      string       `json:"policy_id"`
+	OrgID         string       `json:"org_id"`
+	Name          string       `json:"name"`
+	Description   string       `json:"description"`
+	Version       int          `json:"version"`
+	Priority      int          `json:"priority,omitempty"` // 1 = highest priority, default 100
+	Status        PolicyStatus `json:"status"`
+	Mode          PolicyMode   `json:"mode"`
 
 	// Scope determines which agents/tools this policy applies to
 	Scope PolicyScope `json:"scope"`
@@ -97,13 +97,6 @@ type Policy struct {
 
 	// Rules are the individual evaluation rules
 	Rules []Rule `json:"rules"`
-
-	// DeepEvaluation is parsed for forward compatibility but NOT
-	// evaluated — no shipped evaluator consumes it. Policies that
-	// set deep_evaluation behave identically to policies that omit
-	// it. Use the llm_classify condition for semantic checks that
-	// actually run.
-	DeepEvaluation *DeepEvalConfig `json:"deep_evaluation,omitempty"`
 
 	// Compliance maps this policy to framework control IDs (e.g.
 	// {"eu_ai_act": ["art_12", "art_14"]}). The mapping is stored
@@ -571,40 +564,4 @@ type Citation struct {
 	Page          int    `json:"page,omitempty"`
 	Line          int    `json:"line,omitempty"`
 	Excerpt       string `json:"excerpt"`
-}
-
-// DeepEvalConfig declares the policy's request for Gemma 4 hybrid eval.
-// Mirrors the YAML schema used by the (frozen) Python hackathon submission
-// so existing policy authors can write the same shape in Go.
-//
-// FailMode controls what happens when Gemma is unavailable / ambiguous:
-//   - "closed" (default and recommended) — any non-OK status downgrades the
-//     deterministic decision to DENY. Required for clinical / high-risk.
-//   - "open" — ignore the deep eval failure and use the deterministic
-//     decision as-is. Only acceptable for advisory / monitoring policies.
-type DeepEvalConfig struct {
-	Model               string  `json:"model" yaml:"model"`                                         // e.g. "gemma4:e4b"
-	ContextFile         string  `json:"context_file,omitempty" yaml:"context"`                      // path or label loaded into the prompt
-	ConfidenceThreshold float64 `json:"confidence_threshold,omitempty" yaml:"confidence_threshold"` // default 0.6
-	ResponseFormat      string  `json:"response_format,omitempty" yaml:"response_format"`           // currently only "json"
-	FailMode            string  `json:"fail_mode,omitempty" yaml:"fail_mode"`                       // closed | open (default closed)
-}
-
-// UnmarshalJSON customizes unmarshaling for DeepEvalConfig to support both
-// "context" (from YAML schema) and "context_file" (from JSON schema).
-func (d *DeepEvalConfig) UnmarshalJSON(b []byte) error {
-	type Alias DeepEvalConfig
-	aux := &struct {
-		Context string `json:"context"`
-		*Alias
-	}{
-		Alias: (*Alias)(d),
-	}
-	if err := json.Unmarshal(b, &aux); err != nil {
-		return err
-	}
-	if aux.Context != "" && d.ContextFile == "" {
-		d.ContextFile = aux.Context
-	}
-	return nil
 }

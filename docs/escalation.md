@@ -75,6 +75,7 @@ The reaper sweeps every 30 seconds; any pending entry past its
 ## Example policy
 
 ```yaml
+schema_version: 1
 policy_id: pol-sql-write-needs-approval
 scope:
   tool_names: [query]

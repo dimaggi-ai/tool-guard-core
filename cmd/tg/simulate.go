@@ -13,6 +13,7 @@ import (
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/engine"
+	"github.com/dimaggi-ai/tool-guard-core/pkg/policyload"
 )
 
 // cmdSimulate is the batch dry-run: evaluate a whole policy set against a
@@ -162,7 +163,7 @@ func loadPolicySet(dir, file string) ([]domain.Policy, error) {
 	}
 	var out []domain.Policy
 	for _, p := range paths {
-		pol, err := loadPolicyYAML(p)
+		pol, err := policyload.Load(p)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", p, err)
 		}

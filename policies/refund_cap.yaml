@@ -1,3 +1,4 @@
+schema_version: 1
 policy_id: pol-example-refund
 name: refund-cap-example
 description: Deny refunds over $500. The deliberately narrow scope (issue_refund only) demonstrates the tool-substitution bypass class — run `tg lint` to see the warning.
