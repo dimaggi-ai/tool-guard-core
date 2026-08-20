@@ -1,0 +1,62 @@
+schema_version: 1
+policy_id: refund-velocity-cap
+name: refund-1h-velocity-cap
+version: 1
+status: approved
+mode: enforcement
+
+# Closes the amount-fragmentation bypass: an agent that splits a large
+# refund into many small ones, each under a per-call cap. A single per-call
+# threshold (see refund_cap.yaml) cannot see the aggregate; this rule reads
+# the rolling 1h monetary sum instead.
+#
+# The sum lives at context.verified.agent_velocity.monetary_sum_1h. Two ways
+# to populate it:
+#   1. Run tg-proxy with -velocity-track. The proxy computes the per-agent
+#      sliding window itself and injects it — no extra plumbing.
+#   2. Supply your own agent_velocity block from a ledger/DB. The proxy never
+#      overwrites a caller-supplied block, so your figures stay authoritative.
+#
+# Combine with refund_cap.yaml (per-call ceiling) for defence in depth: one
+# rule bounds a single call, this one bounds the trailing hour.
+
+scope:
+  tool_names: [issue_refund]
+  tool_groups: [monetary_outflow]
+
+rules:
+  - rule_id: rule-refund-1h-sum
+    name: rolling 1h refund total cap
+    rule_type: velocity
+    conditions:
+      field: context.verified.agent_velocity.monetary_sum_1h
+      operator: gt
+      value: 5000
+    effect: deny
+    effect_config:
+      severity: high
+      suggested_response: >-
+        This refund would push your last-hour refund total over $5,000.
+        Escalate to a human approver or wait for the window to roll.
+    citation:
+      document_id: SOP-REFUND
+      document_title: Refund Standard Operating Procedure
+      section: "4.2 Aggregate limits"
+      excerpt: "Cumulative agent-issued refunds may not exceed $5,000 in any rolling 60-minute window."
+
+  - rule_id: rule-refund-24h-count
+    name: rolling 24h refund count ceiling
+    rule_type: velocity
+    conditions:
+      field: context.verified.agent_velocity.monetary_count_24h
+      operator: gt
+      value: 100
+    effect: escalate
+    effect_config:
+      severity: medium
+      escalate_to: finance-on-call
+      timeout_minutes: 30
+    citation:
+      document_id: SOP-REFUND
+      section: "4.3 Daily volume"
+      excerpt: "More than 100 refunds by one agent in 24 hours requires human review."
