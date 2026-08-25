@@ -1,7 +1,8 @@
-// tg is the Tool Guard Core CLI. One binary, four verbs:
+// tg is the Tool Guard Core CLI. Key data-plane verbs:
 //
 //	tg evaluate -policy POLICY.yaml -call CALL.json     # run one tool call against one policy
 //	tg verify   -file DECISIONS.jsonl                   # replay the audit chain offline
+//	tg export   -file DECISIONS.jsonl -format jsonl     # stream records for external log tooling
 //	tg lint     -policy POLICY.yaml                     # warn on scope-too-narrow + other footguns
 //	tg benchmark                                        # report deterministic eval p99 on this host
 //
@@ -15,14 +16,12 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"regexp"
 	"runtime/debug"
 	"strings"
 	"time"
 
-	"github.com/dimaggi-ai/tool-guard-core/pkg/audit"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/engine"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/policyload"
@@ -45,6 +44,7 @@ Usage:
   tg status    [claude] [-config PATH]
   tg unprotect claude [-apply] [-config PATH]
   tg verify    -file DECISIONS.jsonl
+  tg export    -file DECISIONS.jsonl [-format jsonl] [-since RFC3339] [-until RFC3339] [-policy ID] [-action ACTION]
   tg lint      -policy POLICY.yaml
   tg benchmark [-trials N]
   tg version
@@ -121,6 +121,8 @@ func main() {
 		os.Exit(cmdUnprotect(args))
 	case "verify":
 		os.Exit(cmdVerify(args))
+	case "export":
+		os.Exit(cmdExport(args))
 	case "lint":
 		os.Exit(cmdLint(args))
 	case "benchmark":
@@ -218,41 +220,13 @@ func cmdVerify(args []string) int {
 		return 2
 	}
 
-	files, err := audit.RotationSetOldestFirst(*filePath)
+	fileSet, err := openVerifiedAuditFileSet(*filePath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "verify:", err)
 		return 1
 	}
-
-	// Concatenate readers in chain order (oldest first, then active).
-	readers := make([]io.Reader, 0, len(files))
-	closers := make([]io.Closer, 0, len(files))
-	for _, p := range files {
-		f, err := os.Open(p)
-		if err != nil {
-			for _, c := range closers {
-				_ = c.Close()
-			}
-			fmt.Fprintln(os.Stderr, "verify: open", p, ":", err)
-			return 1
-		}
-		readers = append(readers, f)
-		closers = append(closers, f)
-	}
-	defer func() {
-		for _, c := range closers {
-			_ = c.Close()
-		}
-	}()
-
-	report, err := audit.VerifyChainFromReader(io.MultiReader(readers...))
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "verify:", err)
-		return 1
-	}
-	if len(files) > 1 {
-		report.Note = fmt.Sprintf("walked %d files (rotation set): %v", len(files), files)
-	}
+	defer fileSet.close()
+	report := fileSet.report
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(report); err != nil {
@@ -790,7 +764,3 @@ func loadEnvelopeJSON(path string) (*domain.ActionEnvelope, error) {
 	}
 	return &env, nil
 }
-
-// Reserved for the streaming-verifier interface — currently a no-op
-// reference so `io` stays imported when we add tg verify -stream later.
-var _ = io.EOF

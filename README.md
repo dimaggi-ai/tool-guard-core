@@ -15,7 +15,7 @@ tool call — `POST /evaluate` with a JSON `ActionEnvelope`, or call the
 Go library in-process — and it returns **allow / deny / escalate**, the
 exact rule that fired, and the reason, in microseconds. Every decision
 is appended to a SHA-256 hash-chained audit log you can verify offline
-with `tg verify`.
+with `tg verify` and stream into standard log pipelines with `tg export`.
 
 Core decides and records; your tool-execution layer enforces. When the
 answer is `deny`, you don't run the call — one `if` statement at the
@@ -353,7 +353,19 @@ echo $?
 # 0
 ```
 
-**5. Benchmark the engine on this host:**
+**5. Export verified audit records as JSONL:**
+
+```bash
+./bin/tg export -file decisions.jsonl --format jsonl \
+  --since 2026-08-25T00:00:00Z --action denied \
+  | jq -c '{timestamp, trace_id, action_taken, policy_set_hash}'
+```
+
+The source chain is verified before anything is written to stdout. See
+[Exporting audit records](docs/audit-export.md) for filter semantics, version
+stamps, rotation behavior, and a generic log-forwarding example.
+
+**6. Benchmark the engine on this host:**
 
 ```bash
 ./bin/tg benchmark -trials 10000
@@ -365,7 +377,7 @@ below a 25 ms budget. This is a point measurement, not a promise; the
 published proxy floor and its methodology are in
 [docs/performance.md](docs/performance.md).
 
-**6. See the audit chain do its job:**
+**7. See the audit chain do its job:**
 
 ```bash
 # Verify the sample chain at examples/decisions_chain.jsonl
@@ -397,7 +409,7 @@ there). The sample tool calls and audit chain to exercise them:
 |---|---|
 | `examples/call_under_cap.json` | Allowed $85 refund. |
 | `examples/call_over_cap.json` | Denied $1000 refund. |
-| `examples/decisions_chain.jsonl` | Real 3-record SHA-256 hash-chained audit log for `tg verify`. |
+| `examples/decisions_chain.jsonl` | Real 3-record SHA-256 hash-chained audit log for `tg verify` and `tg export`. |
 
 ### Domain bundles (each is a self-contained scenario)
 
@@ -498,7 +510,8 @@ pkg/audit/       SHA-256 hash-chained traces, offline replay verifier,
                  versioned canonical JSON, and per-record engine/policy-set
                  provenance for stable hashing.
 
-cmd/tg/          The one-shot CLI. evaluate / verify / lint / benchmark.
+cmd/tg/          The one-shot CLI. Policy evaluation, audit verification/export,
+                 linting, simulation, coverage, hooks, protection, and benchmarks.
 
 cmd/tg-proxy/    HTTP service. POST /evaluate, hash-chained JSONL audit
                  with rotation, SIGHUP policy reload, /metrics,
@@ -555,9 +568,10 @@ policy loading.
 - **Engine + audit chain:** table-driven tests pass with `-race`, ~µs p99
   on commodity hardware. CI enforces statement-coverage floors of 85%
   on `pkg/audit` and `pkg/engine` and 90% on `pkg/sqlguard/mssql`.
-- **CLI:** four operational verbs (`evaluate`, `verify`, `lint`, `benchmark`) plus `version`, with
-  documented exit-code contract; integration tests shell-out the binary
-  and assert behaviour end-to-end.
+- **CLI:** policy evaluation/simulation/coverage, native hooks/protection,
+  audit verification/export, linting, and benchmarks, with a documented
+  exit-code contract; integration tests shell-out the binary and assert
+  behaviour end-to-end.
 - **`tg-proxy` HTTP service:** `POST /evaluate` with hash-chained JSONL
   audit, SIGHUP policy reload, fail-closed by default, per-agent rate
   limiting, audit log rotation, integration tests assert the HTTP
@@ -595,6 +609,7 @@ Comprehensive docs live in [`docs/`](docs/README.md):
 - [Architecture](docs/architecture.md) — engine, audit chain, classifiers
 - [Creating Policies](docs/creating-policies.md) — full YAML schema, every operator and classifier
 - [Operating in production](docs/operating.md) — systemd, k8s, metrics, backup, recovery
+- [Exporting audit records](docs/audit-export.md) — verified JSONL, filters, version stamps, log pipelines
 - [Content-gen bundle](docs/content-gen-bundle.md) — the multimodal Gemma 4 classifier
 - [Integration](docs/integration.md) — MCP, LangChain, AutoGen, native tool-use loops
 - [Escalation flow](docs/escalation.md) — human-in-the-loop approval

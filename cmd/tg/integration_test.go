@@ -219,6 +219,46 @@ func TestIntegration_VerifyExitCodes(t *testing.T) {
 	})
 }
 
+// ── tg export ─────────────────────────────────────────────────────
+
+func TestIntegration_ExportJSONL(t *testing.T) {
+	dir := t.TempDir()
+	intactPath, tamperedPath := writeIntactAndTamperedChain(t, dir)
+
+	t.Run("intact chain is streamed as JSONL", func(t *testing.T) {
+		code, stdout, stderr := exitCode(t, "export", "-file", intactPath, "-format", "jsonl")
+		if code != 0 {
+			t.Fatalf("exit = %d, want 0; stderr=%s", code, stderr)
+		}
+		if stderr != "" {
+			t.Errorf("stderr = %q, want empty", stderr)
+		}
+		lines := strings.Split(strings.TrimSpace(stdout), "\n")
+		if len(lines) != 3 {
+			t.Fatalf("exported lines = %d, want 3; stdout=%s", len(lines), stdout)
+		}
+		for i, line := range lines {
+			var trace domain.DecisionTrace
+			if err := json.Unmarshal([]byte(line), &trace); err != nil {
+				t.Fatalf("line %d is not JSON: %v", i+1, err)
+			}
+		}
+	})
+
+	t.Run("tampered chain is rejected without partial output", func(t *testing.T) {
+		code, stdout, stderr := exitCode(t, "export", "-file", tamperedPath)
+		if code != 1 {
+			t.Fatalf("exit = %d, want 1; stderr=%s", code, stderr)
+		}
+		if stdout != "" {
+			t.Errorf("stdout = %q, want empty", stdout)
+		}
+		if !strings.Contains(stderr, "not intact") {
+			t.Errorf("stderr missing integrity failure: %s", stderr)
+		}
+	})
+}
+
 // writeIntactAndTamperedChain constructs a real 3-trace chain through
 // pkg/audit's canonical hasher, writes it as JSONL, and returns paths
 // to (intact, tampered). The tampered file flips one byte of one
@@ -416,7 +456,7 @@ func TestIntegration_Help(t *testing.T) {
 		if code != 0 {
 			t.Errorf("exit = %d, want 0", code)
 		}
-		for _, verb := range []string{"evaluate", "verify", "lint", "benchmark"} {
+		for _, verb := range []string{"evaluate", "verify", "export", "lint", "benchmark"} {
 			if !strings.Contains(stdout, verb) {
 				t.Errorf("usage missing verb %q", verb)
 			}
