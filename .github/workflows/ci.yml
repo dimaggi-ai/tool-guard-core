@@ -79,6 +79,10 @@ jobs:
       - name: Integration tests
         run: go test -race -count=1 -tags=integration ./cmd/tg/... ./cmd/tg-proxy/...
 
+      - name: Exported Go API matches reviewed baseline
+        if: matrix.os == 'ubuntu-latest'
+        run: ./scripts/check-api.sh
+
       # Only on one OS in the matrix — the fuzzed logic (JSON/YAML parsing)
       # has no OS-specific code path, so tripling this across the matrix
       # would just triple CI time for no extra signal. 30s/target is cheap

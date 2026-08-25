@@ -72,6 +72,9 @@ guard catching it after the fact — do it right the first time.
   earlier this session."
 - No `v X.Y.Z` tag already exists locally or on `origin`
   (`git tag --list vX.Y.Z`).
+- `make api-check` is green. If the release intentionally changes the exported
+  Go API, the compatibility impact and baseline refresh followed the process in
+  `docs/api-stability.md`.
 - Any change to policy evaluation, the policy loader, the SDK, audit
   integrity, or a release workflow in this release has been run through
   the internal review checklist in `docs/REVIEW-PROCESS.md` — as a
