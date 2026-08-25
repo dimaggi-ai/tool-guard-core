@@ -88,17 +88,21 @@ type reqOutcome struct {
 
 func main() {
 	var (
-		target           = flag.String("target", "http://localhost:9090", "tg-proxy base URL")
-		concurrencyList  = flag.String("concurrency", "1,10,50,200", "comma-separated concurrency levels to run in sequence")
-		duration         = flag.Duration("duration", 5*time.Second, "how long to sustain each concurrency level")
-		overload         = flag.Int("overload", 2000, "concurrency for the brief fail-closed/fail-open overload phase (0 disables it)")
-		overloadFor      = flag.Duration("overload-for", 3*time.Second, "how long to sustain the overload phase")
-		overloadTimeout  = flag.Duration("overload-timeout", 10*time.Second, "a request outstanding this long during the overload phase counts as a hang, not a slow success")
-		tgBin            = flag.String("tg-bin", "tg", "path to the tg binary, used to verify the audit chain afterward")
-		auditLog         = flag.String("audit-log", "", "path tg-proxy was started with -audit-log; if set, verified with `tg verify` after all phases")
-		floorConcurrency = flag.Int("floor-concurrency", 0, "if set, must also appear in -concurrency: assert the qualified regression floor at this level (0 disables floor checking)")
-		floorMinRPS      = flag.Float64("floor-min-rps", 0, "minimum acceptable req/s at -floor-concurrency")
-		floorMaxP99      = flag.Duration("floor-max-p99", 0, "maximum acceptable p99 latency at -floor-concurrency")
+		target             = flag.String("target", "http://localhost:9090", "tg-proxy base URL")
+		concurrencyList    = flag.String("concurrency", "1,10,50,200", "comma-separated concurrency levels to run in sequence")
+		duration           = flag.Duration("duration", 5*time.Second, "how long to sustain each concurrency level")
+		overload           = flag.Int("overload", 2000, "concurrency for the brief fail-closed/fail-open overload phase (0 disables it)")
+		overloadFor        = flag.Duration("overload-for", 3*time.Second, "how long to sustain the overload phase")
+		overloadTimeout    = flag.Duration("overload-timeout", 10*time.Second, "a request outstanding this long during the overload phase counts as a hang, not a slow success")
+		tgBin              = flag.String("tg-bin", "tg", "path to the tg binary, used to verify the audit chain afterward")
+		auditLog           = flag.String("audit-log", "", "path tg-proxy was started with -audit-log; if set, verified with `tg verify` after all phases")
+		floorConcurrency   = flag.Int("floor-concurrency", 0, "if set, must also appear in -concurrency: assert an absolute floor at this level (0 disables floor checking)")
+		floorMinRPS        = flag.Float64("floor-min-rps", 0, "minimum acceptable req/s at -floor-concurrency")
+		floorMaxP99        = flag.Duration("floor-max-p99", 0, "maximum acceptable p99 latency at -floor-concurrency")
+		baselineTarget     = flag.String("baseline-target", "", "optional baseline tg-proxy URL for a same-runner relative throughput comparison")
+		compareConcurrency = flag.Int("compare-concurrency", 0, "concurrency per target for the relative comparison (requires -baseline-target)")
+		compareDuration    = flag.Duration("compare-duration", 15*time.Second, "duration of the simultaneous candidate/baseline comparison")
+		maxRegressionPct   = flag.Float64("max-regression-pct", 10, "fail when candidate throughput is this percentage or more below baseline")
 	)
 	flag.Parse()
 
@@ -107,11 +111,21 @@ func main() {
 		fmt.Fprintln(os.Stderr, "stress-test:", err)
 		os.Exit(2)
 	}
+	if err := validateComparisonConfig(*baselineTarget, *compareConcurrency, *compareDuration, *maxRegressionPct); err != nil {
+		fmt.Fprintln(os.Stderr, "stress-test:", err)
+		os.Exit(2)
+	}
 
 	client := newClient(0)
 	if err := waitHealthy(client, *target, 10*time.Second); err != nil {
 		fmt.Fprintln(os.Stderr, "stress-test: target not healthy:", err)
 		os.Exit(1)
+	}
+	if *baselineTarget != "" {
+		if err := waitHealthy(client, *baselineTarget, 10*time.Second); err != nil {
+			fmt.Fprintln(os.Stderr, "stress-test: baseline target not healthy:", err)
+			os.Exit(1)
+		}
 	}
 
 	fmt.Printf("target=%s levels=%v duration=%s\n\n", *target, levels, *duration)
@@ -127,11 +141,11 @@ func main() {
 			gotRPS := successfulRPS(res, *duration)
 			gotP99 := percentile(res.latencies, 0.99)
 			if *floorMinRPS > 0 && gotRPS < *floorMinRPS {
-				fmt.Printf("  ⚠ FLOOR MISS: req/s %.1f < qualified regression floor %.1f at concurrency=%d\n", gotRPS, *floorMinRPS, c)
+				fmt.Printf("  ⚠ FLOOR MISS: req/s %.1f < absolute floor %.1f at concurrency=%d\n", gotRPS, *floorMinRPS, c)
 				floorMet = false
 			}
 			if *floorMaxP99 > 0 && gotP99 > *floorMaxP99 {
-				fmt.Printf("  ⚠ FLOOR MISS: p99 %s > qualified regression floor %s at concurrency=%d\n", gotP99, *floorMaxP99, c)
+				fmt.Printf("  ⚠ FLOOR MISS: p99 %s > absolute floor %s at concurrency=%d\n", gotP99, *floorMaxP99, c)
 				floorMet = false
 			}
 			if floorMet && (*floorMinRPS > 0 || *floorMaxP99 > 0) {
@@ -149,6 +163,34 @@ func main() {
 		if !found {
 			fmt.Printf("stress-test: -floor-concurrency=%d was never tested — add it to -concurrency\n", *floorConcurrency)
 			floorMet = false
+		}
+	}
+
+	comparisonMet := true
+	if *baselineTarget != "" {
+		fmt.Printf("\n--- relative regression phase: concurrency=%d per target for %s ---\n", *compareConcurrency, *compareDuration)
+		candidate, baseline := runTargetComparison(*target, *baselineTarget, *compareConcurrency, *compareDuration)
+		fmt.Println("candidate:")
+		printLevel(*compareConcurrency, *compareDuration, candidate)
+		fmt.Println("baseline:")
+		printLevel(*compareConcurrency, *compareDuration, baseline)
+
+		candidateRPS := successfulRPS(candidate, *compareDuration)
+		baselineRPS := successfulRPS(baseline, *compareDuration)
+		regressionPct, throughputPassed, valid := relativeThroughputGate(candidateRPS, baselineRPS, *maxRegressionPct)
+		if !valid {
+			fmt.Println("  ⚠ REGRESSION CHECK INVALID: baseline completed zero successful responses")
+			comparisonMet = false
+		} else if candidate.wrongDec > 0 {
+			fmt.Printf("  ⚠ REGRESSION CHECK FAILED: candidate produced %d wrong decisions\n", candidate.wrongDec)
+			comparisonMet = false
+		} else if !throughputPassed {
+			fmt.Printf("  ⚠ REGRESSION: candidate %.1f req/s is %.2f%% below baseline %.1f req/s (limit: < %.2f%%)\n",
+				candidateRPS, regressionPct, baselineRPS, *maxRegressionPct)
+			comparisonMet = false
+		} else {
+			fmt.Printf("  ✓ relative gate passed: candidate %.1f req/s, baseline %.1f req/s, regression %.2f%% (< %.2f%%)\n",
+				candidateRPS, baselineRPS, regressionPct, *maxRegressionPct)
 		}
 	}
 
@@ -173,7 +215,7 @@ func main() {
 	}
 
 	fmt.Println()
-	if overallFailClosed && chainOK && floorMet {
+	if overallFailClosed && chainOK && floorMet && comparisonMet {
 		fmt.Println("STRESS SUITE: PASS")
 		return
 	}
@@ -193,6 +235,23 @@ type levelResult struct {
 	wrongDec   int64           // 200 OK but decision didn't match what the amount should have produced
 	latencies  []time.Duration // completed 2xx responses only
 	worstHang  time.Duration
+}
+
+func validateComparisonConfig(baselineTarget string, concurrency int, duration time.Duration, maxRegressionPct float64) error {
+	enabled := baselineTarget != "" || concurrency != 0
+	if !enabled {
+		return nil
+	}
+	if baselineTarget == "" || concurrency <= 0 {
+		return fmt.Errorf("-baseline-target and a positive -compare-concurrency must be set together")
+	}
+	if duration <= 0 {
+		return fmt.Errorf("-compare-duration must be positive")
+	}
+	if !(maxRegressionPct > 0 && maxRegressionPct < 100) {
+		return fmt.Errorf("-max-regression-pct must be greater than 0 and less than 100")
+	}
+	return nil
 }
 
 func runLevel(target string, concurrency int, duration time.Duration, perReqTimeout time.Duration) levelResult {
@@ -269,6 +328,26 @@ func runLevel(target string, concurrency int, duration time.Duration, perReqTime
 	return agg
 }
 
+func runTargetComparison(candidateTarget, baselineTarget string, concurrency int, duration time.Duration) (levelResult, levelResult) {
+	start := make(chan struct{})
+	var candidate, baseline levelResult
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		candidate = runLevel(candidateTarget, concurrency, duration, 0)
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		baseline = runLevel(baselineTarget, concurrency, duration, 0)
+	}()
+	close(start)
+	wg.Wait()
+	return candidate, baseline
+}
+
 // appendSuccessfulLatency records every completed 2xx response. HTTP 202 is a
 // successful escalation outcome from tg-proxy, so excluding it makes the
 // throughput metric depend on the random policy-decision mix rather than the
@@ -285,6 +364,21 @@ func successfulRPS(result levelResult, duration time.Duration) float64 {
 		return 0
 	}
 	return float64(len(result.latencies)) / duration.Seconds()
+}
+
+func throughputRegressionPercent(candidateRPS, baselineRPS float64) (float64, bool) {
+	if baselineRPS <= 0 {
+		return 0, false
+	}
+	return ((baselineRPS - candidateRPS) / baselineRPS) * 100, true
+}
+
+func relativeThroughputGate(candidateRPS, baselineRPS, maxRegressionPct float64) (float64, bool, bool) {
+	regressionPct, valid := throughputRegressionPercent(candidateRPS, baselineRPS)
+	if !valid {
+		return 0, false, false
+	}
+	return regressionPct, regressionPct < maxRegressionPct, true
 }
 
 func buildEnvelope(rng *rand.Rand) (envelope, bool) {
