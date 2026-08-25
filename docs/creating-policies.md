@@ -68,8 +68,8 @@ The former top-level `deep_evaluation` field was removed because no evaluator
 consumed it. Policies that need semantic classification should use an
 `llm_classify` condition.
 
-`tg lint -policy <file>` validates the shape and runs eight
-checks - warnings and errors (see [`tg lint` heuristics](#tg-lint-heuristics)).
+`tg lint -policy <file>` validates the shape and runs 10
+checks - warnings and errors (see [`tg lint` checks](#tg-lint-checks)).
 A policy that lints with `error`-severity findings will be REFUSED
 by `tg-proxy` at load.
 
@@ -340,7 +340,8 @@ conditions:
 ```
 
 `not:` may wrap a leaf condition (as above) but **not** a classifier
-(`sql_classify` / `path_classify` / `shell_classify` / `llm_classify`).
+(`sql_classify` / `path_classify` / `shell_classify` / `llm_classify` /
+`write_classify` / `http_classify`).
 Classifiers are fail-closed - they fire on malformed or adversarial input
 so a deny rule trips - and negating one inverts that into fail-OPEN.
 `ValidatePolicy` rejects any classifier under a `not:` node; express the
@@ -349,11 +350,12 @@ allowed set positively (e.g. `require.top_level_kinds: [SELECT]`) instead.
 `ValidatePolicy` refuses condition trees deeper than 64 nodes
 (stack-exhaustion defence).
 
-## tg lint heuristics
+## tg lint checks
 
 | Rule | Severity | Catches |
 |---|---|---|
 | `policy-scope-leak` | warn | Empty scope - policy matches every call |
+| `global-scope-contradiction` | warn | `intentionally_global` is combined with a tool selector, so the policy is not actually global |
 | `scope-no-tool-group` | warn | Tool-substitution bypass surface |
 | `amount-without-semantic-check` | warn | Free-text amount fragmentation; suppressed when a compiling regex / contains rule on a non-amount free-text field is present |
 | `rule-missing-citation` | warn | Auditor traceability gap |
