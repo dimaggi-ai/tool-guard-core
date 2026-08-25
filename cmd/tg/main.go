@@ -129,10 +129,10 @@ func main() {
 // engine, and prints the decision as a single JSONL line. Exit 0 on
 // allow (and allowed_shadow), 3 on deny, 4 on escalate.
 //
-// Note on -mode: the effective mode is the STRICTEST of the -mode flag
-// and the policy YAML's own `mode:` field. A policy marked
-// `mode: enforcement` cannot be downgraded to shadow from the CLI —
-// policy authors govern the floor; the CLI can only raise the bar.
+// Note on -mode: policy mode owns that policy's contribution. A policy
+// marked `mode: shadow` remains telemetry under the default enforcement
+// call site, while a policy marked `mode: enforcement` cannot be downgraded
+// by `-mode shadow`. Policy authors govern the enforcement floor.
 
 func cmdEvaluate(args []string) int {
 	fs := flag.NewFlagSet("evaluate", flag.ExitOnError)

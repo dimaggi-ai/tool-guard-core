@@ -124,8 +124,8 @@ func (p *proxy) reloadHandler(w http.ResponseWriter, r *http.Request) {
 // Optional query parameters:
 //
 //	?mode=shadow|enforcement   — override the server's default mode for
-//	                              this request only (subject to the
-//	                              engine's strictest-mode floor).
+//	                              this request only; per-policy mode remains
+//	                              authoritative for each contribution.
 func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")

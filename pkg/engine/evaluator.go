@@ -43,6 +43,7 @@ func (e *Evaluator) Evaluate(envelope *domain.ActionEnvelope, policies []domain.
 	var allResults []domain.RuleResult
 	var enforcedResults []domain.RuleResult
 	rulesTriggered := 0
+	shadowEffectMatched := false
 	shadowGatingMatched := false
 	for _, policy := range matched {
 		for _, rule := range policy.Rules {
@@ -58,8 +59,11 @@ func (e *Evaluator) Evaluate(envelope *domain.ActionEnvelope, policies []domain.
 				// modes, but direct engine callers still fail closed.
 				if policy.Mode != domain.PolicyModeShadow {
 					enforcedResults = append(enforcedResults, result)
-				} else if result.Effect == domain.EffectDeny || result.Effect == domain.EffectEscalate {
-					shadowGatingMatched = true
+				} else {
+					shadowEffectMatched = true
+					if result.Effect == domain.EffectDeny || result.Effect == domain.EffectEscalate {
+						shadowGatingMatched = true
+					}
 				}
 			}
 		}
@@ -71,20 +75,19 @@ func (e *Evaluator) Evaluate(envelope *domain.ActionEnvelope, policies []domain.
 		decision = ResolveDecision(allResults)
 	}
 
-	// Step 5: Resolve what actually controls the action. A call-site enforcement
-	// mode applies the aggregate decision. In call-site shadow mode, effects from
-	// enforcement policies still apply, while shadow-policy effects remain
-	// telemetry only. Resolve those enforcement effects independently: otherwise
-	// a higher-severity shadow deny could suppress a lower-severity enforcement
+	// Step 5: Resolve what actually controls the action. Policy mode owns each
+	// policy's contribution: a shadow policy is telemetry even when the call site
+	// defaults to enforcement, while an enforcement policy cannot be downgraded
+	// by a shadow call site. Resolve enforcement effects independently so a
+	// higher-severity shadow deny cannot suppress a lower-severity enforcement
 	// escalation and let the action run.
-	actionDecision := decision
+	enforcedDecision := ResolveDecision(enforcedResults)
+	actionDecision := enforcedDecision
 	effectiveMode := domain.PolicyModeEnforcement // unknown modes fail closed
-	if mode == domain.PolicyModeShadow {
-		enforcedDecision := ResolveDecision(enforcedResults)
-		if enforcedDecision == domain.DecisionAllowed {
+	if enforcedDecision == domain.DecisionAllowed {
+		actionDecision = decision
+		if shadowEffectMatched || mode == domain.PolicyModeShadow {
 			effectiveMode = domain.PolicyModeShadow
-		} else {
-			actionDecision = enforcedDecision
 		}
 	}
 
@@ -95,7 +98,7 @@ func (e *Evaluator) Evaluate(envelope *domain.ActionEnvelope, policies []domain.
 	// A near-miss records a matched shadow deny/escalate that was not itself
 	// applied. It can coexist with a different enforcement-policy action (for
 	// example, a shadow deny observed while the floor escalates the same call).
-	isNearMiss := mode == domain.PolicyModeShadow && shadowGatingMatched
+	isNearMiss := shadowGatingMatched
 
 	// Step 8: Find primary citation and suggested response
 	primaryCitation := FindPrimaryCitation(allResults)

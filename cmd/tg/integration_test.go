@@ -136,16 +136,13 @@ func TestIntegration_EvaluateExitCodes(t *testing.T) {
 		}
 	})
 
-	t.Run("over cap in shadow mode → exit 0 (allowed_shadow) when policy YAML also says shadow", func(t *testing.T) {
-		// Engine semantic: the effective mode is the STRICTEST of the
-		// call-site mode and every matched policy's mode (engine.Evaluate
-		// step 3). So a policy marked enforcement in YAML cannot be
-		// dropped to shadow by passing -mode shadow on the CLI — that's
-		// intentional (policy authors govern the floor). To observe
-		// shadow behaviour the policy itself must opt into it.
+	t.Run("over cap with shadow policy → exit 0 under the default enforcement call site", func(t *testing.T) {
+		// Policy mode owns the policy's contribution. This is the documented
+		// staging workflow: changing only the YAML to shadow must be sufficient,
+		// even though the CLI call-site default remains enforcement.
 		shadowPolicy := strings.Replace(policyDenyOver500, "mode: enforcement", "mode: shadow", 1)
 		sp := writeFile(t, dir, "policy_shadow.yaml", shadowPolicy)
-		code, stdout, _ := exitCode(t, "evaluate", "-policy", sp, "-call", over, "-mode", "shadow")
+		code, stdout, _ := exitCode(t, "evaluate", "-policy", sp, "-call", over)
 		if code != 0 {
 			t.Fatalf("shadow must exit 0 even on would-deny; got %d, stdout=%s", code, stdout)
 		}
@@ -154,9 +151,8 @@ func TestIntegration_EvaluateExitCodes(t *testing.T) {
 		}
 	})
 
-	t.Run("strictest-mode semantic: policy=enforcement + -mode shadow → still exit 3", func(t *testing.T) {
-		// This pins the engine's "strictest mode wins" contract so any
-		// future refactor that quietly drops it fails the build.
+	t.Run("enforcement policy + -mode shadow → still exit 3", func(t *testing.T) {
+		// A caller cannot downgrade the policy author's enforcement floor.
 		code, stdout, _ := exitCode(t, "evaluate", "-policy", pol, "-call", over, "-mode", "shadow")
 		if code != 3 {
 			t.Fatalf("enforcement-marked policy must still deny under CLI -mode shadow; got %d, stdout=%s", code, stdout)

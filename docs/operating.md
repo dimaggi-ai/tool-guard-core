@@ -296,6 +296,19 @@ unreachable) log to stderr and increment the corresponding
    behaves as intended.
 5. Promote to enforcement (`mode: enforcement`).
 
+Policy mode is authoritative for that policy's contribution. This makes step 4
+safe under the proxy's default call-site mode:
+
+| Policy YAML | Call-site mode | Matching deny/escalate |
+|---|---|---|
+| `shadow` | `shadow` | observed as `allowed_shadow` |
+| `shadow` | `enforcement` | observed as `allowed_shadow` |
+| `enforcement` | `shadow` | enforced |
+| `enforcement` | `enforcement` | enforced |
+
+With multiple policies, enforcement-policy effects are resolved separately and
+still apply. A shadow policy can never cancel an enforcement policy's gate.
+
 ### Deploying
 
 Drop the new file into `-policy-dir` and either restart the proxy

@@ -1,0 +1,25 @@
+schema_version: 1
+policy_id: pol-conformance-refund-shadow
+name: refund-cap-shadow-fixture
+description: Shadow-mode fixture for the documented single-policy staging workflow.
+version: 1
+status: approved
+mode: shadow
+
+scope:
+  tool_names:
+    - issue_refund
+
+rules:
+  - rule_id: rule-amount-cap
+    name: Single refund amount limit
+    rule_type: threshold
+    conditions:
+      field: amount
+      operator: gt
+      value: 500
+    effect: deny
+    citation:
+      document_id: doc-refund-sop
+      section: "2.3"
+      excerpt: "Individual refund transactions exceeding $500 require supervisor approval prior to processing."

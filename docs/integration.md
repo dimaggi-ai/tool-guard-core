@@ -452,13 +452,13 @@ tamper-evident.
 
 ## 5. Operational notes
 
-- **Mode policy.** Call-site `enforcement` applies the aggregate decision.
-  In call-site `shadow`, matched effects from enforcement policies still apply,
-  while shadow-policy effects remain telemetry only. The engine resolves those
-  sets separately, so a higher-severity shadow effect cannot cancel a
-  lower-severity enforcement gate, and an allow-only enforcement policy does not
-  promote an unrelated shadow deny. A policy marked `mode: enforcement` in YAML
-  cannot be downgraded by either flag.
+- **Mode policy.** Each policy's YAML mode owns its contribution. A
+  `mode: shadow` policy remains telemetry even under a call-site
+  `enforcement` default, while a `mode: enforcement` policy cannot be
+  downgraded by a call-site `shadow` flag. The engine resolves enforcement and
+  shadow effects separately, so a higher-severity shadow effect cannot cancel
+  a lower-severity enforcement gate, and an allow-only enforcement policy does
+  not promote an unrelated shadow deny.
 - **Latency.** Deterministic evaluation is in-process and p99 ≈ 14µs
   on commodity hardware (see `tg benchmark`). The proxy adds one
   HTTP hop plus JSON marshal/unmarshal; expect sub-millisecond round

@@ -48,7 +48,7 @@ func makePolicy(rules []domain.Rule) domain.Policy {
 		Name:     "test-policy",
 		Version:  1,
 		Status:   domain.PolicyStatusApproved,
-		Mode:     domain.PolicyModeShadow,
+		Mode:     domain.PolicyModeEnforcement,
 		Scope: domain.PolicyScope{
 			ToolNames: []string{"issue_refund"},
 		},
@@ -117,6 +117,7 @@ func TestEvaluator_DeniedInShadowIsNearMiss(t *testing.T) {
 			},
 		},
 	})
+	policy.Mode = domain.PolicyModeShadow
 
 	result := eval.Evaluate(env, []domain.Policy{policy}, domain.PolicyModeShadow)
 
@@ -134,6 +135,54 @@ func TestEvaluator_DeniedInShadowIsNearMiss(t *testing.T) {
 	}
 	if result.SuggestedResponse != "Refund exceeds limit" {
 		t.Errorf("expected suggested response, got %q", result.SuggestedResponse)
+	}
+}
+
+func TestEvaluator_ModePrecedenceMatrix(t *testing.T) {
+	eval := NewEvaluator()
+	env := makeEnvelope(800, "issue_refund", "agent-001", "org-001")
+
+	basePolicy := makePolicy([]domain.Rule{{
+		RuleID:     "rule-deny",
+		Name:       "deny-high-amount",
+		Conditions: domain.Condition{Field: "amount", Operator: domain.OpGt, Value: float64(500)},
+		Effect:     domain.EffectDeny,
+		Citation:   domain.Citation{DocumentID: "doc-001", Excerpt: "Refunds over $500 are denied"},
+	}})
+
+	tests := []struct {
+		name          string
+		policyMode    domain.PolicyMode
+		callSiteMode  domain.PolicyMode
+		wantAction    domain.ActionTaken
+		wantEffective domain.PolicyMode
+		wantNearMiss  bool
+	}{
+		{"shadow policy, shadow call site", domain.PolicyModeShadow, domain.PolicyModeShadow, domain.ActionAllowedShadow, domain.PolicyModeShadow, true},
+		{"shadow policy, enforcement call site", domain.PolicyModeShadow, domain.PolicyModeEnforcement, domain.ActionAllowedShadow, domain.PolicyModeShadow, true},
+		{"enforcement policy, shadow call site", domain.PolicyModeEnforcement, domain.PolicyModeShadow, domain.ActionDenied, domain.PolicyModeEnforcement, false},
+		{"enforcement policy, enforcement call site", domain.PolicyModeEnforcement, domain.PolicyModeEnforcement, domain.ActionDenied, domain.PolicyModeEnforcement, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			policy := basePolicy
+			policy.Mode = tt.policyMode
+			result := eval.Evaluate(env, []domain.Policy{policy}, tt.callSiteMode)
+
+			if result.Decision != domain.DecisionDenied {
+				t.Errorf("decision = %q, want denied", result.Decision)
+			}
+			if result.ActionTaken != tt.wantAction {
+				t.Errorf("action_taken = %q, want %q", result.ActionTaken, tt.wantAction)
+			}
+			if result.EffectiveMode != tt.wantEffective {
+				t.Errorf("effective_mode = %q, want %q", result.EffectiveMode, tt.wantEffective)
+			}
+			if result.IsNearMiss != tt.wantNearMiss {
+				t.Errorf("is_near_miss = %v, want %v", result.IsNearMiss, tt.wantNearMiss)
+			}
+		})
 	}
 }
 

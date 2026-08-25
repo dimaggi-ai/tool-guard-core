@@ -28,13 +28,13 @@ corpus grows with the product instead of drifting from it.
 }
 ```
 
-`mode` is the proxy-level default passed to the engine (see
-`pkg/engine/evaluator.go`'s effective-mode resolution — a policy's own
-`mode: enforcement` always escalates regardless of this value; a policy
-can never be forced into shadow by this field alone if the policy itself
-says enforcement). Every case here uses policies that hardcode
-`mode: enforcement`, so this field is `"enforcement"` throughout — add a
-shadow-mode case here if a shadow-mode example policy ever ships.
+`mode` is the call-site default passed to the engine. A policy's own mode is
+authoritative for its contribution: `mode: shadow` in YAML remains telemetry
+under a call-site `enforcement` default, while `mode: enforcement` in YAML
+cannot be downgraded by a call-site `shadow` value. The
+`shadow_policy_under_enforcement_callsite.json` case pins the documented
+single-policy staging workflow using a policy fixture whose only semantic
+difference from the shipped refund-cap example is `mode: shadow`.
 
 ## Completeness rule
 
