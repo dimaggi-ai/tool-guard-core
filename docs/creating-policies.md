@@ -73,6 +73,10 @@ checks - warnings and errors (see [`tg lint` heuristics](#tg-lint-heuristics)).
 A policy that lints with `error`-severity findings will be REFUSED
 by `tg-proxy` at load.
 
+An empty or comment-only file is a load error, as is any document with a
+missing or blank `policy_id`. The error names the source file. This prevents an
+unfinished file from loading as a permissive, ID-less policy shell.
+
 ## Scope
 
 `scope.tool_names` and `scope.tool_groups` are independently
@@ -424,8 +428,10 @@ no half-load state.
 
 ## Validation surface
 
-`ValidatePolicy` (run on every load) refuses:
+The shared loader and `ValidatePolicy` structural gate (both run on every load)
+refuse:
 
+- empty/comment-only policy files and blank `policy_id` values
 - empty / multi-form condition nodes
 - nil values on `eq` / `neq`
 - numeric operator on a non-numeric value

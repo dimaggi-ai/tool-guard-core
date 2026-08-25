@@ -7,5 +7,5 @@
     "tool_name": "frobnicate_widget",
     "parameters": {"widget_id": "w-17"}
   },
-  "expect": {"decision": "escalated", "action_taken": "escalated"}
+  "expect": {"decision": "escalated", "action_taken": "escalated", "matched_rule_ids": ["rule-unknown-escalate"]}
 }

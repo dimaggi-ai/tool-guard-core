@@ -77,6 +77,40 @@ func TestLoadRejectsMisspelledScopeInsteadOfMakingPolicyGlobal(t *testing.T) {
 	assertErrorContains(t, err, `unknown field "scpoe" at scpoe`)
 }
 
+func TestLoadRejectsEmptyOrCommentOnlyPolicy(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+	}{
+		{name: "empty", text: ""},
+		{name: "whitespace", text: " \n\t\n"},
+		{name: "comment-only", text: "# staged for later\n# no policy yet\n"},
+		{name: "empty-document", text: "---\n# still empty\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), test.name+".yaml")
+			if err := os.WriteFile(path, []byte(test.text), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(path)
+			assertErrorContains(t, err, path)
+			assertErrorContains(t, err, "empty or comment-only")
+		})
+	}
+}
+
+func TestLoadRejectsMissingOrBlankPolicyID(t *testing.T) {
+	for _, text := range []string{
+		"rules: []\n",
+		"policy_id: \"\"\nrules: []\n",
+		"policy_id: \"   \"\nrules: []\n",
+	} {
+		_, err := loadText(t, text)
+		assertErrorContains(t, err, "policy_id is required and must not be blank")
+	}
+}
+
 func TestLoadRejectsRemovedDeepEvaluationWithMigration(t *testing.T) {
 	_, err := loadText(t, "policy_id: test\ndeep_evaluation:\n  model: gemma4:e4b\n")
 	assertErrorContains(t, err, `field "deep_evaluation" was removed`)

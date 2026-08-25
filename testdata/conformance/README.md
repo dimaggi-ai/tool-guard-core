@@ -24,9 +24,18 @@ corpus grows with the product instead of drifting from it.
   "policy_file": "../../policies/<file>.yaml",
   "mode": "enforcement",
   "envelope": { "tool_name": "...", "tool_group": "...", "parameters": {...}, "context": {...} },
-  "expect": { "decision": "allowed|denied|escalated|flagged", "action_taken": "allowed|denied|escalated|flagged|allowed_shadow" }
+  "expect": {
+    "decision": "allowed|denied|escalated|flagged",
+    "action_taken": "allowed|denied|escalated|flagged|allowed_shadow",
+    "matched_rule_ids": ["optional", "exact", "matched-rule-set"]
+  }
 }
 ```
+
+When `expect.matched_rule_ids` is present, the harness compares the exact
+sorted multiset of matched rule IDs. Use it for deny/escalate cases so a case
+cannot stay green merely because a different rule happened to produce the same
+top-level decision.
 
 `mode` is the proxy-level default passed to the engine (see
 `pkg/engine/evaluator.go`'s effective-mode resolution — a policy's own
