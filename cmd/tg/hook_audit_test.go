@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/dimaggi-ai/tool-guard-core/pkg/audit"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 )
 
@@ -40,11 +41,15 @@ func readChain(t *testing.T, path string) [][2]string {
 			continue
 		}
 		var rec struct {
-			TraceHash string `json:"trace_hash"`
-			PrevHash  string `json:"previous_trace_hash"`
+			CanonicalVersion string `json:"_canonical_v"`
+			TraceHash        string `json:"trace_hash"`
+			PrevHash         string `json:"previous_trace_hash"`
 		}
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
 			t.Fatalf("bad audit line %q: %v", line, err)
+		}
+		if rec.CanonicalVersion != audit.CanonicalTraceVersion {
+			t.Errorf("audit canonical version = %q, want %q", rec.CanonicalVersion, audit.CanonicalTraceVersion)
 		}
 		out = append(out, [2]string{rec.PrevHash, rec.TraceHash})
 	}

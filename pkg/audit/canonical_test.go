@@ -2,7 +2,9 @@ package audit
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -15,10 +17,9 @@ import (
 // before any evidence pack ships with a drifted shape.
 //
 // To regenerate the golden bytes if you intentionally bump the schema:
-//   1. Bump CanonicalTraceVersion to "v2" in canonical.go.
-//   2. Update wantCanonicalV1 below to match the new shape.
-//   3. Add canonicalTraceV2 struct.
-//   4. NEVER edit v1 in place — old packs depend on it.
+//   1. Add a new canonicalTraceV<N> in canonical.go.
+//   2. Preserve every older encoder and golden unchanged.
+//   3. Bump CanonicalTraceVersion and add a new golden.
 
 func goldenTrace() *domain.DecisionTrace {
 	ts, _ := time.Parse(time.RFC3339Nano, "2026-05-21T19:43:00Z")
@@ -82,6 +83,26 @@ func goldenTrace() *domain.DecisionTrace {
 			DowngradeApplied:    true,
 		},
 	}
+}
+
+func goldenTraceV2() *domain.DecisionTrace {
+	tr := goldenTrace()
+	tr.CanonicalVersion = CanonicalTraceVersion
+	tr.RuleResults[0].Citation = domain.Citation{
+		DocumentID: "policy-handbook",
+		Section:    "4.2",
+		Page:       17,
+		Line:       9,
+		Excerpt:    "PHI export requires approval.",
+	}
+	tr.RuleResults[0].Details = "matched protected data class"
+	tr.AppliedRuleResults = append([]domain.RuleResult(nil), tr.RuleResults[0])
+	primary := tr.RuleResults[0].Citation
+	tr.PrimaryCitation = &primary
+	applied := primary
+	tr.AppliedPrimaryCitation = &applied
+	tr.SuggestedResponse = "Request supervisor approval."
+	return tr
 }
 
 // wantCanonicalV1 is the byte-exact expected output of the canonical encoder.
@@ -155,5 +176,68 @@ func TestCanonicalTraceBytes_ParsesAsValidJSON(t *testing.T) {
 	}
 	if parsed["_canonical_v"] != "v1" {
 		t.Errorf("missing/wrong canonical version marker: %v", parsed["_canonical_v"])
+	}
+}
+
+func TestCanonicalTraceBytes_V2Golden(t *testing.T) {
+	got, err := CanonicalTraceBytes(goldenTraceV2())
+	if err != nil {
+		t.Fatalf("CanonicalTraceBytes v2: %v", err)
+	}
+	sum := fmt.Sprintf("%x", sha256.Sum256(got))
+	const wantSHA256 = "8848c5cd254d191e1d75b771c292d70123cca396db140671ee1d3b3bf9c40d68"
+	if sum != wantSHA256 {
+		t.Fatalf("canonical v2 bytes drifted: sha256=%s, want %s\nbytes=%s", sum, wantSHA256, got)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(got, &parsed); err != nil {
+		t.Fatalf("canonical v2 output is invalid JSON: %v", err)
+	}
+	if parsed["_canonical_v"] != "v2" {
+		t.Fatalf("canonical v2 marker = %v", parsed["_canonical_v"])
+	}
+}
+
+func TestCanonicalTraceV2AppliedProvenanceTamperFailsVerification(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*domain.DecisionTrace)
+	}{
+		{"applied effect", func(tr *domain.DecisionTrace) { tr.AppliedRuleResults[0].Effect = domain.EffectAllow }},
+		{"applied rule citation", func(tr *domain.DecisionTrace) { tr.AppliedRuleResults[0].Citation.Excerpt = "forged" }},
+		{"applied primary citation", func(tr *domain.DecisionTrace) { tr.AppliedPrimaryCitation.Excerpt = "forged" }},
+		{"raw primary citation", func(tr *domain.DecisionTrace) { tr.PrimaryCitation.Excerpt = "forged" }},
+		{"rule diagnostic", func(tr *domain.DecisionTrace) { tr.RuleResults[0].Details = "forged" }},
+		{"deep fail-closed marker", func(tr *domain.DecisionTrace) { tr.DeepEvalResult.FailClosedTriggered = true }},
+		{"deep temperature", func(tr *domain.DecisionTrace) { tr.DeepEvalResult.Temperature = 0.25 }},
+		{"version downgrade", func(tr *domain.DecisionTrace) { tr.CanonicalVersion = "" }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tr := goldenTraceV2()
+			hash, err := ComputeCanonicalTraceHash(tr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tr.TraceHash = hash
+			tt.mutate(tr)
+			ok, err := VerifyCanonicalTraceHash(tr)
+			if err == nil && ok {
+				t.Fatal("verification accepted tampered v2 provenance")
+			}
+		})
+	}
+}
+
+func TestCanonicalTraceVersionSelection(t *testing.T) {
+	legacy := goldenTrace()
+	legacy.AppliedRuleResults = []domain.RuleResult{{RuleID: "forged"}}
+	if _, err := CanonicalTraceBytes(legacy); err == nil {
+		t.Fatal("v1 trace with injected v2-only provenance must be rejected")
+	}
+	unknown := goldenTrace()
+	unknown.CanonicalVersion = "v99"
+	if _, err := CanonicalTraceBytes(unknown); err == nil {
+		t.Fatal("unknown canonical version must be rejected")
 	}
 }

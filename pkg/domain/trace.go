@@ -78,6 +78,9 @@ type DecisionTrace struct {
 	Resolution   string     `json:"resolution,omitempty"` // approved, denied, timeout
 
 	// Integrity (hash chain)
+	// CanonicalVersion selects the byte-exact hash schema. Records written
+	// before v2 omitted this field; verifiers interpret an absent value as v1.
+	CanonicalVersion  string `json:"_canonical_v,omitempty"`
 	TraceHash         string `json:"trace_hash"`
 	PreviousTraceHash string `json:"previous_trace_hash,omitempty"`
 	SignedBy          string `json:"signed_by,omitempty"` // Proxy instance ID

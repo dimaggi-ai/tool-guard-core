@@ -63,7 +63,7 @@ jobs:
         run: go build ./...
 
       - name: Unit tests with -race
-        run: go test -race -count=1 ./pkg/... ./cmd/... ./api/...
+        run: go test -race -count=1 ./pkg/... ./cmd/... ./api/... ./examples/mcp-server
 
       - name: Coverage on critical packages
         run: |

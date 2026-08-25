@@ -115,6 +115,26 @@ func actionProceeds(action domain.ActionTaken) bool {
 	}
 }
 
+// applyOperationalDeny records a deny imposed by the proxy itself rather than
+// by a policy rule (for example an escalation-store collision or an audit
+// failure). Rule-derived applied provenance must be cleared: the operational
+// reason, not the previously proposed policy action, now controls execution.
+func applyOperationalDeny(result *domain.EvaluationResult, reason string) {
+	result.Decision = domain.DecisionDenied
+	result.ActionTaken = domain.ActionDenied
+	result.DecisionReason = reason
+	result.AppliedRuleResults = nil
+	result.AppliedPrimaryCitation = nil
+}
+
+func syncResultOutcomeToTrace(trace *domain.DecisionTrace, result *domain.EvaluationResult) {
+	trace.Decision = result.Decision
+	trace.ActionTaken = result.ActionTaken
+	trace.DecisionReason = result.DecisionReason
+	trace.AppliedRuleResults = result.AppliedRuleResults
+	trace.AppliedPrimaryCitation = result.AppliedPrimaryCitation
+}
+
 func (p *proxy) reloadHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")
@@ -332,12 +352,10 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 	if p.unknownToolsDeny && !engine.ToolNameKnown(env.ToolName, policies) {
 		// Counter increment happens once in the final switch, not
 		// here — earlier code double-counted unknown-tool denies.
-		result.Decision = domain.DecisionDenied
-		result.ActionTaken = domain.ActionDenied
-		result.DecisionReason = fmt.Sprintf(
+		applyOperationalDeny(result, fmt.Sprintf(
 			"tool_name %q is not declared in scope.tool_names of any loaded policy (--unknown-tools-deny)",
 			env.ToolName,
-		)
+		))
 	}
 
 	traceID := fmt.Sprintf("trc-%d", time.Now().UnixNano())
@@ -385,12 +403,8 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 			timeoutMin = t
 		}
 		if registered := p.escalations.add(&env, result, timeoutMin); registered == nil {
-			result.Decision = domain.DecisionDenied
-			result.ActionTaken = domain.ActionDenied
-			result.DecisionReason = "escalation could not be registered (envelope_id collision or pending-store at cap); downgraded to deny"
-			trace.Decision = result.Decision
-			trace.ActionTaken = result.ActionTaken
-			trace.DecisionReason = result.DecisionReason
+			applyOperationalDeny(result, "escalation could not be registered (envelope_id collision or pending-store at cap); downgraded to deny")
+			syncResultOutcomeToTrace(&trace, result)
 		}
 	}
 
@@ -403,12 +417,8 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 		log.Printf("tg-proxy: append audit trace: %v", auditErr)
 		p.auditFailureCount.Add(1)
 		if p.failClosed && actionProceeds(result.ActionTaken) {
-			result.Decision = domain.DecisionDenied
-			result.ActionTaken = domain.ActionDenied
-			result.DecisionReason = "applied action would proceed but audit append failed; downgraded to deny (--fail-closed=true)"
-			trace.Decision = result.Decision
-			trace.ActionTaken = result.ActionTaken
-			trace.DecisionReason = result.DecisionReason
+			applyOperationalDeny(result, "applied action would proceed but audit append failed; downgraded to deny (--fail-closed=true)")
+			syncResultOutcomeToTrace(&trace, result)
 			_ = p.appendTrace(&trace) // best-effort log of the override
 		}
 	}

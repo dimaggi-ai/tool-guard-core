@@ -34,8 +34,8 @@ type StreamReport struct {
 // Verification rules:
 //   - Each line must be a valid JSON DecisionTrace.
 //   - For line N>1, trace.PreviousTraceHash must equal line N-1's TraceHash.
-//   - trace.TraceHash must equal ComputeCanonicalTraceHash(...) with the canonical
-//     fields of this record.
+//   - trace.TraceHash must equal ComputeCanonicalTraceHash(...) with this
+//     record version's canonical field projection.
 //
 // On the first violation the report's Intact is false, FirstFailureAt
 // pins the line, and FailureReason explains why. The function still
@@ -69,8 +69,9 @@ func VerifyChainFromReader(r io.Reader) (*StreamReport, error) {
 			return failAt(rep, line, fmt.Sprintf("previous_trace_hash %q does not match prior tail %q", t.PreviousTraceHash, prevHash)), nil
 		}
 
-		// Recompute the canonical hash over the WHOLE trace (rule
-		// results, decision_reason, agent identity, amount). No
+		// Recompute the canonical hash over the versioned projection (rule
+		// results, decision_reason, agent identity, amount, and v2 applied
+		// provenance). No
 		// legacy-hash fallback: a 6-field hash covers only identity
 		// + decision, so an attacker who knows the verifier accepts
 		// legacy could forge decision_reason / rule_results /

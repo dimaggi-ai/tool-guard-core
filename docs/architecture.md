@@ -58,14 +58,15 @@ pkg/audit/       SHA-256 hash-chained traces, offline replay verifier,
                  canonical JSON for stable hashing. The canonical
                  encoder covers the decision and the fields that produce
                  it - identity, tool, amount, decision/action/reason,
-                 mode, the matched rule results, escalation target,
-                 chain links, and signer - so tampering with a hashed
-                 field is detected. Operator annotations and
-                 post-decision metadata (citations, suggested response,
-                 escalation-resolution fields, redacted parameters,
-                 context snapshot, token/cost counters, and diagnostic
-                 fields) are recorded but not hashed; the exact hashed
-                 set is `canonicalTraceV1` in `pkg/audit/canonical.go`.
+                 mode, raw and applied rule results (including citations
+                 and diagnostics), primary citations, suggested response,
+                 escalation target, chain links, and signer - so tampering
+                 with a hashed field is detected. Escalation-resolution
+                 fields, redacted parameters, context snapshot, and
+                 token/cost counters are recorded but not hashed; the exact
+                 current set is `canonicalTraceV2` in
+                 `pkg/audit/canonical.go`. Marker-less historical records
+                 continue to use the immutable v1 encoder.
                  Escalation approvals are written as their own chained
                  entries.
 
@@ -109,13 +110,13 @@ For every `/evaluate` request the proxy walks this sequence:
 6. **Unknown-tools-deny gate** - if `-unknown-tools-deny` is set and
    the envelope's `tool_name` is not in any enforcement policy's
    `scope.tool_names`, the decision is forced to `denied`.
-7. **Escalation** - if the decision is `escalated`, a pending entry
+7. **Escalation** - if `action_taken` is `escalated`, a pending entry
    is registered in the bounded escalation store. The agent gets a
    `poll_url` back and can long-poll for the operator's decision.
-8. **Audit append** - the full decision trace is canonical-encoded,
-   SHA-256-hashed, linked to the previous trace, and written to the
-   JSONL log. `lastHash` advances BEFORE the durability barrier so a
-   Sync failure cannot fork the chain.
+8. **Audit append** - the versioned decision-bearing projection is
+   canonical-encoded and SHA-256-hashed, then the full trace is linked to
+   the previous record and written to the JSONL log. `lastHash` advances
+   BEFORE the durability barrier so a Sync failure cannot fork the chain.
 9. **Response** - JSON `EvaluationResult` with decision, reason,
    matched rules, citations, escalation poll URL (if applicable).
 
@@ -149,18 +150,18 @@ and classifier with examples.
 
 ## The audit chain
 
-Every trace's hash covers the canonical JSON of the decision and the
-fields that produce it - `decision_reason`, the matched-rule list, the
-agent identity, the amount, the chain links, and the signer - so
-mutating any of them breaks `tg verify`. Operator annotations and
-post-decision metadata (citations, suggested response, the
-escalation-resolution fields, `parameters_redacted`, `context_snapshot`,
-the token/cost counters, and diagnostic fields) are recorded in the log
-but are not part of the canonical hash; the exact hashed set is defined
-by `canonicalTraceV1` (and its nested `canonicalRuleResultV1` /
-`canonicalDeepEvalV1`) in `pkg/audit/canonical.go`. Escalation approvals
-are written as their own chained entries, so the approval record is
-itself tamper-evident.
+Every v2 trace's hash covers the canonical JSON of the decision and the
+fields that explain both the raw decision and applied action:
+`decision_reason`, raw and applied rule results (including their citations
+and diagnostics), primary citations, suggested response, agent identity,
+amount, chain links, and signer. Mutating any of those fields breaks
+`tg verify`. Escalation-resolution fields, `parameters_redacted`,
+`context_snapshot`, and token/cost counters are recorded but are not part
+of the canonical hash. The exact hashed sets are the immutable versioned
+structs in `pkg/audit/canonical.go`; records without `_canonical_v` use v1,
+while new records carry `_canonical_v: "v2"`. Escalation approvals are
+written as their own chained entries, so the approval record is itself
+tamper-evident.
 
 On startup, the proxy reads the audit log tail, recomputes its
 canonical hash, and refuses to start if the stored hash doesn't

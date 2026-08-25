@@ -67,6 +67,35 @@ func TestVerifyChainFromReader_IntactChain(t *testing.T) {
 	}
 }
 
+func TestVerifyChainFromReader_MixedV1V2UpgradeChain(t *testing.T) {
+	base := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	v1 := makeTrace("v1", "env-v1", "", base)
+	v2 := makeTrace("v2", "env-v2", v1.TraceHash, base.Add(time.Second))
+	v2.CanonicalVersion = CanonicalTraceVersion
+	v2.AppliedRuleResults = []domain.RuleResult{{
+		RuleID:   "r2",
+		PolicyID: "p2",
+		Matched:  true,
+		Effect:   domain.EffectDeny,
+		Citation: domain.Citation{DocumentID: "doc", Excerpt: "applied"},
+	}}
+	citation := v2.AppliedRuleResults[0].Citation
+	v2.AppliedPrimaryCitation = &citation
+	hash, err := ComputeCanonicalTraceHash(&v2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2.TraceHash = hash
+
+	rep, err := VerifyChainFromReader(bytes.NewReader(writeJSONL(t, []domain.DecisionTrace{v1, v2})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rep.Intact || rep.Records != 2 || rep.Tail != v2.TraceHash {
+		t.Fatalf("mixed-version chain report = %#v, want intact 2-record chain", rep)
+	}
+}
+
 func TestVerifyChainFromReader_TamperedHash(t *testing.T) {
 	ts := time.Now().Truncate(time.Microsecond)
 	t1 := makeTrace("t1", "env-1", "", ts)

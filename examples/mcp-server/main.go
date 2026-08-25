@@ -74,6 +74,7 @@ func main() {
 		agentID: *agentID,
 		orgID:   *orgID,
 		http:    &http.Client{Timeout: 10 * time.Second},
+		out:     os.Stdout,
 	}
 
 	reader := bufio.NewReaderSize(os.Stdin, 1<<20)
@@ -191,6 +192,7 @@ type server struct {
 	orgID   string
 	framing string // "length-prefixed" or "line-delimited"
 	http    *http.Client
+	out     io.Writer
 }
 
 func (s *server) handle(req *jsonRPCRequest) {
@@ -296,10 +298,10 @@ func (s *server) handleToolCall(req *jsonRPCRequest) {
 		return
 	}
 
-	log.Printf("tool=%s decision=%s reason=%q", p.Name, evalResult.Decision, evalResult.DecisionReason)
+	log.Printf("tool=%s decision=%s action_taken=%s reason=%q", p.Name, evalResult.Decision, evalResult.ActionTaken, evalResult.DecisionReason)
 
-	switch evalResult.Decision {
-	case "allowed":
+	switch evalResult.ActionTaken {
+	case "allowed", "allowed_shadow":
 		// Fake the tool execution. In a real deployment this would
 		// call the actual upstream tool (Stripe, the customer DB,
 		// etc.).
@@ -311,7 +313,10 @@ func (s *server) handleToolCall(req *jsonRPCRequest) {
 	case "flagged":
 		s.toolCallResult(req.ID, fmt.Sprintf("[STUB] %s executed (flagged for review): %s", p.Name, evalResult.DecisionReason), false)
 	default:
-		s.toolCallResult(req.ID, "unknown decision: "+evalResult.Decision, true)
+		// Unknown action values fail closed. Branching on Decision here would
+		// incorrectly block allowed_shadow calls because Decision records what
+		// a shadow rule would have done, not what may execute.
+		s.toolCallResult(req.ID, "unknown action_taken: "+evalResult.ActionTaken, true)
 	}
 }
 
@@ -361,11 +366,15 @@ func (s *server) emit(resp jsonRPCResponse) {
 		return
 	}
 	body := bytes.TrimRight(buf.Bytes(), "\n")
+	out := s.out
+	if out == nil {
+		out = os.Stdout
+	}
 	if s.framing == "length-prefixed" {
-		fmt.Fprintf(os.Stdout, "Content-Length: %d\r\n\r\n", len(body))
-		_, _ = os.Stdout.Write(body)
+		fmt.Fprintf(out, "Content-Length: %d\r\n\r\n", len(body))
+		_, _ = out.Write(body)
 	} else {
-		_, _ = os.Stdout.Write(body)
-		_, _ = os.Stdout.Write([]byte{'\n'})
+		_, _ = out.Write(body)
+		_, _ = out.Write([]byte{'\n'})
 	}
 }

@@ -25,17 +25,18 @@ func appendHookAudit(path string, env *domain.ActionEnvelope, decision, reason s
 	dec, act := hookDecisionToDomain(decision)
 
 	trace := domain.DecisionTrace{
-		TraceID:        fmt.Sprintf("trc-%d", time.Now().UnixNano()),
-		Timestamp:      time.Now().UTC(),
-		OrgID:          env.OrgID,
-		EnvelopeID:     env.EnvelopeID,
-		AgentID:        env.AgentID,
-		SessionID:      env.SessionID,
-		ToolName:       env.ToolName,
-		ToolGroup:      env.ToolGroup,
-		Decision:       dec,
-		ActionTaken:    act,
-		DecisionReason: reason,
+		CanonicalVersion: audit.CanonicalTraceVersion,
+		TraceID:          fmt.Sprintf("trc-%d", time.Now().UnixNano()),
+		Timestamp:        time.Now().UTC(),
+		OrgID:            env.OrgID,
+		EnvelopeID:       env.EnvelopeID,
+		AgentID:          env.AgentID,
+		SessionID:        env.SessionID,
+		ToolName:         env.ToolName,
+		ToolGroup:        env.ToolGroup,
+		Decision:         dec,
+		ActionTaken:      act,
+		DecisionReason:   reason,
 	}
 
 	// Serialize concurrent hook processes: two appends that both read the same

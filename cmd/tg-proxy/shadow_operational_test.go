@@ -62,13 +62,18 @@ func newOperationalTestProxy(t *testing.T, policies []domain.Policy, trackVeloci
 }
 
 func evaluateOperational(t *testing.T, p *proxy, envelopeID string, amount float64) (int, domain.EvaluationResult) {
+	return evaluateOperationalTool(t, p, envelopeID, "issue_refund", "monetary_outflow", amount)
+}
+
+func evaluateOperationalTool(t *testing.T, p *proxy, envelopeID, toolName, toolGroup string, amount float64) (int, domain.EvaluationResult) {
 	t.Helper()
 	body, err := json.Marshal(map[string]any{
 		"envelope_id": envelopeID,
 		"agent_id":    "shadow-agent",
 		"session_id":  "shadow-session",
 		"org_id":      "shadow-org",
-		"tool_name":   "issue_refund",
+		"tool_name":   toolName,
+		"tool_group":  toolGroup,
 		"parameters":  map[string]any{"amount": amount},
 	})
 	if err != nil {
@@ -82,6 +87,37 @@ func evaluateOperational(t *testing.T, p *proxy, envelopeID string, amount float
 		t.Fatalf("decode response (status %d): %v; body=%s", rec.Code, err, rec.Body.String())
 	}
 	return rec.Code, result
+}
+
+func readOperationalTraces(t *testing.T, p *proxy) []domain.DecisionTrace {
+	t.Helper()
+	if err := p.auditLog.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(p.auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var traces []domain.DecisionTrace
+	for _, line := range bytes.Split(bytes.TrimSpace(raw), []byte{'\n'}) {
+		if len(line) == 0 {
+			continue
+		}
+		var trace domain.DecisionTrace
+		if err := json.Unmarshal(line, &trace); err != nil {
+			t.Fatalf("decode audit trace: %v; line=%s", err, line)
+		}
+		traces = append(traces, trace)
+	}
+	return traces
+}
+
+func assertNoAppliedProvenance(t *testing.T, result domain.EvaluationResult) {
+	t.Helper()
+	if len(result.AppliedRuleResults) != 0 || result.AppliedPrimaryCitation != nil {
+		t.Errorf("operational deny retained applied policy provenance: rules=%#v citation=%#v",
+			result.AppliedRuleResults, result.AppliedPrimaryCitation)
+	}
 }
 
 func TestProxy_ShadowGatingEffectsProceedWithoutEscalationRegistration(t *testing.T) {
@@ -167,10 +203,79 @@ func TestProxy_AuditFailureFailsClosedForEveryProceedingNonAllowAction(t *testin
 			if result.ActionTaken != domain.ActionDenied {
 				t.Fatalf("audit failure action = %q, want denied", result.ActionTaken)
 			}
+			assertNoAppliedProvenance(t, result)
 			if p.auditFailureCount.Load() != 1 || p.denyCount.Load() != 1 {
 				t.Errorf("audit failure counters: audit=%d deny=%d, want 1/1", p.auditFailureCount.Load(), p.denyCount.Load())
 			}
 		})
+	}
+}
+
+func TestProxy_EscalationRegistrationFailureClearsAppliedProvenance(t *testing.T) {
+	tests := []struct {
+		name     string
+		firstID  string
+		secondID string
+		storeCap int
+	}{
+		{name: "envelope collision", firstID: "duplicate", secondID: "duplicate"},
+		{name: "pending store cap", firstID: "first", secondID: "second", storeCap: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newOperationalTestProxy(t, []domain.Policy{
+				operationalPolicy("enforced-escalate", domain.PolicyModeEnforcement, domain.EffectEscalate, "amount", 0),
+			}, false)
+			if tt.storeCap > 0 {
+				p.escalations.maxEntries = tt.storeCap
+			}
+
+			firstStatus, first := evaluateOperational(t, p, tt.firstID, 100)
+			if firstStatus != http.StatusAccepted || first.ActionTaken != domain.ActionEscalated {
+				t.Fatalf("first status/action = %d/%q, want 202/escalated", firstStatus, first.ActionTaken)
+			}
+			secondStatus, second := evaluateOperational(t, p, tt.secondID, 100)
+			if secondStatus != http.StatusOK || second.ActionTaken != domain.ActionDenied {
+				t.Fatalf("second status/action = %d/%q, want 200/denied", secondStatus, second.ActionTaken)
+			}
+			assertNoAppliedProvenance(t, second)
+
+			traces := readOperationalTraces(t, p)
+			if len(traces) != 2 {
+				t.Fatalf("audit trace count = %d, want 2", len(traces))
+			}
+			last := traces[1]
+			if last.CanonicalVersion != "v2" {
+				t.Errorf("canonical version = %q, want v2", last.CanonicalVersion)
+			}
+			if last.ActionTaken != domain.ActionDenied {
+				t.Errorf("audit action = %q, want denied", last.ActionTaken)
+			}
+			if len(last.AppliedRuleResults) != 0 || last.AppliedPrimaryCitation != nil {
+				t.Errorf("audit operational deny retained applied provenance: rules=%#v citation=%#v",
+					last.AppliedRuleResults, last.AppliedPrimaryCitation)
+			}
+		})
+	}
+}
+
+func TestProxy_UnknownToolOperationalDenyClearsAppliedProvenance(t *testing.T) {
+	policy := operationalPolicy("group-flag", domain.PolicyModeEnforcement, domain.EffectFlag, "amount", 0)
+	policy.Scope.ToolGroups = []string{"monetary_outflow"}
+	p := newOperationalTestProxy(t, []domain.Policy{policy}, false)
+	p.unknownToolsDeny = true
+
+	status, result := evaluateOperationalTool(t, p, "unknown-tool", "issue_refund_v2", "monetary_outflow", 100)
+	if status != http.StatusOK || result.ActionTaken != domain.ActionDenied {
+		t.Fatalf("status/action = %d/%q, want 200/denied", status, result.ActionTaken)
+	}
+	assertNoAppliedProvenance(t, result)
+	traces := readOperationalTraces(t, p)
+	if len(traces) != 1 {
+		t.Fatalf("audit trace count = %d, want 1", len(traces))
+	}
+	if len(traces[0].AppliedRuleResults) != 0 || traces[0].AppliedPrimaryCitation != nil {
+		t.Fatalf("unknown-tool audit retained applied provenance: %#v", traces[0])
 	}
 }
 

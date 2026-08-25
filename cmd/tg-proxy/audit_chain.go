@@ -232,6 +232,10 @@ func (p *proxy) verifyFullAuditChain() error {
 func (p *proxy) appendTrace(t *domain.DecisionTrace) error {
 	p.auditMu.Lock()
 	defer p.auditMu.Unlock()
+	// Every new record carries its hash-schema version on disk. A missing
+	// marker is reserved for pre-v2 records and is interpreted as v1 by the
+	// verifier, which lets upgraded proxies continue an existing chain.
+	t.CanonicalVersion = audit.CanonicalTraceVersion
 	t.PreviousTraceHash = p.lastHash
 	h, err := audit.ComputeCanonicalTraceHash(t)
 	if err != nil {

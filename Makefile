@@ -5,7 +5,7 @@
 
 GO      ?= go
 BIN     ?= bin
-PKGS    := ./pkg/... ./cmd/... ./api/...
+PKGS    := ./pkg/... ./cmd/... ./api/... ./examples/mcp-server
 
 .DEFAULT_GOAL := help
 

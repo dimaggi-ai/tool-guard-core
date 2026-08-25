@@ -245,11 +245,12 @@ func (g *Guard) Check(ctx context.Context, env *domain.ActionEnvelope) (bool, *d
     result := g.eval.Evaluate(env, g.policies, domain.PolicyModeEnforcement)
     // Append to the audit chain. Use the CANONICAL hash
     // (ComputeCanonicalTraceHash) - it covers the decision and the
-    // fields that produce it (the exact set is canonicalTraceV1 in
+    // fields that produce it (the exact current set is canonicalTraceV2 in
     // pkg/audit/canonical.go) and is what `tg verify` recomputes. The
     // legacy ComputeTraceHash covers only six identity fields and will
     // not verify.
     trace := domain.DecisionTrace{
+        CanonicalVersion:  audit.CanonicalTraceVersion,
         TraceID:           "trc-" + env.EnvelopeID,
         EnvelopeID:        env.EnvelopeID,
         Timestamp:         env.Timestamp,

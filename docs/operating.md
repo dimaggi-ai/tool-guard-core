@@ -365,9 +365,10 @@ hashed and chained correctly), not fail-recoverable.
 ## Upgrade path
 
 Tool Guard follows semver. Between minor versions the canonical
-trace schema is locked at `CanonicalTraceVersion = v1`. A future
-v2 schema bump will be opt-in via build flag; existing v1 chains
-will remain `tg verify`-able forever.
+trace schemas are immutable. Current writers stamp
+`CanonicalTraceVersion = v2`; records written before the on-record
+`_canonical_v` marker are interpreted with the byte-identical v1 encoder.
+Mixed v1/v2 chains remain `tg verify`-able across an upgrade.
 
 To upgrade:
 
