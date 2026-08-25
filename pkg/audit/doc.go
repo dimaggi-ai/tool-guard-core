@@ -16,8 +16,9 @@
 //   - [ChainVerifier] for online verification against a [ChainStore]
 //     backend (whatever your application uses to persist traces).
 //
-// Canonicalisation choices are locked at version 1 (see
-// [CanonicalTraceVersion]); any new field added to DecisionTrace MUST
-// bump the version or evidence packs produced under the old version
-// stop verifying.
+// New records use canonical version 2 (see [CanonicalTraceVersion]) and carry
+// engine, policy-set, and schema provenance inside the integrity commitment.
+// Legacy records with no schema_version continue to use the frozen v1 encoder.
+// Any future canonical field addition MUST add a new encoder version; existing
+// versioned shapes are immutable.
 package audit

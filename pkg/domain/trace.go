@@ -77,6 +77,13 @@ type DecisionTrace struct {
 	PreviousTraceHash string `json:"previous_trace_hash,omitempty"`
 	SignedBy          string `json:"signed_by,omitempty"` // Proxy instance ID
 
+	// Provenance. New audit writers stamp all three before hashing. They are
+	// optional on the wire only so pre-v2 records remain decodable and
+	// verifiable; a v2 canonical record requires every value.
+	EngineVersion string `json:"engine_version,omitempty"`
+	PolicySetHash string `json:"policy_set_hash,omitempty"`
+	SchemaVersion string `json:"schema_version,omitempty"`
+
 	// Redacted parameters
 	ParametersRedacted []byte `json:"parameters_redacted,omitempty"`
 

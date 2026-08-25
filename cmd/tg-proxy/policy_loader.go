@@ -46,9 +46,14 @@ func (p *proxy) reload() error {
 	// regexp.Compile would have rejected (shouldn't happen — they
 	// share the same engine — but defence in depth).
 	engine.PrewarmRegexCache(loaded)
+	policySetHash, err := policyload.PolicySetHash(loaded)
+	if err != nil {
+		return fmt.Errorf("hash loaded policy set: %w", err)
+	}
 
 	p.mu.Lock()
 	p.policies = loaded
+	p.policySetHash = policySetHash
 	p.mu.Unlock()
 	p.loadCount.Add(1)
 	return nil

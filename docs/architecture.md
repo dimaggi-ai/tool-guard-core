@@ -64,8 +64,10 @@ pkg/audit/       SHA-256 hash-chained traces, offline replay verifier,
                  post-decision metadata (citations, suggested response,
                  escalation-resolution fields, redacted parameters,
                  context snapshot, token/cost counters, and diagnostic
-                 fields) are recorded but not hashed; the exact hashed
-                 set is `canonicalTraceV1` in `pkg/audit/canonical.go`.
+                 fields) are recorded but not hashed. Canonical v2 also
+                 commits the engine version, normalized policy-set hash,
+                 and schema version; the exact versioned shapes are in
+                 `pkg/audit/canonical.go`.
                  Escalation approvals are written as their own chained
                  entries.
 
@@ -156,11 +158,11 @@ mutating any of them breaks `tg verify`. Operator annotations and
 post-decision metadata (citations, suggested response, the
 escalation-resolution fields, `parameters_redacted`, `context_snapshot`,
 the token/cost counters, and diagnostic fields) are recorded in the log
-but are not part of the canonical hash; the exact hashed set is defined
-by `canonicalTraceV1` (and its nested `canonicalRuleResultV1` /
-`canonicalDeepEvalV1`) in `pkg/audit/canonical.go`. Escalation approvals
-are written as their own chained entries, so the approval record is
-itself tamper-evident.
+but are not part of the canonical hash. Canonical v2 additionally hashes
+`engine_version`, `policy_set_hash`, and `schema_version`; the exact v1 and
+v2 shapes (plus their nested rule/deep-eval shapes) are defined in
+`pkg/audit/canonical.go`. Escalation approvals are written as their own
+chained entries, so the approval record is itself tamper-evident.
 
 On startup, the proxy reads the audit log tail, recomputes its
 canonical hash, and refuses to start if the stored hash doesn't

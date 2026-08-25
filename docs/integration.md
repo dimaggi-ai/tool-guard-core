@@ -204,10 +204,12 @@ import (
     "context"
     "encoding/json"
     "os"
+    "sync"
 
     "github.com/dimaggi-ai/tool-guard-core/pkg/audit"
     "github.com/dimaggi-ai/tool-guard-core/pkg/domain"
     "github.com/dimaggi-ai/tool-guard-core/pkg/engine"
+    "github.com/dimaggi-ai/tool-guard-core/pkg/policyload"
 )
 
 // Guard wraps the engine and an append-only audit log writer.
@@ -219,9 +221,16 @@ type Guard struct {
     auditFile *os.File
     auditEnc  *json.Encoder
     lastHash string
+    engineVersion string
+    policySetHash string
+    auditMu sync.Mutex
 }
 
-func NewGuard(policies []domain.Policy, logPath string) (*Guard, error) {
+func NewGuard(policies []domain.Policy, logPath, engineVersion string) (*Guard, error) {
+    policySetHash, err := policyload.PolicySetHash(policies)
+    if err != nil {
+        return nil, err
+    }
     f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
     if err != nil {
         return nil, err
@@ -231,14 +240,18 @@ func NewGuard(policies []domain.Policy, logPath string) (*Guard, error) {
         policies: policies,
         auditFile: f,
         auditEnc: json.NewEncoder(f),
+        engineVersion: engineVersion,
+        policySetHash: policySetHash,
     }, nil
 }
 
 func (g *Guard) Check(ctx context.Context, env *domain.ActionEnvelope) (bool, *domain.EvaluationResult) {
     result := g.eval.Evaluate(env, g.policies, domain.PolicyModeEnforcement)
+    g.auditMu.Lock()
+    defer g.auditMu.Unlock()
     // Append to the audit chain. Use the CANONICAL hash
     // (ComputeCanonicalTraceHash) - it covers the decision and the
-    // fields that produce it (the exact set is canonicalTraceV1 in
+    // fields that produce it (selected per record by schema_version in
     // pkg/audit/canonical.go) and is what `tg verify` recomputes. The
     // legacy ComputeTraceHash covers only six identity fields and will
     // not verify.
@@ -256,6 +269,9 @@ func (g *Guard) Check(ctx context.Context, env *domain.ActionEnvelope) (bool, *d
         DecisionReason:    result.DecisionReason,
         Mode:              result.EffectiveMode,
         PreviousTraceHash: g.lastHash,
+    }
+    if err := audit.StampProvenance(&trace, g.engineVersion, g.policySetHash); err != nil {
+        return false, nil // fail closed on incomplete provenance
     }
     hash, err := audit.ComputeCanonicalTraceHash(&trace)
     if err != nil {

@@ -165,6 +165,14 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 		env.Timestamp = time.Now().UTC()
 	}
 
+	// Capture policies and their digest atomically. The same snapshot must
+	// drive both evaluation and audit provenance even if SIGHUP reloads the
+	// server before the trace is appended.
+	p.mu.RLock()
+	policies := p.policies
+	policySetHash := p.policySetHash
+	p.mu.RUnlock()
+
 	// Rate limit (per agent/session/org per -rate-limit-key-by). Over
 	// the bucket cap returns 429 with an audit-loggable reason; the
 	// caller never reaches the engine.
@@ -180,7 +188,7 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 		}
 		if !p.rateLimit.allow(key) {
 			reason := fmt.Sprintf("rate limit exceeded for %s=%q", p.rateLimitKeyBy, key)
-			p.emitBoundaryDeny(&env, reason, p.defaultMode)
+			p.emitBoundaryDeny(&env, reason, p.defaultMode, policySetHash)
 			p.denyCount.Add(1)
 			writeJSON(w, http.StatusTooManyRequests, map[string]any{
 				"decision":        "denied",
@@ -212,7 +220,7 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 	// the engine.
 	if len(p.protectPaths) > 0 {
 		if violated, reason := engine.ViolatesProtectedPaths(&env, p.protectPaths); violated {
-			p.emitBoundaryDeny(&env, reason, mode)
+			p.emitBoundaryDeny(&env, reason, mode, policySetHash)
 			p.denyCount.Add(1)
 			writeJSON(w, http.StatusForbidden, map[string]any{
 				"decision":        "denied",
@@ -261,13 +269,9 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	p.mu.RLock()
-	policies := p.policies
-	p.mu.RUnlock()
-
 	if len(policies) == 0 && p.failClosed {
 		reason := "no policies loaded; fail-closed engaged"
-		p.emitBoundaryDeny(&env, reason, mode)
+		p.emitBoundaryDeny(&env, reason, mode, policySetHash)
 		p.failClosedCount.Add(1)
 		p.denyCount.Add(1)
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
@@ -300,7 +304,7 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 	result, evalErr := p.safeEvaluate(&env, policies, mode)
 	if evalErr != nil {
 		reason := fmt.Sprintf("policy evaluator error; failing closed (unconditional — see safeEvaluate): %v", evalErr)
-		p.emitBoundaryDeny(&env, reason, mode)
+		p.emitBoundaryDeny(&env, reason, mode, policySetHash)
 		p.failClosedCount.Add(1)
 		p.denyCount.Add(1)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{
@@ -354,6 +358,7 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 		IsNearMiss:           result.IsNearMiss,
 		EvaluationDurationMs: 0,
 	}
+	provenanceErr := p.stampTraceProvenance(&trace, policySetHash)
 	// When the decision is escalated, register the pending entry so
 	// the approver endpoints can find it and the agent can poll.
 	// EnvelopeID serves as the escalation ID. The per-rule
@@ -384,7 +389,10 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 	// can't be written and --fail-closed is set. Counter updates
 	// happen once at the very end against the FINAL decision so
 	// there are no underflow / double-count races.
-	auditErr := p.appendTrace(&trace)
+	auditErr := provenanceErr
+	if auditErr == nil {
+		auditErr = p.appendTrace(&trace)
+	}
 	if auditErr != nil {
 		log.Printf("tg-proxy: append audit trace: %v", auditErr)
 		p.auditFailureCount.Add(1)

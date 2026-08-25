@@ -57,12 +57,14 @@ import (
 	_ "github.com/dimaggi-ai/tool-guard-core/pkg/sqlguard/mssql"
 )
 
-// proxy holds the runtime state of the server. policies and lastHash are
-// the only mutable fields; both are guarded by mu so SIGHUP reload and
-// concurrent /evaluate requests do not race.
+// proxy holds the runtime state of the server. policies and policySetHash are
+// swapped together under mu so a request can never evaluate one set and stamp
+// the digest of another. lastHash is guarded separately by auditMu.
 type proxy struct {
-	mu       sync.RWMutex
-	policies []domain.Policy
+	mu            sync.RWMutex
+	policies      []domain.Policy
+	policySetHash string
+	engineVersion string
 
 	auditMu  sync.Mutex
 	auditLog *os.File
@@ -116,6 +118,18 @@ var (
 	Commit    string
 	BuildDate string
 )
+
+func resolvedEngineVersion() string {
+	if Version != "" {
+		return Version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		if v := info.Main.Version; v != "" && v != "(devel)" {
+			return v
+		}
+	}
+	return "(devel)"
+}
 
 func main() {
 	var (
@@ -272,6 +286,7 @@ func main() {
 		escalationDefaultMin: *escalationTimeout,
 		policyDir:            *policyDir,
 		auditPath:            *auditPath,
+		engineVersion:        resolvedEngineVersion(),
 		startedAt:            time.Now().UTC(),
 	}
 	switch *defaultMode {
@@ -358,6 +373,10 @@ func main() {
 							ActionTaken:    domain.ActionDenied,
 							DecisionReason: fmt.Sprintf("escalation %s expired without approval", e.ID),
 							Mode:           domain.PolicyModeEnforcement,
+						}
+						if err := p.stampTraceProvenance(&trace, ""); err != nil {
+							log.Printf("tg-proxy: stamp expiry trace for %s: %v", e.ID, err)
+							continue
 						}
 						if err := p.appendTrace(&trace); err != nil {
 							log.Printf("tg-proxy: append expiry trace for %s: %v", e.ID, err)

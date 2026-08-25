@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -9,7 +10,9 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/dimaggi-ai/tool-guard-core/pkg/audit"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
+	"github.com/dimaggi-ai/tool-guard-core/pkg/policyload"
 )
 
 func auditEnv(id string) *domain.ActionEnvelope {
@@ -74,6 +77,35 @@ func TestAppendHookAudit_ChainLinks(t *testing.T) {
 		if chain[i][0] != chain[i-1][1] {
 			t.Errorf("record %d prev %q != record %d hash %q — chain forked", i, chain[i][0], i-1, chain[i-1][1])
 		}
+	}
+}
+
+func TestAppendHookAudit_StampsVerifiableProvenance(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	if err := appendHookAudit(path, auditEnv("env-provenance"), "deny", "blocked"); err != nil {
+		t.Fatalf("appendHookAudit: %v", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read audit: %v", err)
+	}
+	var trace domain.DecisionTrace
+	if err := json.Unmarshal(bytes.TrimSpace(raw), &trace); err != nil {
+		t.Fatalf("decode audit record: %v", err)
+	}
+	wantPolicyHash, err := policyload.PolicySetHash(nil)
+	if err != nil {
+		t.Fatalf("hash empty policy set: %v", err)
+	}
+	if trace.EngineVersion == "" || trace.PolicySetHash != wantPolicyHash || trace.SchemaVersion != audit.CanonicalTraceVersion {
+		t.Fatalf("incomplete provenance: %+v", trace)
+	}
+	ok, err := audit.VerifyCanonicalTraceHash(&trace)
+	if err != nil {
+		t.Fatalf("VerifyCanonicalTraceHash: %v", err)
+	}
+	if !ok {
+		t.Fatal("fresh hook audit record did not verify")
 	}
 }
 

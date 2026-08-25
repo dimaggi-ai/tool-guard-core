@@ -9,7 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dimaggi-ai/tool-guard-core/pkg/audit"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
+	"github.com/dimaggi-ai/tool-guard-core/pkg/policyload"
 )
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -80,6 +82,31 @@ func timeoutFromMatchedRules(result *domain.EvaluationResult, policies []domain.
 	return 0
 }
 
+// stampTraceProvenance stamps a trace before canonical hashing. Callers that
+// evaluated a policy snapshot pass its hash explicitly. The fallback supports
+// tests and defensive internal writers; production reload always precomputes
+// policySetHash under the same lock as policies.
+func (p *proxy) stampTraceProvenance(trace *domain.DecisionTrace, policySetHash string) error {
+	if policySetHash == "" {
+		p.mu.RLock()
+		policySetHash = p.policySetHash
+		policies := p.policies
+		p.mu.RUnlock()
+		if policySetHash == "" {
+			var err error
+			policySetHash, err = policyload.PolicySetHash(policies)
+			if err != nil {
+				return fmt.Errorf("hash policy set for audit provenance: %w", err)
+			}
+		}
+	}
+	engineVersion := p.engineVersion
+	if engineVersion == "" {
+		engineVersion = resolvedEngineVersion()
+	}
+	return audit.StampProvenance(trace, engineVersion, policySetHash)
+}
+
 // emitBoundaryDeny writes an audit trace for a deny that happens
 // BEFORE the engine evaluates (rate-limit overflow, fail-closed
 // no-policies). These decisions are real enforcement events and must
@@ -91,7 +118,7 @@ func timeoutFromMatchedRules(result *domain.EvaluationResult, policies []domain.
 // results since no rule fired. Errors are logged but never propagate
 // to the caller — the deny response must still go out even if audit
 // append failed; that's a separate failure surfaced via metrics.
-func (p *proxy) emitBoundaryDeny(env *domain.ActionEnvelope, reason string, mode domain.PolicyMode) {
+func (p *proxy) emitBoundaryDeny(env *domain.ActionEnvelope, reason string, mode domain.PolicyMode, policySetHash string) {
 	trace := domain.DecisionTrace{
 		TraceID:        fmt.Sprintf("trc-%d", time.Now().UnixNano()),
 		Timestamp:      time.Now().UTC(),
@@ -108,6 +135,11 @@ func (p *proxy) emitBoundaryDeny(env *domain.ActionEnvelope, reason string, mode
 		ActionTaken:    domain.ActionDenied,
 		DecisionReason: reason,
 		Mode:           mode,
+	}
+	if err := p.stampTraceProvenance(&trace, policySetHash); err != nil {
+		log.Printf("tg-proxy: emitBoundaryDeny provenance: %v", err)
+		p.auditFailureCount.Add(1)
+		return
 	}
 	if err := p.appendTrace(&trace); err != nil {
 		log.Printf("tg-proxy: emitBoundaryDeny audit: %v", err)
@@ -153,6 +185,11 @@ func (p *proxy) emitEscalationResolution(e *Escalation, approved bool) {
 		Decision:       decision,
 		ActionTaken:    actionTaken,
 		DecisionReason: reason,
+	}
+	if err := p.stampTraceProvenance(&trace, ""); err != nil {
+		log.Printf("tg-proxy: emitEscalationResolution provenance: %v", err)
+		p.auditFailureCount.Add(1)
+		return
 	}
 	if err := p.appendTrace(&trace); err != nil {
 		log.Printf("tg-proxy: emitEscalationResolution audit: %v", err)

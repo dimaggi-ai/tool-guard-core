@@ -67,6 +67,35 @@ func TestVerifyChainFromReader_IntactChain(t *testing.T) {
 	}
 }
 
+func TestVerifyChainFromReader_MixedV1V2Chain(t *testing.T) {
+	ts := time.Now().Truncate(time.Microsecond)
+	legacy := makeTrace("legacy-v1", "env-1", "", ts)
+	current := domain.DecisionTrace{
+		TraceID:           "current-v2",
+		EnvelopeID:        "env-2",
+		Timestamp:         ts.Add(time.Second),
+		Decision:          domain.DecisionDenied,
+		ActionTaken:       domain.ActionDenied,
+		PreviousTraceHash: legacy.TraceHash,
+	}
+	if err := StampProvenance(&current, "v0.8.0", "sha256:"+strings.Repeat("d", 64)); err != nil {
+		t.Fatalf("StampProvenance: %v", err)
+	}
+	h, err := ComputeCanonicalTraceHash(&current)
+	if err != nil {
+		t.Fatalf("ComputeCanonicalTraceHash(v2): %v", err)
+	}
+	current.TraceHash = h
+
+	rep, err := VerifyChainFromReader(bytes.NewReader(writeJSONL(t, []domain.DecisionTrace{legacy, current})))
+	if err != nil {
+		t.Fatalf("VerifyChainFromReader: %v", err)
+	}
+	if !rep.Intact || rep.Records != 2 || rep.Tail != current.TraceHash {
+		t.Fatalf("mixed-version chain did not verify: %+v", rep)
+	}
+}
+
 func TestVerifyChainFromReader_TamperedHash(t *testing.T) {
 	ts := time.Now().Truncate(time.Microsecond)
 	t1 := makeTrace("t1", "env-1", "", ts)

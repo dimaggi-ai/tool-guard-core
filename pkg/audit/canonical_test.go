@@ -10,14 +10,14 @@ import (
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 )
 
-// canonical_test locks the v1 byte shape. If Go's encoding/json behaviour
+// canonical_test locks every supported byte shape. If Go's encoding/json behaviour
 // ever changes (escape rules, integer width, etc.) THESE tests break loud
 // before any evidence pack ships with a drifted shape.
 //
 // To regenerate the golden bytes if you intentionally bump the schema:
-//   1. Bump CanonicalTraceVersion to "v2" in canonical.go.
-//   2. Update wantCanonicalV1 below to match the new shape.
-//   3. Add canonicalTraceV2 struct.
+//   1. Bump CanonicalTraceVersion in canonical.go.
+//   2. Add a new canonicalTraceV<N> struct and golden value.
+//   3. Keep every older golden and encoder unchanged.
 //   4. NEVER edit v1 in place — old packs depend on it.
 
 func goldenTrace() *domain.DecisionTrace {
@@ -155,5 +155,108 @@ func TestCanonicalTraceBytes_ParsesAsValidJSON(t *testing.T) {
 	}
 	if parsed["_canonical_v"] != "v1" {
 		t.Errorf("missing/wrong canonical version marker: %v", parsed["_canonical_v"])
+	}
+}
+
+func TestCanonicalTraceBytes_V2GoldenAndRoundTrip(t *testing.T) {
+	tr := goldenTrace()
+	tr.EngineVersion = "v0.8.0"
+	tr.PolicySetHash = "sha256:" + strings.Repeat("a", 64)
+	tr.SchemaVersion = CanonicalTraceVersion
+
+	out, err := CanonicalTraceBytes(tr)
+	if err != nil {
+		t.Fatalf("CanonicalTraceBytes(v2): %v", err)
+	}
+	want := strings.TrimSuffix(strings.Replace(wantCanonicalV1, `"_canonical_v":"v1"`, `"_canonical_v":"v2"`, 1), "}") +
+		`,"engine_version":"v0.8.0","policy_set_hash":"` + tr.PolicySetHash + `","schema_version":"v2"}`
+	if string(out) != want {
+		t.Errorf("canonical v2 bytes drift detected\n want: %s\n  got: %s", want, string(out))
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		t.Fatalf("v2 canonical output is invalid JSON: %v", err)
+	}
+	for key, want := range map[string]string{
+		"_canonical_v":    "v2",
+		"engine_version":  "v0.8.0",
+		"policy_set_hash": tr.PolicySetHash,
+		"schema_version":  "v2",
+	} {
+		if parsed[key] != want {
+			t.Errorf("%s = %#v, want %q", key, parsed[key], want)
+		}
+	}
+
+	encoded, err := json.Marshal(tr)
+	if err != nil {
+		t.Fatalf("marshal trace: %v", err)
+	}
+	var roundTrip domain.DecisionTrace
+	if err := json.Unmarshal(encoded, &roundTrip); err != nil {
+		t.Fatalf("unmarshal trace: %v", err)
+	}
+	if roundTrip.EngineVersion != tr.EngineVersion || roundTrip.PolicySetHash != tr.PolicySetHash || roundTrip.SchemaVersion != tr.SchemaVersion {
+		t.Fatalf("provenance did not round-trip: %+v", roundTrip)
+	}
+}
+
+func TestCanonicalTraceHash_V2ProvenanceIsIntegrityProtected(t *testing.T) {
+	tr := goldenTrace()
+	tr.TraceHash = ""
+	if err := StampProvenance(tr, "v0.8.0", "sha256:"+strings.Repeat("b", 64)); err != nil {
+		t.Fatalf("StampProvenance: %v", err)
+	}
+	h, err := ComputeCanonicalTraceHash(tr)
+	if err != nil {
+		t.Fatalf("ComputeCanonicalTraceHash: %v", err)
+	}
+	tr.TraceHash = h
+
+	for _, mutate := range []struct {
+		name    string
+		fn      func(*domain.DecisionTrace)
+		wantErr bool
+	}{
+		{name: "engine version", fn: func(t *domain.DecisionTrace) { t.EngineVersion = "v9.9.9" }},
+		{name: "policy set hash", fn: func(t *domain.DecisionTrace) { t.PolicySetHash = "sha256:" + strings.Repeat("c", 64) }},
+		{name: "schema version removed", fn: func(t *domain.DecisionTrace) { t.SchemaVersion = "" }, wantErr: true},
+	} {
+		t.Run(mutate.name, func(t *testing.T) {
+			copy := *tr
+			mutate.fn(&copy)
+			ok, err := VerifyCanonicalTraceHash(&copy)
+			if mutate.wantErr {
+				if err == nil {
+					t.Fatal("VerifyCanonicalTraceHash error = nil, want incomplete-provenance error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("VerifyCanonicalTraceHash: %v", err)
+			}
+			if ok {
+				t.Fatal("provenance tamper verified")
+			}
+		})
+	}
+}
+
+func TestCanonicalTraceBytesRejectsUnsupportedOrIncompleteV2(t *testing.T) {
+	tr := goldenTrace()
+	tr.SchemaVersion = "v99"
+	if _, err := CanonicalTraceBytes(tr); err == nil || !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("future schema error = %v, want unsupported", err)
+	}
+
+	tr.SchemaVersion = CanonicalTraceVersion
+	if _, err := CanonicalTraceBytes(tr); err == nil || !strings.Contains(err.Error(), "engine_version") {
+		t.Fatalf("incomplete v2 error = %v, want engine_version", err)
+	}
+
+	tr.SchemaVersion = ""
+	tr.EngineVersion = "v0.8.0"
+	if _, err := CanonicalTraceBytes(tr); err == nil || !strings.Contains(err.Error(), "legacy canonical v1") {
+		t.Fatalf("partial provenance error = %v, want legacy canonical v1", err)
 	}
 }

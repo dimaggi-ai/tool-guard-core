@@ -10,6 +10,7 @@ import (
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/audit"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
+	"github.com/dimaggi-ai/tool-guard-core/pkg/policyload"
 )
 
 // appendHookAudit writes the hook's decision to a SHA-256 hash-chained JSONL
@@ -21,8 +22,15 @@ import (
 // The tail hash is read by seeking to the END of the file (not scanning the
 // whole thing), so appending stays O(1) per call even as the log grows across
 // a long agent session.
-func appendHookAudit(path string, env *domain.ActionEnvelope, decision, reason string) error {
+func appendHookAudit(path string, env *domain.ActionEnvelope, decision, reason string, policySetHashes ...string) error {
 	dec, act := hookDecisionToDomain(decision)
+	policySetHash, err := policyload.PolicySetHash(nil)
+	if err != nil {
+		return err
+	}
+	if len(policySetHashes) > 0 && policySetHashes[0] != "" {
+		policySetHash = policySetHashes[0]
+	}
 
 	trace := domain.DecisionTrace{
 		TraceID:        fmt.Sprintf("trc-%d", time.Now().UnixNano()),
@@ -36,6 +44,9 @@ func appendHookAudit(path string, env *domain.ActionEnvelope, decision, reason s
 		Decision:       dec,
 		ActionTaken:    act,
 		DecisionReason: reason,
+	}
+	if err := audit.StampProvenance(&trace, resolvedEngineVersion(), policySetHash); err != nil {
+		return err
 	}
 
 	// Serialize concurrent hook processes: two appends that both read the same

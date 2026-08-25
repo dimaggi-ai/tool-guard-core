@@ -230,6 +230,14 @@ func (p *proxy) verifyFullAuditChain() error {
 //	lastHash carries across the rotation. `tg verify` walks the
 //	rotation set in chain order.
 func (p *proxy) appendTrace(t *domain.DecisionTrace) error {
+	// Defence in depth for synthetic/internal writers. The evaluated request
+	// path stamps the exact policy snapshot before entering appendTrace; any
+	// other new record still must not escape without current provenance.
+	if t.SchemaVersion == "" && t.EngineVersion == "" && t.PolicySetHash == "" {
+		if err := p.stampTraceProvenance(t, ""); err != nil {
+			return err
+		}
+	}
 	p.auditMu.Lock()
 	defer p.auditMu.Unlock()
 	t.PreviousTraceHash = p.lastHash

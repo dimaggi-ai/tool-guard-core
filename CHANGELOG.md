@@ -4,6 +4,16 @@ All notable changes to Tool Guard Core are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Audit provenance
+
+- New audit records use canonical schema v2 and include `engine_version`,
+  `policy_set_hash`, and `schema_version` inside the canonical hash. The policy
+  digest is deterministic across YAML presentation and load order. Legacy
+  records without `schema_version` continue to verify with the frozen v1
+  encoder, including chains that transition from v1 to v2 after an upgrade.
+
 ## [0.7.0] — 2026-08-20
 
 Release focus: **policy-loading hardening** and **release-integrity

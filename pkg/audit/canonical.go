@@ -6,8 +6,8 @@
 // pack becomes unverifiable.
 //
 // Rules (locked — do not change without bumping CanonicalTraceVersion):
-//  1. Sorted struct field order is enforced by the canonicalTraceV1
-//     shape below. Map[string]any is NEVER canonicalised here.
+//  1. Struct field order is enforced by the versioned canonicalTraceV<N>
+//     shapes below. Map[string]any is NEVER canonicalised here.
 //  2. encoding/json with SetEscapeHTML(false) — Go's default escapes
 //     <, >, & inside strings which would break byte-equality across
 //     languages reading the chain.
@@ -20,15 +20,16 @@
 //
 // Versioning:
 //
-//	CanonicalTraceVersion is the version that the audit chain hashing
-//	currently uses. If you EVER need to change the canonical shape,
-//	create canonicalTraceV2 + add a switch on the version field of new
-//	traces. Existing v1 packs must remain verifiable forever.
+//	CanonicalTraceVersion is the version new audit records use. If you EVER
+//	need to change the canonical shape, add canonicalTraceV<N+1> and extend
+//	the per-record switch. Never edit an existing shape: v1 records (identified
+//	by an absent schema_version) must remain verifiable forever.
 package audit
 
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"math"
 	"sort"
 	"time"
@@ -36,11 +37,12 @@ import (
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 )
 
-// CanonicalTraceVersion is the schema version of the canonical encoder.
-// Increment on any breaking change. The verifier reads the trace's
-// `_canonical_v` field at the top of the canonical JSON to know which
-// shape to expect.
-const CanonicalTraceVersion = "v1"
+const (
+	// CanonicalTraceVersion is stamped on every new trace and selects the
+	// current canonical encoder. Increment on any canonical-shape change.
+	CanonicalTraceVersion   = "v2"
+	canonicalTraceVersionV1 = "v1"
+)
 
 // canonicalTraceV1 mirrors domain.DecisionTrace with explicit field order
 // and no omitempty. The struct field order in Go is preserved by
@@ -105,6 +107,17 @@ type canonicalTraceV1 struct {
 	DeepEval *canonicalDeepEvalV1 `json:"deep_eval"`
 }
 
+// canonicalTraceV2 extends, rather than edits, the frozen v1 shape. Embedded
+// v1 fields encode first in their original byte order; the golden tests lock
+// both layouts. Provenance fields are appended and therefore covered by the
+// trace hash.
+type canonicalTraceV2 struct {
+	canonicalTraceV1
+	EngineVersion string `json:"engine_version"`
+	PolicySetHash string `json:"policy_set_hash"`
+	SchemaVersion string `json:"schema_version"`
+}
+
 type canonicalRuleResultV1 struct {
 	RuleID        string `json:"rule_id"`
 	RuleName      string `json:"rule_name"`
@@ -166,8 +179,24 @@ func CanonicalTraceBytes(t *domain.DecisionTrace) ([]byte, error) {
 	if t == nil {
 		return nil, nil
 	}
+	version := canonicalTraceVersionV1
+	switch t.SchemaVersion {
+	case "":
+		// Historical v1 records predate every provenance field. Reject a
+		// partially stamped record rather than serialize unhashed metadata.
+		if t.EngineVersion != "" || t.PolicySetHash != "" {
+			return nil, fmt.Errorf("legacy canonical v1 trace must omit engine_version and policy_set_hash")
+		}
+	case CanonicalTraceVersion:
+		version = CanonicalTraceVersion
+		if err := validateTraceProvenance(t); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("unsupported canonical trace schema_version %q", t.SchemaVersion)
+	}
 	c := canonicalTraceV1{
-		CanonicalV: CanonicalTraceVersion,
+		CanonicalV: version,
 		TraceID:    t.TraceID,
 		Timestamp:  t.Timestamp.UTC().Format(time.RFC3339Nano),
 		OrgID:      t.OrgID,
@@ -250,7 +279,16 @@ func CanonicalTraceBytes(t *domain.DecisionTrace) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
-	if err := enc.Encode(&c); err != nil {
+	var value any = &c
+	if version == CanonicalTraceVersion {
+		value = &canonicalTraceV2{
+			canonicalTraceV1: c,
+			EngineVersion:    t.EngineVersion,
+			PolicySetHash:    t.PolicySetHash,
+			SchemaVersion:    t.SchemaVersion,
+		}
+	}
+	if err := enc.Encode(value); err != nil {
 		return nil, err
 	}
 	// json.Encoder.Encode appends a trailing newline — strip it for

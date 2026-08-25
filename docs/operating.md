@@ -351,10 +351,17 @@ hashed and chained correctly), not fail-recoverable.
 
 ## Upgrade path
 
-Tool Guard follows semver. Between minor versions the canonical
-trace schema is locked at `CanonicalTraceVersion = v1`. A future
-v2 schema bump will be opt-in via build flag; existing v1 chains
-will remain `tg verify`-able forever.
+Tool Guard follows semver. New 0.8.0 audit records use
+`CanonicalTraceVersion = v2` and carry `engine_version`,
+`policy_set_hash`, and `schema_version` in both the JSONL record and its
+canonical hash. The policy digest is computed from strictly decoded,
+defaulted policy objects; YAML comments, whitespace, filenames, and file order
+do not change it.
+
+Records written before 0.8.0 have no `schema_version` and continue to select
+the frozen v1 encoder automatically. `tg verify` supports v1-only, v2-only,
+and mixed v1→v2 chains. There is no conversion step or build flag, and old
+records must never be rewritten merely to add the new fields.
 
 To upgrade:
 
@@ -370,6 +377,11 @@ To upgrade:
    0.6.0 becomes an allow. Fix every lint error first.
 3. Stop the old proxy.
 4. Start the new proxy. It resumes the chain from the same tail.
+
+After the first post-upgrade decision, inspect that record in isolation: its
+`engine_version` identifies the binary, `policy_set_hash` identifies the
+normalized set used for evaluation, and `schema_version` is `v2`. Removing or
+changing any of these values makes `tg verify` fail at that record.
 
 Migration steps for 0.6.0 → 0.7.0: remove any `deep_evaluation` block
 (move semantic checks to a rule with an `llm_classify` condition), split
