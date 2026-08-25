@@ -362,7 +362,7 @@ echo $?
 
 p99 ~14µs on an AMD Ryzen 7 7700 — about three orders of magnitude
 below a 25 ms budget. This is a point measurement, not a promise; the
-published proxy floor and its methodology are in
+nightly same-runner proxy regression gate and its methodology are in
 [docs/performance.md](docs/performance.md).
 
 **6. See the audit chain do its job:**

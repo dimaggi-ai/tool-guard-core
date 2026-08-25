@@ -1,23 +1,15 @@
 name: Nightly stress
 
 # Runs the load/overload/audit-chain suite (cmd/stress-test) with a longer
-# fuzz budget than the 30s/target PR gate in ci.yml, asserts a published
-# throughput/latency floor, and enforces the pathological-SQL duration ceiling.
+# fuzz budget than the 30s/target PR gate in ci.yml, compares candidate
+# throughput with the latest release on the same runner, and enforces the
+# pathological-SQL duration ceiling.
 #
 # NOT run on every PR: GitHub-hosted runners have noisy, shared-tenant
-# performance (confirmed locally — the same run varied from ~10k to ~26k
-# req/s at concurrency=50 depending on machine load). Gating every PR on
-# that noise would produce flaky failures unrelated to the actual code
-# change. Nightly on a fixed schedule instead — real regressions still get
-# caught within a day, false failures don't block anyone's PR.
-#
-# The floor values below are deliberately conservative relative to
-# real measurements (~10k-26k req/s, ~4-24ms p99 at concurrency=50 on a
-# 16-thread desktop) — wide enough margin to absorb a slower/shared CI
-# runner without false-failing, tight enough to still catch a genuine
-# throughput collapse (e.g. the audit-mutex contention point becoming
-# pathological, or a regression that serializes something that shouldn't
-# be).
+# performance. Candidate and latest-release proxies run concurrently so
+# host-wide throttling affects both measurements. A candidate at least 10%
+# slower than the release baseline fails. This is a regression signal, not a
+# capacity claim; docs/performance.md records the method and limitations.
 
 on:
   schedule:
@@ -33,6 +25,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25.13"
@@ -44,6 +38,21 @@ jobs:
           go build -o bin/tg ./cmd/tg
           go build -o bin/tg-proxy ./cmd/tg-proxy
           go build -o bin/stress-test ./cmd/stress-test
+
+      - name: Build latest release baseline
+        run: |
+          baseline_ref="$(git describe --tags --abbrev=0)"
+          baseline_dir="${RUNNER_TEMP}/tool-guard-baseline"
+          git worktree add --detach "${baseline_dir}" "${baseline_ref}"
+          (
+            cd "${baseline_dir}"
+            go build -o "${RUNNER_TEMP}/baseline-tg-proxy" ./cmd/tg-proxy
+          )
+          {
+            echo "BASELINE_REF=${baseline_ref}"
+            echo "BASELINE_DIR=${baseline_dir}"
+          } >> "${GITHUB_ENV}"
+          echo "baseline_ref=${baseline_ref}"
 
       - name: Record performance runner
         run: |
@@ -57,39 +66,52 @@ jobs:
           -run '^TestPerformance_SQLClassifyPathologicalInput$'
           -count=1 -timeout=3m ./pkg/engine/
 
-      - name: Start tg-proxy
+      - name: Start candidate and baseline tg-proxy
         run: |
           mkdir -p /tmp/nightly-stress
           ./bin/tg-proxy \
             -listen :9090 \
             -policy-dir ./policies \
             -audit-log /tmp/nightly-stress/decisions.jsonl \
-            > /tmp/nightly-stress/proxy.log 2>&1 &
-          echo $! > /tmp/nightly-stress/proxy.pid
+            > /tmp/nightly-stress/candidate-proxy.log 2>&1 &
+          echo $! > /tmp/nightly-stress/candidate-proxy.pid
+          "${RUNNER_TEMP}/baseline-tg-proxy" \
+            -listen :9091 \
+            -policy-dir "${BASELINE_DIR}/policies" \
+            -audit-log /tmp/nightly-stress/baseline-decisions.jsonl \
+            > /tmp/nightly-stress/baseline-proxy.log 2>&1 &
+          echo $! > /tmp/nightly-stress/baseline-proxy.pid
           sleep 1
 
-      - name: Load + overload + published floor + audit-chain integrity
+      - name: Load + relative regression + overload + audit-chain integrity
         run: |
+          echo "candidate=${GITHUB_SHA} baseline=${BASELINE_REF}"
           ./bin/stress-test \
             -target http://127.0.0.1:9090 \
             -concurrency 1,10,50,200 \
             -overload 2000 \
             -tg-bin ./bin/tg \
             -audit-log /tmp/nightly-stress/decisions.jsonl \
-            -floor-concurrency 50 \
-            -floor-min-rps 2000 \
-            -floor-max-p99 200ms
+            -baseline-target http://127.0.0.1:9091 \
+            -compare-concurrency 50 \
+            -compare-duration 15s \
+            -max-regression-pct 10
 
-      - name: Stop tg-proxy
+      - name: Stop candidate and baseline tg-proxy
         if: always()
-        run: kill "$(cat /tmp/nightly-stress/proxy.pid)" 2>/dev/null || true
+        run: |
+          for pid_file in /tmp/nightly-stress/candidate-proxy.pid /tmp/nightly-stress/baseline-proxy.pid; do
+            if test -f "${pid_file}"; then
+              kill "$(cat "${pid_file}")" 2>/dev/null || true
+            fi
+          done
 
-      - name: Upload proxy log on failure
+      - name: Upload proxy logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: nightly-stress-proxy-log
-          path: /tmp/nightly-stress/proxy.log
+          name: nightly-stress-proxy-logs
+          path: /tmp/nightly-stress/*.log
           retention-days: 14
 
       - name: Fuzz (2m per target)
