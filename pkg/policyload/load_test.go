@@ -3,6 +3,7 @@ package policyload
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -94,7 +95,7 @@ func TestLoadRejectsEmptyOrCommentOnlyPolicy(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, err := Load(path)
-			assertErrorContains(t, err, path)
+			assertErrorContains(t, err, strconv.Quote(path))
 			assertErrorContains(t, err, "empty or comment-only")
 		})
 	}
