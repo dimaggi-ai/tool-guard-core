@@ -9,5 +9,5 @@
     "parameters": {"amount": 50},
     "context": {"verified": {"agent_velocity": {"monetary_sum_1h": 5200, "monetary_count_24h": 10}}}
   },
-  "expect": {"decision": "denied", "action_taken": "denied"}
+  "expect": {"decision": "denied", "action_taken": "denied", "matched_rule_ids": ["rule-refund-1h-sum"]}
 }

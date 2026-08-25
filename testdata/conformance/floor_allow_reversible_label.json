@@ -1,0 +1,19 @@
+{
+  "name": "floor_allow_reversible_label",
+  "description": "Adding a label is explicitly classified reversible and matches the floor's allow rule.",
+  "policy_file": "../../policies/irreversibility_floor.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "add_label",
+    "parameters": {
+      "label": "reviewed"
+    }
+  },
+  "expect": {
+    "decision": "allowed",
+    "action_taken": "allowed",
+    "matched_rule_ids": [
+      "rule-reversible-allow"
+    ]
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "floor_escalate_physical_actuation",
+  "description": "Physical actuation is irreversible in the classifier and must pause for human review before execution.",
+  "policy_file": "../../policies/irreversibility_floor.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "actuate_valve",
+    "tool_group": "physical_control",
+    "parameters": {
+      "valve_id": "valve-7",
+      "position": "open"
+    }
+  },
+  "expect": {
+    "decision": "escalated",
+    "action_taken": "escalated",
+    "matched_rule_ids": [
+      "rule-irreversible-escalate"
+    ]
+  }
+}

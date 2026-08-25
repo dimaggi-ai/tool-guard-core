@@ -1,0 +1,20 @@
+{
+  "name": "shadow_policy_under_shadow_callsite",
+  "description": "A shadow policy records the denied decision but allows the action when the call-site default is also shadow.",
+  "policy_file": "fixtures/refund_cap_shadow_corpus.yaml",
+  "mode": "shadow",
+  "envelope": {
+    "tool_name": "issue_refund",
+    "tool_group": "monetary_outflow",
+    "parameters": {
+      "amount": 750
+    }
+  },
+  "expect": {
+    "decision": "denied",
+    "action_taken": "allowed_shadow",
+    "matched_rule_ids": [
+      "shadow-amount-cap"
+    ]
+  }
+}

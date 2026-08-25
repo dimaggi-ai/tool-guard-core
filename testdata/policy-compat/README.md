@@ -30,10 +30,15 @@ scripts/snapshot-policies.sh vX.Y.Z HEAD
 To backfill a snapshot for an already-existing tag, omit the ref:
 `scripts/snapshot-policies.sh vX.Y.Z` reads from the tag itself.
 
-`TestPolicyCompat` picks up any new `<version>/` directory automatically
-— no test code changes needed. A case is skipped for a version whose
-snapshot doesn't contain that policy's filename yet (the policy didn't
-exist at that tag) rather than failing.
+`TestPolicyCompat` picks up any new `<version>/` directory automatically — no
+test code changes needed. A case is skipped for a version whose snapshot does
+not contain its shipped policy filename yet (the policy did not exist at that
+tag). Fixture-only cases are outside snapshot compatibility. In multi-policy
+cases, shipped policies are replaced by their versioned snapshots while local
+fixtures are retained. When a new case depends on policy content added after
+earlier snapshots, set `policy_compat_since: "vX.Y.Z"` in the case; this
+prevents a historical policy from being judged against behavior it never
+claimed, while current conformance still runs unconditionally.
 
 Forgetting the snapshot is no longer silent: `TestPolicyCompatCoverage`
 (same file) fails when any release tag from v0.2.0 on has no snapshot

@@ -7,5 +7,5 @@
     "tool_name": "http",
     "parameters": {"url": "http://169.254.169.254/latest/meta-data/iam/security-credentials/"}
   },
-  "expect": {"decision": "denied", "action_taken": "denied"}
+  "expect": {"decision": "denied", "action_taken": "denied", "matched_rule_ids": ["rule-egress"]}
 }

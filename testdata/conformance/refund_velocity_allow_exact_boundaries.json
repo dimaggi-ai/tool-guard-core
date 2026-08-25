@@ -1,0 +1,25 @@
+{
+  "name": "refund_velocity_allow_exact_boundaries",
+  "description": "Exactly $5,000 in one hour and exactly 100 refunds in 24 hours remain allowed because both rules are strict greater-than checks.",
+  "policy_file": "../../policies/refund_velocity_cap.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "issue_refund",
+    "tool_group": "monetary_outflow",
+    "parameters": {
+      "amount": 10
+    },
+    "context": {
+      "verified": {
+        "agent_velocity": {
+          "monetary_sum_1h": 5000,
+          "monetary_count_24h": 100
+        }
+      }
+    }
+  },
+  "expect": {
+    "decision": "allowed",
+    "action_taken": "allowed"
+  }
+}

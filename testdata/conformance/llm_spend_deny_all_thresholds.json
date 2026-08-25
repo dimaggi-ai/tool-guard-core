@@ -1,0 +1,31 @@
+{
+  "name": "llm_spend_deny_all_thresholds",
+  "description": "A daily hard-cap breach wins when all three spend rules match, without dropping lower-severity evidence.",
+  "policy_file": "../../policies/llm_token_spend_guard.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "llm_call",
+    "tool_group": "llm_usage",
+    "parameters": {
+      "prompt": "summarize"
+    },
+    "context": {
+      "verified": {
+        "agent_velocity": {
+          "llm_cost_usd_1h": 51,
+          "llm_cost_usd_24h": 301,
+          "token_count_24h": 10000001
+        }
+      }
+    }
+  },
+  "expect": {
+    "decision": "denied",
+    "action_taken": "denied",
+    "matched_rule_ids": [
+      "rule-llm-cost-hourly",
+      "rule-llm-cost-daily",
+      "rule-llm-tokens-daily"
+    ]
+  }
+}
