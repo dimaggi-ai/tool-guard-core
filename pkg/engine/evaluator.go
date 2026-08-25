@@ -107,6 +107,18 @@ func (e *Evaluator) Evaluate(envelope *domain.ActionEnvelope, policies []domain.
 
 	// Step 8: Find primary citation and suggested response
 	primaryCitation := FindPrimaryCitation(allResults)
+	// Keep aggregate decision provenance separate from the rules that control
+	// execution. A higher-severity shadow rule can own Decision while a lower-
+	// severity enforcement rule owns ActionTaken; operational consumers must
+	// explain the latter when asking a human to approve or blocking a call.
+	appliedResults := enforcedResults
+	if enforcedDecision == domain.DecisionAllowed &&
+		(actionTaken == domain.ActionDenied || actionTaken == domain.ActionEscalated || actionTaken == domain.ActionFlagged) {
+		// Covers shadow flags (which are applied telemetry) and the public Go
+		// API's fail-closed handling of an invalid call-site mode.
+		appliedResults = matchedRuleResults(allResults)
+	}
+	appliedPrimaryCitation := FindPrimaryCitation(appliedResults)
 	suggestedResponse := ""
 	if decision == domain.DecisionDenied {
 		// Collect all rules from matched policies for suggested response lookup
@@ -125,18 +137,30 @@ func (e *Evaluator) Evaluate(envelope *domain.ActionEnvelope, policies []domain.
 	decisionReason := generateDecisionReason(decision, actionDecision, allResults, effectiveMode)
 
 	return &domain.EvaluationResult{
-		Decision:          decision,
-		ActionTaken:       actionTaken,
-		DecisionReason:    decisionReason,
-		EffectiveMode:     effectiveMode,
-		PoliciesMatched:   len(matched),
-		RulesEvaluated:    len(allResults),
-		RulesTriggered:    rulesTriggered,
-		RuleResults:       allResults,
-		PrimaryCitation:   primaryCitation,
-		IsNearMiss:        isNearMiss,
-		SuggestedResponse: suggestedResponse,
+		Decision:               decision,
+		ActionTaken:            actionTaken,
+		DecisionReason:         decisionReason,
+		EffectiveMode:          effectiveMode,
+		PoliciesMatched:        len(matched),
+		RulesEvaluated:         len(allResults),
+		RulesTriggered:         rulesTriggered,
+		RuleResults:            allResults,
+		AppliedRuleResults:     appliedResults,
+		PrimaryCitation:        primaryCitation,
+		AppliedPrimaryCitation: appliedPrimaryCitation,
+		IsNearMiss:             isNearMiss,
+		SuggestedResponse:      suggestedResponse,
 	}
+}
+
+func matchedRuleResults(results []domain.RuleResult) []domain.RuleResult {
+	matched := make([]domain.RuleResult, 0, len(results))
+	for _, result := range results {
+		if result.Matched {
+			matched = append(matched, result)
+		}
+	}
+	return matched
 }
 
 // evaluateRule evaluates a single rule against the flattened field map.

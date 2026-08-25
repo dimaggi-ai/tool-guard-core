@@ -354,7 +354,15 @@ components:
         rule_results:
           type: array
           items: {$ref: "#/components/schemas/RuleResult"}
+        applied_rule_results:
+          type: array
+          description: Matched rules that contributed to the action actually applied; excludes shadow-only gating telemetry when enforcement controls the action.
+          items: {$ref: "#/components/schemas/RuleResult"}
         primary_citation: {$ref: "#/components/schemas/Citation"}
+        applied_primary_citation:
+          allOf:
+            - $ref: "#/components/schemas/Citation"
+          description: Citation for the rule that controls action_taken; may differ from primary_citation when a stricter shadow rule owns the raw decision.
         is_near_miss: {type: boolean}
         suggested_response: {type: string}
     EvaluationResult:

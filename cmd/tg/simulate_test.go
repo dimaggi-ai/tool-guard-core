@@ -39,6 +39,34 @@ func writeTemp(t *testing.T, name, content string) string {
 	return p
 }
 
+func captureSimulateOutput(t *testing.T, run func() int) (int, []byte) {
+	t.Helper()
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	type readResult struct {
+		out []byte
+		err error
+	}
+	done := make(chan readResult, 1)
+	go func() {
+		out, readErr := io.ReadAll(r)
+		done <- readResult{out: out, err: readErr}
+	}()
+	code := run()
+	_ = w.Close()
+	os.Stdout = oldStdout
+	read := <-done
+	_ = r.Close()
+	if read.err != nil {
+		t.Fatal(read.err)
+	}
+	return code, read.out
+}
+
 func TestSimulate_CountsDecisionsAndRuleFires(t *testing.T) {
 	pol := writeTemp(t, "pol.yaml", simPolicy)
 	calls := writeTemp(t, "calls.jsonl", simCalls)
@@ -66,20 +94,9 @@ func TestSimulate_ShadowDeniesAreReportedButDoNotFailAppliedActionGate(t *testin
 	pol := writeTemp(t, "shadow.yaml", shadowPolicy)
 	calls := writeTemp(t, "calls.jsonl", simCalls)
 
-	oldStdout := os.Stdout
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	os.Stdout = w
-	code := cmdSimulate([]string{"-policy", pol, "-calls", calls, "-json", "-fail-on-deny"})
-	_ = w.Close()
-	os.Stdout = oldStdout
-	out, readErr := io.ReadAll(r)
-	_ = r.Close()
-	if readErr != nil {
-		t.Fatal(readErr)
-	}
+	code, out := captureSimulateOutput(t, func() int {
+		return cmdSimulate([]string{"-policy", pol, "-calls", calls, "-json", "-fail-on-deny"})
+	})
 
 	if code != 0 {
 		t.Fatalf("shadow-only simulation must not fail the applied-deny gate; exit = %d, output=%s", code, out)
@@ -96,6 +113,35 @@ func TestSimulate_ShadowDeniesAreReportedButDoNotFailAppliedActionGate(t *testin
 	}
 	if summary.Actions["allowed_shadow"] != 2 || summary.Actions["denied"] != 0 {
 		t.Errorf("applied actions = %#v, want allowed_shadow=2 and denied=0", summary.Actions)
+	}
+}
+
+func TestSimulate_TableReportsAppliedActions(t *testing.T) {
+	shadowPolicy := strings.Replace(simPolicy, "mode: enforcement", "mode: shadow", 1)
+	pol := writeTemp(t, "shadow.yaml", shadowPolicy)
+	calls := writeTemp(t, "calls.jsonl", simCalls)
+	code, out := captureSimulateOutput(t, func() int {
+		return cmdSimulate([]string{"-policy", pol, "-calls", calls})
+	})
+	if code != 0 {
+		t.Fatalf("table simulation exit = %d, output=%s", code, out)
+	}
+	text := string(out)
+	if !strings.Contains(text, "applied actions (what would execute):") {
+		t.Fatalf("table output missing applied-actions section:\n%s", text)
+	}
+	found := false
+	for _, line := range strings.Split(text, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[0] == "allowed_shadow" {
+			found = true
+			if fields[1] != "2" {
+				t.Errorf("allowed_shadow count = %s, want 2; line=%q", fields[1], line)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("table output missing allowed_shadow count:\n%s", text)
 	}
 }
 

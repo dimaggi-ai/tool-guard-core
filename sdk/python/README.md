@@ -225,8 +225,10 @@ The SDK mirrors the Go `pkg/domain` JSON contract exactly.  Key field names:
 **EvaluationResult** (what the engine returns):
 `decision` (`"allowed"` | `"denied"` | `"escalated"` | `"flagged"`),
 `action_taken`, `decision_reason`, `effective_mode`, `policies_matched`,
-`rules_evaluated`, `rules_triggered`, `rule_results`, `primary_citation`,
-`is_near_miss`, `suggested_response`.
+`rules_evaluated`, `rules_triggered`, `rule_results`, `applied_rule_results`,
+`primary_citation`, `applied_primary_citation`, `is_near_miss`,
+`suggested_response`. The applied provenance fields explain `action_taken`;
+the aggregate fields can point to stricter shadow-only telemetry.
 
 ---
 

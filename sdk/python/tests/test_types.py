@@ -284,6 +284,25 @@ class TestEvaluationResult:
         assert "primary_citation" in d
         assert d["primary_citation"]["document_id"] == "d1"
 
+    def test_applied_provenance_field_names(self):
+        applied_rule = RuleResult(
+            rule_id="enforce-r1",
+            rule_name="Enforced escalation",
+            policy_id="enforce-pol",
+            matched=True,
+            effect="escalate",
+            citation=Citation(document_id="enforce-doc", excerpt="Needs approval"),
+        )
+        result = EvaluationResult(
+            applied_rule_results=[applied_rule],
+            applied_primary_citation=Citation(
+                document_id="enforce-doc", excerpt="Needs approval"
+            ),
+        )
+        d = result.to_dict()
+        assert d["applied_rule_results"][0]["policy_id"] == "enforce-pol"
+        assert d["applied_primary_citation"]["document_id"] == "enforce-doc"
+
     def test_suggested_response_field_name(self):
         result = EvaluationResult(suggested_response="Please reduce the amount.")
         d = result.to_dict()
@@ -309,7 +328,18 @@ class TestEvaluationResult:
                     "citation": {"document_id": "sop-001", "excerpt": "No refund >$500"},
                 }
             ],
+            "applied_rule_results": [
+                {
+                    "rule_id": "rule-amount-cap",
+                    "rule_name": "Amount cap",
+                    "policy_id": "pol-refund",
+                    "matched": True,
+                    "effect": "deny",
+                    "citation": {"document_id": "sop-001", "excerpt": "No refund >$500"},
+                }
+            ],
             "primary_citation": {"document_id": "sop-001", "excerpt": "No refund >$500"},
+            "applied_primary_citation": {"document_id": "sop-001", "excerpt": "No refund >$500"},
             "is_near_miss": False,
         }
         result = EvaluationResult.from_dict(wire)
@@ -319,8 +349,12 @@ class TestEvaluationResult:
         assert result.rules_triggered == 1
         assert len(result.rule_results) == 1
         assert result.rule_results[0].rule_id == "rule-amount-cap"
+        assert len(result.applied_rule_results) == 1
+        assert result.applied_rule_results[0].policy_id == "pol-refund"
         assert result.primary_citation is not None
         assert result.primary_citation.document_id == "sop-001"
+        assert result.applied_primary_citation is not None
+        assert result.applied_primary_citation.document_id == "sop-001"
 
     def test_sample_envelope_go_contract(self):
         """

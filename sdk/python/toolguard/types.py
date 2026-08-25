@@ -557,8 +557,8 @@ class EvaluationResult:
 
     json field names: decision, action_taken, decision_reason, effective_mode,
                       policies_matched, rules_evaluated, rules_triggered,
-                      rule_results, primary_citation, is_near_miss,
-                      suggested_response
+                      rule_results, applied_rule_results, primary_citation,
+                      applied_primary_citation, is_near_miss, suggested_response
     """
     decision: str = Decision.ALLOWED          # "allowed"|"denied"|"escalated"|"flagged"
     action_taken: str = ActionTaken.ALLOWED   # "allowed"|"denied"|"escalated"|"flagged"|"allowed_shadow"
@@ -568,7 +568,9 @@ class EvaluationResult:
     rules_evaluated: int = 0
     rules_triggered: int = 0
     rule_results: List[RuleResult] = field(default_factory=list)
+    applied_rule_results: List[RuleResult] = field(default_factory=list)
     primary_citation: Optional[Citation] = None
+    applied_primary_citation: Optional[Citation] = None
     is_near_miss: bool = False
     suggested_response: str = ""
 
@@ -581,12 +583,15 @@ class EvaluationResult:
             "rules_evaluated": self.rules_evaluated,
             "rules_triggered": self.rules_triggered,
             "rule_results": [r.to_dict() for r in self.rule_results],
+            "applied_rule_results": [r.to_dict() for r in self.applied_rule_results],
             "is_near_miss": self.is_near_miss,
         }
         if self.decision_reason:
             d["decision_reason"] = self.decision_reason
         if self.primary_citation is not None:
             d["primary_citation"] = self.primary_citation.to_dict()
+        if self.applied_primary_citation is not None:
+            d["applied_primary_citation"] = self.applied_primary_citation.to_dict()
         if self.suggested_response:
             d["suggested_response"] = self.suggested_response
         return d
@@ -608,6 +613,7 @@ class EvaluationResult:
                 f"in response body: {d!r}"
             )
         pc = d.get("primary_citation")
+        applied_pc = d.get("applied_primary_citation")
         return cls(
             decision=d["decision"],
             action_taken=d["action_taken"],
@@ -617,7 +623,13 @@ class EvaluationResult:
             rules_evaluated=d.get("rules_evaluated", 0),
             rules_triggered=d.get("rules_triggered", 0),
             rule_results=[RuleResult.from_dict(r) for r in d.get("rule_results", [])],
+            applied_rule_results=[
+                RuleResult.from_dict(r) for r in d.get("applied_rule_results", [])
+            ],
             primary_citation=Citation.from_dict(pc) if pc else None,
+            applied_primary_citation=(
+                Citation.from_dict(applied_pc) if applied_pc else None
+            ),
             is_near_miss=d.get("is_near_miss", False),
             suggested_response=d.get("suggested_response", ""),
         )

@@ -55,9 +55,14 @@ type DecisionTrace struct {
 	RulesEvaluated  int          `json:"rules_evaluated"`
 	RulesTriggered  int          `json:"rules_triggered"`
 	RuleResults     []RuleResult `json:"rule_results"`
+	// AppliedRuleResults contains only matched rules that contributed to the
+	// action actually taken. It differs from RuleResults when shadow telemetry
+	// has a stricter raw decision than an enforcement policy.
+	AppliedRuleResults []RuleResult `json:"applied_rule_results,omitempty"`
 
-	// Primary citation (the most severe triggered rule's citation)
-	PrimaryCitation *Citation `json:"primary_citation,omitempty"`
+	// Aggregate-decision and applied-action citations can differ in mixed mode.
+	PrimaryCitation        *Citation `json:"primary_citation,omitempty"`
+	AppliedPrimaryCitation *Citation `json:"applied_primary_citation,omitempty"`
 
 	// Suggested response (persisted for audit trail)
 	SuggestedResponse string `json:"suggested_response,omitempty"`
@@ -160,15 +165,20 @@ type RuleResult struct {
 
 // EvaluationResult is the output of the policy engine.
 type EvaluationResult struct {
-	Decision          Decision     `json:"decision"`
-	ActionTaken       ActionTaken  `json:"action_taken"`
-	DecisionReason    string       `json:"decision_reason,omitempty"`
-	EffectiveMode     PolicyMode   `json:"effective_mode"`
-	PoliciesMatched   int          `json:"policies_matched"`
-	RulesEvaluated    int          `json:"rules_evaluated"`
-	RulesTriggered    int          `json:"rules_triggered"`
-	RuleResults       []RuleResult `json:"rule_results"`
-	PrimaryCitation   *Citation    `json:"primary_citation,omitempty"`
-	IsNearMiss        bool         `json:"is_near_miss"`
-	SuggestedResponse string       `json:"suggested_response,omitempty"`
+	Decision        Decision     `json:"decision"`
+	ActionTaken     ActionTaken  `json:"action_taken"`
+	DecisionReason  string       `json:"decision_reason,omitempty"`
+	EffectiveMode   PolicyMode   `json:"effective_mode"`
+	PoliciesMatched int          `json:"policies_matched"`
+	RulesEvaluated  int          `json:"rules_evaluated"`
+	RulesTriggered  int          `json:"rules_triggered"`
+	RuleResults     []RuleResult `json:"rule_results"`
+	// AppliedRuleResults and AppliedPrimaryCitation explain the action that
+	// controls execution. PrimaryCitation explains the aggregate raw Decision,
+	// which can be stricter because of shadow telemetry.
+	AppliedRuleResults     []RuleResult `json:"applied_rule_results,omitempty"`
+	PrimaryCitation        *Citation    `json:"primary_citation,omitempty"`
+	AppliedPrimaryCitation *Citation    `json:"applied_primary_citation,omitempty"`
+	IsNearMiss             bool         `json:"is_near_miss"`
+	SuggestedResponse      string       `json:"suggested_response,omitempty"`
 }

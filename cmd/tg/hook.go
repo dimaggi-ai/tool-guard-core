@@ -237,10 +237,16 @@ func evalHook(policyDir, policyFile string, env *domain.ActionEnvelope, mode dom
 	}
 }
 
-// hookReason prefers the primary citation excerpt (the "why" an auditor
-// wants) and falls back to the engine's decision reason.
+// hookReason explains the applied action, not a stricter shadow-only raw
+// decision. In a mixed set, AppliedPrimaryCitation names the rule that really
+// blocked or escalated the call; PrimaryCitation may belong to telemetry.
 func hookReason(r *domain.EvaluationResult) string {
-	if r.PrimaryCitation != nil && r.PrimaryCitation.Excerpt != "" {
+	if r.AppliedPrimaryCitation != nil && r.AppliedPrimaryCitation.Excerpt != "" {
+		return r.AppliedPrimaryCitation.Excerpt
+	}
+	if ((r.ActionTaken == domain.ActionDenied && r.Decision == domain.DecisionDenied) ||
+		(r.ActionTaken == domain.ActionEscalated && r.Decision == domain.DecisionEscalated)) &&
+		r.PrimaryCitation != nil && r.PrimaryCitation.Excerpt != "" {
 		return r.PrimaryCitation.Excerpt
 	}
 	return r.DecisionReason

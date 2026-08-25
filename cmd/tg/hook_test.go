@@ -170,6 +170,37 @@ func TestHook_ShadowMode_ObservesDoesNotEnforce(t *testing.T) {
 	}
 }
 
+func TestHook_MixedModeReasonUsesAppliedEnforcementCitation(t *testing.T) {
+	policyDir := t.TempDir()
+	shadow := strings.Replace(hookDenyPolicy, "policy_id: hook-deny-test", "policy_id: hook-shadow-deny", 1)
+	shadow = strings.Replace(shadow, "version: 1", "version: 1\npriority: 1", 1)
+	shadow = strings.Replace(shadow, "mode: enforcement", "mode: shadow", 1)
+	shadow = strings.Replace(shadow, `excerpt: "no rm"`, `excerpt: "shadow telemetry"`, 1)
+	enforced := strings.Replace(hookAskPolicy, "policy_id: hook-ask-test", "policy_id: hook-enforced-escalate", 1)
+	enforced = strings.Replace(enforced, "version: 1", "version: 1\npriority: 2", 1)
+	enforced = strings.Replace(enforced, "value: 'git'", "value: 'rm'", 1)
+	enforced = strings.Replace(enforced, `excerpt: "git needs review"`, `excerpt: "enforcement approval"`, 1)
+	if err := os.WriteFile(filepath.Join(policyDir, "00-shadow.yaml"), []byte(shadow), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(policyDir, "10-enforcement.yaml"), []byte(enforced), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stdin := `{"tool_name":"bash","tool_input":{"command":"rm -rf /tmp/x"}}`
+	out, code := runHookStr(t, stdin, "-policy-dir", policyDir)
+	if code != 0 {
+		t.Fatalf("hook must always exit 0, got %d", code)
+	}
+	decision, reason := hookDecisionReason(t, out)
+	if decision != "ask" {
+		t.Fatalf("permission decision = %q, want ask; output=%s", decision, out)
+	}
+	if reason != "enforcement approval" {
+		t.Fatalf("permission reason = %q, want applied enforcement citation; output=%s", reason, out)
+	}
+}
+
 // ── B2: fail-open on malformed stdin ──────────────────────────────────────
 
 func TestHook_MalformedStdin_FailOpen(t *testing.T) {

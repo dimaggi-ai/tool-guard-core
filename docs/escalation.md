@@ -146,10 +146,11 @@ don't re-evaluate. Use a fresh `envelope_id` for every new tool call.
 
 ## Combining with deny policies
 
-If a stricter policy (`effect: deny`) and the escalation policy
-(`effect: escalate`) both match the same envelope, the proxy returns
-the strictest result - deny wins. The escalation rule only takes
-effect when no deny rule fires for the same call.
+Among enforcement policies, the strictest matching effect controls the action:
+an enforcement deny beats an enforcement escalation. Shadow policies remain
+telemetry. A shadow deny can therefore make the raw `decision` be `denied`
+while an enforcement escalation makes `action_taken` be `escalated`; the
+pending request and its timeout come only from the enforcement escalation.
 
 Scope escalation policies to a specific tool name, agent_id, or
 tool_group (the fields `scope` supports) so they don't collide with

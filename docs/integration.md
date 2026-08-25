@@ -41,7 +41,7 @@ Available flags:
 | `-listen` | `:9090` | host:port to bind |
 | `-policy-dir` | `./policies` | directory of `*.yaml` to load on startup and on SIGHUP |
 | `-audit-log` | `./decisions.jsonl` | path to append the SHA-256 hash-chained JSONL |
-| `-default-mode` | `enforcement` | `shadow` for observe-only |
+| `-default-mode` | `enforcement` | Call-site default. `shadow` is observe-only only for policies whose YAML mode is also `shadow`; enforcement policies still block. |
 | `-fail-closed` | `true` | return 503 from `/readyz` and from `/evaluate` when zero policies are loaded |
 
 Endpoints:
@@ -82,9 +82,16 @@ Response (`HTTP 200`):
   "rules_evaluated": 3,
   "rules_triggered": 2,
   "rule_results": [{ "...": "..." }],
-  "primary_citation": { "...": "..." }
+  "applied_rule_results": [{ "...": "..." }],
+  "primary_citation": { "...": "..." },
+  "applied_primary_citation": { "...": "..." }
 }
 ```
+
+`primary_citation` explains the aggregate raw decision. Use
+`applied_primary_citation` and `applied_rule_results` when explaining the
+action actually taken; these can differ when stricter shadow telemetry is
+co-loaded with an enforcement policy.
 
 In your agent code: call the tool when `action_taken` is `allowed`
 (enforcement), `allowed_shadow` (shadow), or `flagged`. A `flag` effect

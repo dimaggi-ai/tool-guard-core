@@ -12,8 +12,8 @@
 //
 //	eval := engine.NewEvaluator()
 //	result := eval.Evaluate(envelope, policies, domain.PolicyModeEnforcement)
-//	if result.Decision == domain.DecisionDenied {
-//	    // block the tool call; record result.PrimaryCitation in your audit
+//	if result.ActionTaken == domain.ActionDenied {
+//	    // block the tool call; record result.AppliedPrimaryCitation in your audit
 //	}
 //
 // Use [github.com/dimaggi-ai/tool-guard-core/pkg/audit] to hash-chain the

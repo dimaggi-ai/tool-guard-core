@@ -57,21 +57,22 @@ func validateJSONDepth(body []byte, maxDepth int) error {
 	return nil
 }
 
-// timeoutFromMatchedRules walks the rules that fired (and the policies
-// they came from) looking for an EffectConfig.TimeoutMinutes. First
-// non-zero value wins. Returns 0 if none set so callers can fall back
-// to the proxy's default.
+// timeoutFromMatchedRules selects timeout configuration only from matched
+// enforcement-mode escalation rules. RuleResults are already ordered by
+// policy priority, so the first qualifying non-zero value wins
+// deterministically. Shadow rules are telemetry and must not mutate pending
+// enforcement state. Returns 0 if none set so callers use the proxy default.
 func timeoutFromMatchedRules(result *domain.EvaluationResult, policies []domain.Policy) int {
 	for _, rr := range result.RuleResults {
-		if !rr.Matched {
+		if !rr.Matched || rr.Effect != domain.EffectEscalate {
 			continue
 		}
 		for _, p := range policies {
-			if p.PolicyID != rr.PolicyID {
+			if p.PolicyID != rr.PolicyID || p.Version != rr.PolicyVersion || p.Mode == domain.PolicyModeShadow {
 				continue
 			}
 			for _, rule := range p.Rules {
-				if rule.RuleID == rr.RuleID && rule.EffectConfig.TimeoutMinutes > 0 {
+				if rule.RuleID == rr.RuleID && rule.Effect == domain.EffectEscalate && rule.EffectConfig.TimeoutMinutes > 0 {
 					return rule.EffectConfig.TimeoutMinutes
 				}
 			}

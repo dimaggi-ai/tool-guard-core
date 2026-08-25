@@ -87,6 +87,12 @@ func TestEvaluationSchemasAllowOnlyDeclaredComposedProperties(t *testing.T) {
 	if _, closedTooEarly := base["additionalProperties"]; closedTooEarly {
 		t.Fatal("EvaluationResultFields must remain composable; close only the concrete schemas")
 	}
+	properties := asMap(t, base["properties"], "components.schemas.EvaluationResultFields.properties")
+	for _, field := range []string{"applied_rule_results", "applied_primary_citation"} {
+		if _, ok := properties[field]; !ok {
+			t.Errorf("EvaluationResultFields missing applied-action provenance field %q", field)
+		}
+	}
 }
 
 func walkRefs(t *testing.T, value any, components map[string]any) {

@@ -241,7 +241,7 @@ Key flags:
 | `-fail-closed` | Deny on any internal error (tooling glitch, bad policy load) |
 | `-fail-closed-tools bash,write,edit,notebookedit` | Deny only these tools on error; others fail open |
 | `-unknown-tools-deny` | Deny any tool_name not declared in `scope.tool_names` of a loaded enforcement policy — closes the gap where a new tool the agent starts calling matches no policy and is silently ungoverned |
-| `-mode shadow\|enforcement` | Shadow mode records decisions without blocking (default: enforcement) |
+| `-mode shadow\|enforcement` | Call-site default (default: enforcement). Enforcement-mode policies still block under `-mode shadow`; observe-only staging requires `mode: shadow` in policy YAML. |
 
 `-protect-self` is the key insight: any deny rule you write inside the
 policy can be edited away by the agent. `-protect-self` runs unconditionally
