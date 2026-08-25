@@ -22,11 +22,13 @@ if [[ ! -s "$baseline" ]]; then
 fi
 
 report="$(mktemp "${TMPDIR:-/tmp}/toolguard-apidiff.XXXXXX")"
-trap 'rm -f "$report"' EXIT
+diagnostics="$(mktemp "${TMPDIR:-/tmp}/toolguard-apidiff-stderr.XXXXXX")"
+trap 'rm -f "$report" "$diagnostics"' EXIT
 
-if ! go run "golang.org/x/exp/cmd/apidiff@${apidiff_version}" -m "$baseline" "$module" >"$report" 2>&1; then
-  cat "$report" >&2
-  exit 1
+if ! go run "golang.org/x/exp/cmd/apidiff@${apidiff_version}" -m "$baseline" "$module" >"$report" 2>"$diagnostics"; then
+	cat "$diagnostics" >&2
+	cat "$report" >&2
+	exit 1
 fi
 
 if [[ -s "$report" ]]; then
