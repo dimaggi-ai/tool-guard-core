@@ -123,6 +123,12 @@ jobs:
           # that proves SDK decisions match the real engine, not a mock.
           TG_CONTRACT_REQUIRED: "1"
         run: make sdk-test
+      - name: Build and validate Python distribution
+        run: |
+          python -m pip install --disable-pip-version-check build twine
+          python -m build --outdir dist/python sdk/python
+          python -m twine check dist/python/*
+          python scripts/verify-python-dist.py dist/python
 
   govulncheck:
     name: govulncheck

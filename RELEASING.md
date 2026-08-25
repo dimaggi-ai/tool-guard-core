@@ -72,6 +72,13 @@ guard catching it after the fact — do it right the first time.
   earlier this session."
 - No `v X.Y.Z` tag already exists locally or on `origin`
   (`git tag --list vX.Y.Z`).
+- The Python distributions build cleanly and derive the same version from the
+  tag: `python -m build --outdir dist/python sdk/python`, then
+  `python scripts/verify-python-dist.py dist/python --expected-version X.Y.Z`.
+- PyPI trusted publishing is configured for distribution `toolguard-core`,
+  repository `dimaggi-ai/tool-guard-core`, workflow `release.yml`, and GitHub
+  environment `pypi`. This is a one-time maintainer-side PyPI configuration;
+  the workflow intentionally has no long-lived upload token.
 - Any change to policy evaluation, the policy loader, the SDK, audit
   integrity, or a release workflow in this release has been run through
   the internal review checklist in `docs/REVIEW-PROCESS.md` — as a
@@ -80,6 +87,14 @@ guard catching it after the fact — do it right the first time.
   as a top-level PR comment (or, for work landed without a PR, recorded
   in that document's findings log) — and log-worthy findings added to
   the findings log, not left only in PR comments.
+
+After the release workflow succeeds, verify the SDK from a clean environment:
+
+```bash
+python3 -m venv /tmp/toolguard-install-check
+/tmp/toolguard-install-check/bin/pip install "toolguard-core==X.Y.Z"
+/tmp/toolguard-install-check/bin/python -c "import toolguard"
+```
 
 ## Why this exists
 

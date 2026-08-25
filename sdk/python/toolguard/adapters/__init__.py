@@ -2,8 +2,8 @@
 toolguard.adapters — framework-specific adapters for Tool Guard governance.
 
 Each adapter lazily imports its framework dependency so the core package
-remains lightweight. Not yet published to PyPI — install from a clone of
-this repo (pip install "./tool-guard-core/sdk/python[extra]"), extras:
+remains lightweight. Install the PyPI distribution with
+``pip install "toolguard-core[extra]"``. Extras:
 
     [langchain]    # LangChain / LangGraph
     [autogen]      # Microsoft AutoGen

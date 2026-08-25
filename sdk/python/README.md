@@ -7,16 +7,20 @@ and HTTP proxy (`tg-proxy /evaluate`) — so you can run locally or in productio
 
 ## Install
 
-Not yet published to PyPI — install from source:
+The PyPI distribution is named `toolguard-core` because the unqualified
+`toolguard` project belongs to an unrelated package. The import remains
+`toolguard`. Tagged releases beginning with v0.8.0 install with:
 
 ```bash
-git clone https://github.com/dimaggi-ai/tool-guard-core
-pip install "./tool-guard-core/sdk/python"                    # core only (httpx)
-pip install "./tool-guard-core/sdk/python[langchain]"         # + langchain-core
-pip install "./tool-guard-core/sdk/python[autogen]"           # + pyautogen
-pip install "./tool-guard-core/sdk/python[openai]"            # + openai SDK
-pip install "./tool-guard-core/sdk/python[anthropic]"         # + anthropic SDK
+pip install "toolguard-core"                    # core only (httpx)
+pip install "toolguard-core[langchain]"         # + langchain-core
+pip install "toolguard-core[autogen]"           # + pyautogen
+pip install "toolguard-core[openai]"            # + openai SDK
+pip install "toolguard-core[anthropic]"         # + anthropic SDK
 ```
+
+Before v0.8.0, or when testing an unreleased checkout, use
+`pip install "./sdk/python[langchain]"` from the repository root.
 
 ## Quick start
 
