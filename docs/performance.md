@@ -1,7 +1,8 @@
 # Performance: what is measured, where, and what is promised
 
-Two different numbers get quoted around this project. They measure
-different things and only one of them is a published floor.
+Performance is checked at three layers. The engine microbenchmark is an
+informational point measurement; the proxy load floor and pathological-input
+ceiling are nightly assertions with their environments stated below.
 
 ## 1. Engine microbenchmark (informational, not a promise)
 
@@ -67,3 +68,34 @@ go run ./cmd/stress-test -target http://127.0.0.1:9090 \
 A floor for *your* hardware is the same command with your numbers: run
 it in your environment, pick conservative values the same way, and wire
 it into your own scheduler.
+
+## 3. Pathological SQL classifier ceiling (asserted nightly)
+
+The SQL classifier must process each bounded adversarial fixture in less than
+**2 seconds**. The set includes 200,000-column SELECT input, 20,000 nested
+parentheses, a 100,000-item IN list, comment and string floods, null bytes,
+unterminated strings, a 50,000-statement flood ending in DROP, and a modifying
+CTE buried behind 5,000 UNION branches.
+
+Measurement conditions:
+
+- **Runner:** GitHub-hosted `ubuntu-latest` x64, without the race detector.
+- **Toolchain:** Go 1.25.13.
+- **Evidence:** the nightly workflow prints `uname -a`, `lscpu`, and
+  `go version` before the assertion so each result records the actual shared
+  runner CPU and image environment.
+- **Frequency:** nightly and manual dispatch only. Shared macOS/Windows/Linux
+  PR runners do not enforce an absolute duration.
+
+Every PR still runs the same inputs as a correctness test: no panic, a bounded
+boolean result, and fail-closed decisions for the malicious cases. The ordinary
+test relies on the Go test/CI job timeout for a true hang, not a two-second
+machine-speed threshold.
+
+Reproduce the nightly ceiling:
+
+```bash
+go test -tags=performance \
+  -run '^TestPerformance_SQLClassifyPathologicalInput$' \
+  -count=1 -timeout=3m ./pkg/engine/
+```
