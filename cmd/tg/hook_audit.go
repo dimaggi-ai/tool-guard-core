@@ -18,9 +18,9 @@ import (
 // the decision (that was already made); the record is what's at risk, not the
 // enforcement. Returns an error only for the caller to optionally log.
 //
-// The tail hash is read by seeking to the END of the file (not scanning the
-// whole thing), so appending stays O(1) per call even as the log grows across
-// a long agent session.
+// The tail hash is read from a verifier-sized window at the END of the file
+// (not by scanning the whole thing), so appending stays O(1) per call even as
+// the log grows across a long agent session.
 func appendHookAudit(path string, env *domain.ActionEnvelope, result *domain.EvaluationResult, decision, reason string) error {
 	trace := domain.DecisionTrace{
 		CanonicalVersion: audit.CanonicalTraceVersion,
@@ -127,7 +127,9 @@ func hookDecisionToDomain(decision string) (domain.Decision, domain.ActionTaken)
 }
 
 // lastTraceHash returns the trace_hash of the last record in the chain, or
-// "" if the file is empty/absent. It reads only the tail of the file.
+// "" if the file is empty/absent. It reads at most one verifier-sized record
+// from the tail; an oversized record fails instead of silently starting a new
+// chain.
 func lastTraceHash(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -146,8 +148,11 @@ func lastTraceHash(path string) (string, error) {
 		return "", nil
 	}
 
-	const tail = 64 * 1024
-	start := fi.Size() - tail
+	// Include the record bytes, its terminating newline, and one preceding
+	// delimiter. That distinguishes a complete max-sized final record from a
+	// window that begins in the middle of an oversized record.
+	tailWindow := int64(audit.MaxTraceRecordBytes + 2)
+	start := fi.Size() - tailWindow
 	if start < 0 {
 		start = 0
 	}
@@ -159,28 +164,25 @@ func lastTraceHash(path string) (string, error) {
 		return "", err
 	}
 
-	// If we started mid-file, the first line is a partial record — drop
-	// everything up to and including the first newline. If the whole window
-	// is one giant partial line (a record larger than the tail), we can't
-	// recover a clean tail; fail rather than hash a partial.
-	if start > 0 {
-		if i := bytes.IndexByte(data, '\n'); i >= 0 {
-			data = data[i+1:]
-		} else {
-			return "", fmt.Errorf("audit tail: last record exceeds %d bytes", tail)
-		}
-	}
-
-	// Take the last non-empty complete line (the file always ends in '\n' after
-	// a successful append, so the final complete record is the last token).
+	// Appends always terminate records with '\n'. Trim blank line endings, then
+	// use the final remaining delimiter as the start boundary of the last
+	// record. If the bounded window starts mid-file and contains no such
+	// delimiter, the final record is too large for the verifier as well.
+	data = bytes.TrimRight(data, "\r\n")
 	var lastLine []byte
-	for _, ln := range bytes.Split(bytes.TrimRight(data, "\n"), []byte{'\n'}) {
-		if b := bytes.TrimSpace(ln); len(b) > 0 {
-			lastLine = b
+	if i := bytes.LastIndexByte(data, '\n'); i >= 0 {
+		lastLine = bytes.TrimSpace(data[i+1:])
+	} else {
+		if start > 0 {
+			return "", fmt.Errorf("audit tail: last record exceeds %d bytes", audit.MaxTraceRecordBytes)
 		}
+		lastLine = bytes.TrimSpace(data)
 	}
 	if len(lastLine) == 0 {
 		return "", nil
+	}
+	if len(lastLine) > audit.MaxTraceRecordBytes {
+		return "", fmt.Errorf("audit tail: last record exceeds %d bytes", audit.MaxTraceRecordBytes)
 	}
 	var rec struct {
 		TraceHash string `json:"trace_hash"`

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,7 +28,10 @@ func operationalPolicy(id string, mode domain.PolicyMode, effect domain.Effect, 
 			Name:       id + " rule",
 			Conditions: domain.Condition{Field: field, Operator: domain.OpGt, Value: value},
 			Effect:     effect,
-			Citation:   domain.Citation{DocumentID: "test", Excerpt: "operational shadow regression"},
+			EffectConfig: domain.EffectConfig{
+				SuggestedResponse: "policy guidance must not survive an operational deny",
+			},
+			Citation: domain.Citation{DocumentID: "test", Excerpt: "operational shadow regression"},
 		}},
 	}
 }
@@ -112,11 +116,15 @@ func readOperationalTraces(t *testing.T, p *proxy) []domain.DecisionTrace {
 	return traces
 }
 
-func assertNoAppliedProvenance(t *testing.T, result domain.EvaluationResult) {
+func assertOperationalDenyHasNoPolicyAttribution(t *testing.T, result domain.EvaluationResult) {
 	t.Helper()
 	if len(result.AppliedRuleResults) != 0 || result.AppliedPrimaryCitation != nil {
 		t.Errorf("operational deny retained applied policy provenance: rules=%#v citation=%#v",
 			result.AppliedRuleResults, result.AppliedPrimaryCitation)
+	}
+	if result.PrimaryCitation != nil || result.SuggestedResponse != "" {
+		t.Errorf("operational deny retained policy attribution: citation=%#v guidance=%q",
+			result.PrimaryCitation, result.SuggestedResponse)
 	}
 }
 
@@ -203,7 +211,7 @@ func TestProxy_AuditFailureFailsClosedForEveryProceedingNonAllowAction(t *testin
 			if result.ActionTaken != domain.ActionDenied {
 				t.Fatalf("audit failure action = %q, want denied", result.ActionTaken)
 			}
-			assertNoAppliedProvenance(t, result)
+			assertOperationalDenyHasNoPolicyAttribution(t, result)
 			if p.auditFailureCount.Load() != 1 || p.denyCount.Load() != 1 {
 				t.Errorf("audit failure counters: audit=%d deny=%d, want 1/1", p.auditFailureCount.Load(), p.denyCount.Load())
 			}
@@ -211,7 +219,7 @@ func TestProxy_AuditFailureFailsClosedForEveryProceedingNonAllowAction(t *testin
 	}
 }
 
-func TestProxy_EscalationRegistrationFailureClearsAppliedProvenance(t *testing.T) {
+func TestProxy_EscalationRegistrationFailureClearsPolicyAttribution(t *testing.T) {
 	tests := []struct {
 		name     string
 		firstID  string
@@ -238,7 +246,7 @@ func TestProxy_EscalationRegistrationFailureClearsAppliedProvenance(t *testing.T
 			if secondStatus != http.StatusOK || second.ActionTaken != domain.ActionDenied {
 				t.Fatalf("second status/action = %d/%q, want 200/denied", secondStatus, second.ActionTaken)
 			}
-			assertNoAppliedProvenance(t, second)
+			assertOperationalDenyHasNoPolicyAttribution(t, second)
 
 			traces := readOperationalTraces(t, p)
 			if len(traces) != 2 {
@@ -255,27 +263,38 @@ func TestProxy_EscalationRegistrationFailureClearsAppliedProvenance(t *testing.T
 				t.Errorf("audit operational deny retained applied provenance: rules=%#v citation=%#v",
 					last.AppliedRuleResults, last.AppliedPrimaryCitation)
 			}
+			if last.PrimaryCitation != nil || last.SuggestedResponse != "" {
+				t.Errorf("audit operational deny retained policy attribution: citation=%#v guidance=%q",
+					last.PrimaryCitation, last.SuggestedResponse)
+			}
 		})
 	}
 }
 
-func TestProxy_UnknownToolOperationalDenyClearsAppliedProvenance(t *testing.T) {
-	policy := operationalPolicy("group-flag", domain.PolicyModeEnforcement, domain.EffectFlag, "amount", 0)
-	policy.Scope.ToolGroups = []string{"monetary_outflow"}
+func TestProxy_UnknownToolOperationalDenyClearsShadowPolicyAttribution(t *testing.T) {
+	// The tool is declared, but only by a shadow policy. The enforcement-only
+	// unknown-tool boundary must deny it and explain that distinction.
+	policy := operationalPolicy("shadow-only", domain.PolicyModeShadow, domain.EffectDeny, "amount", 0)
 	p := newOperationalTestProxy(t, []domain.Policy{policy}, false)
 	p.unknownToolsDeny = true
 
-	status, result := evaluateOperationalTool(t, p, "unknown-tool", "issue_refund_v2", "monetary_outflow", 100)
+	status, result := evaluateOperationalTool(t, p, "unknown-tool", "issue_refund", "monetary_outflow", 100)
 	if status != http.StatusOK || result.ActionTaken != domain.ActionDenied {
 		t.Fatalf("status/action = %d/%q, want 200/denied", status, result.ActionTaken)
 	}
-	assertNoAppliedProvenance(t, result)
+	assertOperationalDenyHasNoPolicyAttribution(t, result)
 	traces := readOperationalTraces(t, p)
 	if len(traces) != 1 {
 		t.Fatalf("audit trace count = %d, want 1", len(traces))
 	}
 	if len(traces[0].AppliedRuleResults) != 0 || traces[0].AppliedPrimaryCitation != nil {
 		t.Fatalf("unknown-tool audit retained applied provenance: %#v", traces[0])
+	}
+	if traces[0].PrimaryCitation != nil || traces[0].SuggestedResponse != "" {
+		t.Fatalf("unknown-tool audit retained policy attribution: %#v", traces[0])
+	}
+	if !strings.Contains(result.DecisionReason, "loaded enforcement policy") {
+		t.Fatalf("unknown-tool reason does not explain enforcement-only lookup: %q", result.DecisionReason)
 	}
 }
 

@@ -147,7 +147,8 @@ Tool Guard simulate — 3 policies, 1000 calls
 
 It uses the exact same engine as `tg evaluate` and the proxy, and reports both
 the raw rule decision and the applied action. Add `-fail-on-deny` to exit 3
-when any applied action denies (gate a policy change in CI), `-json` for
+when any applied action is denied; in this CI-gating mode, malformed call
+records fail with exit 1 rather than being skipped. Use `-json` for
 machine-readable output, or `-calls -` to read from stdin. A shadow-only deny
 remains visible in the decision counts but does not fail the applied-action
 gate because the call would proceed.

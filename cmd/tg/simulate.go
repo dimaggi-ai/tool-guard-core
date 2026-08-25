@@ -30,7 +30,8 @@ import (
 //	0  simulation ran (default)
 //	3  simulation ran AND at least one applied action was denied, with -fail-on-deny set
 //	   (lets CI gate a policy change that would start denying real traffic)
-//	1  internal error   2  usage error
+//	1  internal/input error (including malformed calls under -fail-on-deny)
+//	2  usage error
 func cmdSimulate(args []string) int {
 	fs := flag.NewFlagSet("simulate", flag.ExitOnError)
 	policyDir := fs.String("policy-dir", "", "directory of *.yaml/*.yml policies to load (mutually exclusive with -policy)")
@@ -39,7 +40,7 @@ func cmdSimulate(args []string) int {
 	modeStr := fs.String("mode", "enforcement", "shadow | enforcement")
 	asJSON := fs.Bool("json", false, "emit the summary as JSON instead of a table")
 	examples := fs.Int("examples", 3, "show up to N example envelope_ids per non-allow decision (table mode)")
-	failOnDeny := fs.Bool("fail-on-deny", false, "exit 3 if any applied action is denied (shadow-only denies do not fail; useful in CI)")
+	failOnDeny := fs.Bool("fail-on-deny", false, "fail on malformed calls or exit 3 if any applied action is denied (shadow-only denies do not fail; useful in CI)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -141,8 +142,13 @@ func cmdSimulate(args []string) int {
 		sum.printTable(len(policies), *examples)
 	}
 
-	if *failOnDeny && sum.actions[domain.ActionDenied] > 0 {
-		return 3
+	if *failOnDeny {
+		if sum.malformed > 0 {
+			return 1
+		}
+		if sum.actions[domain.ActionDenied] > 0 {
+			return 3
+		}
 	}
 	return 0
 }

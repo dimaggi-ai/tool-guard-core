@@ -120,17 +120,14 @@ func (e *Evaluator) Evaluate(envelope *domain.ActionEnvelope, policies []domain.
 	}
 	appliedPrimaryCitation := FindPrimaryCitation(appliedResults)
 	suggestedResponse := ""
-	if decision == domain.DecisionDenied {
-		// Collect all rules from matched policies for suggested response lookup
-		var allRules []domain.Rule
-		for _, policy := range matched {
-			for _, rule := range policy.Rules {
-				if rule.IsEnabled() {
-					allRules = append(allRules, rule)
-				}
-			}
+	if decision != domain.DecisionAllowed {
+		guidanceResults := appliedResults
+		if actionTaken == domain.ActionAllowedShadow {
+			// No gating policy controlled execution, so retain the raw shadow
+			// guidance as observe-only telemetry.
+			guidanceResults = allResults
 		}
-		suggestedResponse = FindSuggestedResponse(allRules, allResults)
+		suggestedResponse = findPolicySuggestedResponse(matched, guidanceResults)
 	}
 
 	// Step 9: Generate decision reason
@@ -161,6 +158,42 @@ func matchedRuleResults(results []domain.RuleResult) []domain.RuleResult {
 		}
 	}
 	return matched
+}
+
+type policyRuleKey struct {
+	policyID      string
+	policyVersion int
+	ruleID        string
+}
+
+// findPolicySuggestedResponse resolves guidance from the exact policy rule
+// that controls the selected result set. Rule IDs are not globally unique, so
+// policy ID and version are part of the key.
+func findPolicySuggestedResponse(policies []domain.Policy, results []domain.RuleResult) string {
+	responses := make(map[policyRuleKey]string)
+	for _, policy := range policies {
+		for _, rule := range policy.Rules {
+			if !rule.IsEnabled() {
+				continue
+			}
+			responses[policyRuleKey{policy.PolicyID, policy.Version, rule.RuleID}] = rule.EffectConfig.SuggestedResponse
+		}
+	}
+
+	bestSeverity := 0
+	response := ""
+	for _, result := range results {
+		if !result.Matched {
+			continue
+		}
+		severity := domain.EffectSeverity(result.Effect)
+		if severity <= bestSeverity {
+			continue
+		}
+		bestSeverity = severity
+		response = responses[policyRuleKey{result.PolicyID, result.PolicyVersion, result.RuleID}]
+	}
+	return response
 }
 
 // evaluateRule evaluates a single rule against the flattened field map.

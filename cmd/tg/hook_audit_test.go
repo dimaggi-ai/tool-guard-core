@@ -152,3 +152,39 @@ func TestLastTraceHash_TailReadDropsPartialLine(t *testing.T) {
 		t.Errorf("lastTraceHash returned %q, want last record hash %q", got, want)
 	}
 }
+
+func TestAppendHookAudit_LargeRecordKeepsNextLink(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	large := &domain.EvaluationResult{
+		Decision:       domain.DecisionDenied,
+		ActionTaken:    domain.ActionDenied,
+		DecisionReason: strings.Repeat("large-provenance-", 5000),
+		EffectiveMode:  domain.PolicyModeEnforcement,
+	}
+	if err := appendHookAudit(path, auditEnv("large"), large, "deny", "unused"); err != nil {
+		t.Fatalf("append large record: %v", err)
+	}
+	if err := appendHookAudit(path, auditEnv("next"), nil, "allow", "ok"); err != nil {
+		t.Fatalf("append next record: %v", err)
+	}
+
+	chain := readChain(t, path)
+	if len(chain) != 2 {
+		t.Fatalf("want 2 records, got %d", len(chain))
+	}
+	if chain[1][0] != chain[0][1] {
+		t.Fatalf("large record forked chain: second prev %q, first hash %q", chain[1][0], chain[0][1])
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	report, err := audit.VerifyChainFromReader(f)
+	if err != nil {
+		t.Fatalf("verify large-record chain: %v", err)
+	}
+	if !report.Intact || report.Records != 2 {
+		t.Fatalf("large-record chain verification = %#v, want intact with 2 records", report)
+	}
+}

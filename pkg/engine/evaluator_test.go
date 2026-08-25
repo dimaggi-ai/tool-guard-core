@@ -186,6 +186,45 @@ func TestEvaluator_ModePrecedenceMatrix(t *testing.T) {
 	}
 }
 
+func TestEvaluator_SuggestedResponseFollowsAppliedPolicy(t *testing.T) {
+	eval := NewEvaluator()
+	env := makeEnvelope(800, "issue_refund", "agent-001", "org-001")
+
+	enforced := makePolicy([]domain.Rule{{
+		RuleID:       "shared-rule-id",
+		Name:         "approval required",
+		Conditions:   domain.Condition{Field: "amount", Operator: domain.OpGt, Value: float64(0)},
+		Effect:       domain.EffectEscalate,
+		EffectConfig: domain.EffectConfig{SuggestedResponse: "request enforcement approval"},
+		Citation:     domain.Citation{DocumentID: "enforced", Excerpt: "enforcement approval"},
+	}})
+	enforced.PolicyID = "enforced-policy"
+	enforced.Version = 2
+	enforced.Priority = 1
+	enforced.Mode = domain.PolicyModeEnforcement
+
+	shadow := makePolicy([]domain.Rule{{
+		RuleID:       "shared-rule-id",
+		Name:         "shadow denial",
+		Conditions:   domain.Condition{Field: "amount", Operator: domain.OpGt, Value: float64(0)},
+		Effect:       domain.EffectDeny,
+		EffectConfig: domain.EffectConfig{SuggestedResponse: "shadow denial guidance"},
+		Citation:     domain.Citation{DocumentID: "shadow", Excerpt: "shadow telemetry"},
+	}})
+	shadow.PolicyID = "shadow-policy"
+	shadow.Version = 3
+	shadow.Priority = 2 // last in the rule map; catches RuleID-only lookup
+	shadow.Mode = domain.PolicyModeShadow
+
+	result := eval.Evaluate(env, []domain.Policy{shadow, enforced}, domain.PolicyModeEnforcement)
+	if result.Decision != domain.DecisionDenied || result.ActionTaken != domain.ActionEscalated {
+		t.Fatalf("decision/action = %q/%q, want denied/escalated", result.Decision, result.ActionTaken)
+	}
+	if result.SuggestedResponse != "request enforcement approval" {
+		t.Fatalf("suggested response = %q, want applied enforcement guidance", result.SuggestedResponse)
+	}
+}
+
 func TestEvaluator_InvalidCallSiteModeFailsClosed(t *testing.T) {
 	eval := NewEvaluator()
 	env := makeEnvelope(800, "issue_refund", "agent-001", "org-001")

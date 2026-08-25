@@ -117,14 +117,16 @@ func actionProceeds(action domain.ActionTaken) bool {
 
 // applyOperationalDeny records a deny imposed by the proxy itself rather than
 // by a policy rule (for example an escalation-store collision or an audit
-// failure). Rule-derived applied provenance must be cleared: the operational
+// failure). Policy attribution and guidance must be cleared: the operational
 // reason, not the previously proposed policy action, now controls execution.
 func applyOperationalDeny(result *domain.EvaluationResult, reason string) {
 	result.Decision = domain.DecisionDenied
 	result.ActionTaken = domain.ActionDenied
 	result.DecisionReason = reason
 	result.AppliedRuleResults = nil
+	result.PrimaryCitation = nil
 	result.AppliedPrimaryCitation = nil
+	result.SuggestedResponse = ""
 }
 
 func syncResultOutcomeToTrace(trace *domain.DecisionTrace, result *domain.EvaluationResult) {
@@ -132,7 +134,9 @@ func syncResultOutcomeToTrace(trace *domain.DecisionTrace, result *domain.Evalua
 	trace.ActionTaken = result.ActionTaken
 	trace.DecisionReason = result.DecisionReason
 	trace.AppliedRuleResults = result.AppliedRuleResults
+	trace.PrimaryCitation = result.PrimaryCitation
 	trace.AppliedPrimaryCitation = result.AppliedPrimaryCitation
+	trace.SuggestedResponse = result.SuggestedResponse
 }
 
 func (p *proxy) reloadHandler(w http.ResponseWriter, r *http.Request) {
@@ -353,7 +357,7 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 		// Counter increment happens once in the final switch, not
 		// here — earlier code double-counted unknown-tool denies.
 		applyOperationalDeny(result, fmt.Sprintf(
-			"tool_name %q is not declared in scope.tool_names of any loaded policy (--unknown-tools-deny)",
+			"tool_name %q is not declared in scope.tool_names of any loaded enforcement policy (--unknown-tools-deny)",
 			env.ToolName,
 		))
 	}
