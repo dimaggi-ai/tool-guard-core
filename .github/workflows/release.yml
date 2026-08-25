@@ -6,14 +6,45 @@ on:
       - "v*.*.*"
 
 permissions:
-  contents: write     # GitHub Releases
-  packages: write     # ghcr.io image push
-  id-token: write     # actions/attest-build-provenance (OIDC signing)
-  attestations: write # actions/attest-build-provenance (publish the attestation)
+  contents: read
 
 jobs:
+  # Guards against exactly the failure mode from the v0.3.0 release: the tag
+  # was published from a long-lived release branch before main contained it.
+  # Refuse that shape before spending time on CI or building any artifact.
+  preflight:
+    name: Verify tag is releasable
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout (with tags)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify this tag is reachable from main
+        run: |
+          git fetch origin main --quiet
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+            echo "::error::Tag ${GITHUB_REF_NAME} (${GITHUB_SHA}) is not reachable from origin/main." >&2
+            echo "::error::main must contain this commit BEFORE tagging — see RELEASING.md." >&2
+            exit 1
+          fi
+          echo "OK: ${GITHUB_REF_NAME} is reachable from main."
+
+  # Execute the exact workflow used as the merge gate at this tag. Keeping
+  # verification in ci.yml means tag releases cannot silently omit a race,
+  # vulnerability, policy-lint, SDK, platform, or GoReleaser-config check.
+  verify:
+    name: Full CI verification
+    needs: preflight
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
   python-package:
-    name: Build and test Python package
+    name: Build Python package
+    needs: verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,17 +52,9 @@ jobs:
           # setuptools-scm derives the SDK version from the release tag.
           fetch-depth: 0
           fetch-tags: true
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.25.13"
-          cache: true
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Test the SDK against the tagged engine
-        env:
-          TG_CONTRACT_REQUIRED: "1"
-        run: make sdk-test
       - name: Build and validate distributions
         run: |
           python -m pip install --disable-pip-version-check build twine
@@ -46,32 +69,18 @@ jobs:
           retention-days: 7
 
   release:
-    needs: python-package
+    needs: [preflight, verify, python-package]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write     # GitHub Releases
+      packages: write     # ghcr.io image push
+      id-token: write     # actions/attest-build-provenance (OIDC signing)
+      attestations: write # actions/attest-build-provenance (publish the attestation)
     steps:
       - name: Checkout (with tags)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      # Guards against exactly the failure mode from the v0.3.0 release: the
-      # tag was cut and published from a long-lived release/vX.Y.Z branch,
-      # but nobody fast-forwarded main to it — so the GitHub Release existed
-      # and worked, while the repo's default branch, its README, and its
-      # CHANGELOG.md/Release-Notes.md (which every Release's own body links
-      # to via blob/main/...) all still showed the PREVIOUS version. Refuse
-      # to publish a release whose tag commit main doesn't already contain —
-      # this must be the very first check, before any build/publish work.
-      - name: Verify this tag is reachable from main
-        run: |
-          git fetch origin main --quiet
-          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
-            echo "::error::Tag ${GITHUB_REF_NAME} (${GITHUB_SHA}) is not reachable from origin/main." >&2
-            echo "::error::main must be fast-forwarded (or merged) to this commit BEFORE tagging — see RELEASING.md." >&2
-            echo "::error::Fix: git checkout main && git merge --ff-only ${GITHUB_SHA} && git push origin main — then re-run this tag's release, or delete and re-push the tag once main is caught up." >&2
-            exit 1
-          fi
-          echo "OK: ${GITHUB_REF_NAME} is reachable from main."
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -96,11 +105,6 @@ jobs:
 
       - name: Install syft (for SBOM)
         uses: anchore/sbom-action/download-syft@v0
-
-      - name: Verify build + tests pass at this tag
-        run: |
-          go vet ./...
-          go test -count=1 ./pkg/... ./cmd/... ./api/...
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
