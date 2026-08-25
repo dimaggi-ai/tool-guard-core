@@ -57,7 +57,9 @@ Requires **Go 1.25+**. No external services. No database.
    triggering the new rule and asserts the finding.
 4. Add an entry in `cmd/tg/golden_test.go:TestGolden_AllLintRulesHaveStableNames`
    so the rule name is pinned against drift.
-5. Add the rule name to the README's lint section.
+5. Add the rule name to the table in `docs/creating-policies.md`. The
+   `TestDocsLintChecksMatchImplementation` drift guard checks the table and
+   stated count against the finding literals in `cmdLint` and `lintPolicy`.
 6. If the rule has `severity: error`, document the exit code (6)
    implication.
 

@@ -616,10 +616,12 @@ write-capable tools but has no `path_classify` guard — a nudge toward
 
 ---
 
-## 0.1.0 — 2026-06-09
+## 0.1.0 development snapshot (pre-release, no tag) — 2026-06-09
 
-Initial public release: the deterministic core, the classifiers, tamper-evident
-audit, the CLI, and the runtime proxy. Apache 2.0, no usage limits.
+Initial public development snapshot: the deterministic core, the classifiers,
+tamper-evident audit, the CLI, and the runtime proxy. No `v0.1.0` tag or
+GitHub release was published; tagged release history begins at `v0.2.0`.
+Apache 2.0, no usage limits.
 
 ### Deterministic policy engine (`pkg/engine`)
 
