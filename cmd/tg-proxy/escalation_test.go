@@ -1,9 +1,11 @@
 package main
 
 import (
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/dimaggi-ai/tool-guard-core/pkg/audit"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 )
 
@@ -103,6 +105,71 @@ func TestEscalationStore_List(t *testing.T) {
 	if len(list) != 3 {
 		t.Errorf("list len=%d want 3", len(list))
 	}
+}
+
+func TestEscalationStoreAttachResolutionReceipt(t *testing.T) {
+	store := newEscalationStore()
+	store.add(envFor("env-receipt"), decisionFor(domain.DecisionEscalated), 15)
+	resolved, ok := store.resolve("env-receipt", "dba", "approved", true)
+	if !ok {
+		t.Fatal("resolve failed")
+	}
+	receipt := &audit.DecisionReceipt{ReceiptVersion: audit.ReceiptVersion, TraceID: "trace-resolution"}
+	updated := store.attachResolutionReceipt(resolved.ID, resolved.State, *resolved.ResolvedAt, receipt)
+	if updated == nil || updated.ResolutionReceipt != receipt {
+		t.Fatalf("updated escalation = %+v, want attached receipt", updated)
+	}
+	if persisted := store.get(resolved.ID); persisted == nil || persisted.ResolutionReceipt != receipt {
+		t.Fatalf("receipt was not persisted: %+v", persisted)
+	}
+}
+
+func TestEscalationStoreRejectsStaleResolutionReceiptAfterIDReuse(t *testing.T) {
+	store := newEscalationStore()
+	store.maxEntries = 1
+	store.add(envFor("reused"), decisionFor(domain.DecisionEscalated), 15)
+	old, _ := store.resolve("reused", "dba", "approved", true)
+	store.add(envFor("other"), decisionFor(domain.DecisionEscalated), 15)
+	store.resolve("other", "dba", "denied", false)
+	store.add(envFor("reused"), decisionFor(domain.DecisionEscalated), 15)
+
+	receipt := &audit.DecisionReceipt{ReceiptVersion: audit.ReceiptVersion, TraceID: "stale"}
+	if got := store.attachResolutionReceipt("reused", old.State, *old.ResolvedAt, receipt); got != nil {
+		t.Fatalf("stale receipt attached to reused ID: %+v", got)
+	}
+	if current := store.get("reused"); current == nil || current.State != EscPending || current.ResolutionReceipt != nil {
+		t.Fatalf("new escalation changed by stale attachment: %+v", current)
+	}
+}
+
+func TestEscalationStoreResolutionReceiptRaceSafe(t *testing.T) {
+	store := newEscalationStore()
+	const entries = 50
+	for i := 0; i < entries; i++ {
+		store.add(envFor(receiptEscalationID(i)), decisionFor(domain.DecisionEscalated), 15)
+	}
+	var wait sync.WaitGroup
+	for i := 0; i < entries; i++ {
+		i := i
+		wait.Add(2)
+		go func() {
+			defer wait.Done()
+			id := receiptEscalationID(i)
+			if resolved, ok := store.resolve(id, "approver", "ok", true); ok {
+				store.attachResolutionReceipt(id, resolved.State, *resolved.ResolvedAt, &audit.DecisionReceipt{ReceiptVersion: audit.ReceiptVersion})
+			}
+		}()
+		go func() {
+			defer wait.Done()
+			_ = store.get(receiptEscalationID(i))
+			_ = store.list()
+		}()
+	}
+	wait.Wait()
+}
+
+func receiptEscalationID(index int) string {
+	return string(rune('a'+index%26)) + string(rune('0'+index/26))
 }
 
 func TestEscalationStore_TimeoutDefaultsTo15Min(t *testing.T) {

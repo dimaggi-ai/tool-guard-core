@@ -6,6 +6,18 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Proxy decision receipts
+
+- Durable `tg-proxy /evaluate` responses now include an optional,
+  non-resolvable `decision_receipt` after the first audit append succeeds;
+  successfully audited escalation approvals/denials expose a separate
+  `resolution_receipt`. The receipt carries the persisted trace identity,
+  hash, outcome, timestamp, algorithm/canonical version, optional issuer, and
+  `urn:tool-guard:trace:<version>:<hash>` correlation URI. The OpenAPI contract
+  and Python SDK types/helper match the wire shape. Receipts are post-hash
+  response metadata: the engine result and canonical trace schema do not
+  change, and missing receipt metadata is never authorization.
+
 ### Audit provenance
 
 - New audit records use canonical schema v2 and include `engine_version`,

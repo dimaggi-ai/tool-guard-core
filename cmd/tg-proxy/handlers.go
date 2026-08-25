@@ -8,9 +8,24 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/dimaggi-ai/tool-guard-core/pkg/audit"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/engine"
 )
+
+// evaluationResponse augments only the proxy wire response. The pure engine's
+// domain.EvaluationResult deliberately remains receipt-agnostic.
+type evaluationResponse struct {
+	*domain.EvaluationResult
+	DecisionReceipt *audit.DecisionReceipt `json:"decision_receipt,omitempty"`
+}
+
+func addDecisionReceipt(body map[string]any, receipt *audit.DecisionReceipt) map[string]any {
+	if receipt != nil {
+		body["decision_receipt"] = receipt
+	}
+	return body
+}
 
 // ── HTTP handlers ──────────────────────────────────────────────────────────
 // Everything an operator hits via curl lives here. The proxy struct
@@ -188,14 +203,14 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 		}
 		if !p.rateLimit.allow(key) {
 			reason := fmt.Sprintf("rate limit exceeded for %s=%q", p.rateLimitKeyBy, key)
-			p.emitBoundaryDeny(&env, reason, p.defaultMode, policySetHash)
+			receipt := p.emitBoundaryDeny(&env, reason, p.defaultMode, policySetHash)
 			p.denyCount.Add(1)
-			writeJSON(w, http.StatusTooManyRequests, map[string]any{
+			writeJSON(w, http.StatusTooManyRequests, addDecisionReceipt(map[string]any{
 				"decision":        "denied",
 				"action_taken":    "denied",
 				"decision_reason": reason,
 				"effective_mode":  p.defaultMode,
-			})
+			}, receipt))
 			return
 		}
 	}
@@ -220,14 +235,14 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 	// the engine.
 	if len(p.protectPaths) > 0 {
 		if violated, reason := engine.ViolatesProtectedPaths(&env, p.protectPaths); violated {
-			p.emitBoundaryDeny(&env, reason, mode, policySetHash)
+			receipt := p.emitBoundaryDeny(&env, reason, mode, policySetHash)
 			p.denyCount.Add(1)
-			writeJSON(w, http.StatusForbidden, map[string]any{
+			writeJSON(w, http.StatusForbidden, addDecisionReceipt(map[string]any{
 				"decision":        "denied",
 				"action_taken":    "denied",
 				"decision_reason": reason,
 				"effective_mode":  mode,
-			})
+			}, receipt))
 			return
 		}
 	}
@@ -271,15 +286,15 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 
 	if len(policies) == 0 && p.failClosed {
 		reason := "no policies loaded; fail-closed engaged"
-		p.emitBoundaryDeny(&env, reason, mode, policySetHash)
+		receipt := p.emitBoundaryDeny(&env, reason, mode, policySetHash)
 		p.failClosedCount.Add(1)
 		p.denyCount.Add(1)
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+		writeJSON(w, http.StatusServiceUnavailable, addDecisionReceipt(map[string]any{
 			"decision":        "denied",
 			"action_taken":    "denied",
 			"decision_reason": reason,
 			"effective_mode":  mode,
-		})
+		}, receipt))
 		return
 	}
 
@@ -304,15 +319,15 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 	result, evalErr := p.safeEvaluate(&env, policies, mode)
 	if evalErr != nil {
 		reason := fmt.Sprintf("policy evaluator error; failing closed (unconditional — see safeEvaluate): %v", evalErr)
-		p.emitBoundaryDeny(&env, reason, mode, policySetHash)
+		receipt := p.emitBoundaryDeny(&env, reason, mode, policySetHash)
 		p.failClosedCount.Add(1)
 		p.denyCount.Add(1)
-		writeJSON(w, http.StatusInternalServerError, map[string]any{
+		writeJSON(w, http.StatusInternalServerError, addDecisionReceipt(map[string]any{
 			"decision":        "denied",
 			"action_taken":    "denied",
 			"decision_reason": reason,
 			"effective_mode":  mode,
-		})
+		}, receipt))
 		return
 	}
 
@@ -393,6 +408,7 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 	if auditErr == nil {
 		auditErr = p.appendTrace(&trace)
 	}
+	var receipt *audit.DecisionReceipt
 	if auditErr != nil {
 		log.Printf("tg-proxy: append audit trace: %v", auditErr)
 		p.auditFailureCount.Add(1)
@@ -405,6 +421,8 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 			trace.DecisionReason = result.DecisionReason
 			_ = p.appendTrace(&trace) // best-effort log of the override
 		}
+	} else {
+		receipt = receiptForAppendedTrace(&trace)
 	}
 
 	switch result.Decision {
@@ -428,7 +446,7 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if result.Decision == domain.DecisionEscalated {
-		writeJSON(w, http.StatusAccepted, map[string]any{
+		writeJSON(w, http.StatusAccepted, addDecisionReceipt(map[string]any{
 			"decision":           result.Decision,
 			"action_taken":       result.ActionTaken,
 			"decision_reason":    result.DecisionReason,
@@ -443,11 +461,11 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 			"envelope_id":        env.EnvelopeID,
 			"escalation_id":      env.EnvelopeID,
 			"poll_url":           "/escalations/" + env.EnvelopeID,
-		})
+		}, receipt))
 		return
 	}
 
-	writeJSON(w, http.StatusOK, result)
+	writeJSON(w, http.StatusOK, evaluationResponse{EvaluationResult: result, DecisionReceipt: receipt})
 }
 
 // safeEvaluate calls the engine and recovers a panic into an error instead

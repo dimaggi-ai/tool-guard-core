@@ -9,6 +9,8 @@ Go source references:
   pkg/domain/envelope.go  — ActionEnvelope, EnvelopeContext, *Context helpers
   pkg/domain/trace.go     — EvaluationResult, DecisionTrace, RuleResult, Citation
   pkg/domain/policy.go    — PolicyMode, Effect, Citation (shared)
+  pkg/audit/receipt.go    — DecisionReceipt
+  cmd/tg-proxy/escalation.go — Escalation
 """
 from __future__ import annotations
 
@@ -59,6 +61,14 @@ class IntegrationType:
     MCP_PROXY = "mcp_proxy"
     LANGGRAPH_MIDDLEWARE = "langgraph_middleware"
     SDK = "sdk"
+
+
+class EscalationState:
+    """cmd/tg-proxy.EscalationState wire values."""
+    PENDING = "pending"
+    APPROVED = "approved"
+    DENIED = "denied"
+    EXPIRED = "expired"
 
 
 # ---------------------------------------------------------------------------
@@ -456,6 +466,71 @@ class ActionEnvelope:
 
 
 # ---------------------------------------------------------------------------
+# DecisionReceipt  (pkg/audit/receipt.go)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class DecisionReceipt:
+    """
+    Optional correlation reference to a successfully appended audit trace.
+
+    This is a tamper-evident hash-chain reference, not a signed or
+    independently authentic receipt. It is never an authorization signal and
+    ``receipt_uri`` is an opaque URN, not a fetchable URL. Durability follows
+    the proxy's ``audit-sync-mode``.
+
+    Parsing is tolerant because receipt metadata must never make an otherwise
+    valid decision unusable. Callers that persist the reference should use
+    :func:`toolguard.adapters.memory.receipt_reference`, which returns ``None``
+    for an absent or empty URI rather than inventing a value.
+    """
+    receipt_version: str = ""
+    trace_id: str = ""
+    trace_hash: str = ""
+    hash_algorithm: str = ""
+    canonical_trace_version: str = ""
+    integrity_model: str = ""
+    decision: str = ""
+    action_taken: str = ""
+    timestamp: str = ""
+    issuer: str = ""
+    receipt_uri: str = ""
+
+    def to_dict(self) -> dict:
+        d: dict = {
+            "receipt_version": self.receipt_version,
+            "trace_id": self.trace_id,
+            "trace_hash": self.trace_hash,
+            "hash_algorithm": self.hash_algorithm,
+            "canonical_trace_version": self.canonical_trace_version,
+            "integrity_model": self.integrity_model,
+            "decision": self.decision,
+            "action_taken": self.action_taken,
+            "timestamp": self.timestamp,
+            "receipt_uri": self.receipt_uri,
+        }
+        if self.issuer:
+            d["issuer"] = self.issuer
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "DecisionReceipt":
+        return cls(
+            receipt_version=d.get("receipt_version", ""),
+            trace_id=d.get("trace_id", ""),
+            trace_hash=d.get("trace_hash", ""),
+            hash_algorithm=d.get("hash_algorithm", ""),
+            canonical_trace_version=d.get("canonical_trace_version", ""),
+            integrity_model=d.get("integrity_model", ""),
+            decision=d.get("decision", ""),
+            action_taken=d.get("action_taken", ""),
+            timestamp=d.get("timestamp", ""),
+            issuer=d.get("issuer", ""),
+            receipt_uri=d.get("receipt_uri", ""),
+        )
+
+
+# ---------------------------------------------------------------------------
 # EvaluationResult and supporting types  (pkg/domain/trace.go:165)
 # ---------------------------------------------------------------------------
 
@@ -558,7 +633,7 @@ class EvaluationResult:
     json field names: decision, action_taken, decision_reason, effective_mode,
                       policies_matched, rules_evaluated, rules_triggered,
                       rule_results, primary_citation, is_near_miss,
-                      suggested_response
+                      suggested_response, decision_receipt
     """
     decision: str = Decision.ALLOWED          # "allowed"|"denied"|"escalated"|"flagged"
     action_taken: str = ActionTaken.ALLOWED   # "allowed"|"denied"|"escalated"|"flagged"|"allowed_shadow"
@@ -571,6 +646,7 @@ class EvaluationResult:
     primary_citation: Optional[Citation] = None
     is_near_miss: bool = False
     suggested_response: str = ""
+    decision_receipt: Optional[DecisionReceipt] = None
 
     def to_dict(self) -> dict:
         d: dict = {
@@ -589,6 +665,8 @@ class EvaluationResult:
             d["primary_citation"] = self.primary_citation.to_dict()
         if self.suggested_response:
             d["suggested_response"] = self.suggested_response
+        if self.decision_receipt is not None:
+            d["decision_receipt"] = self.decision_receipt.to_dict()
         return d
 
     @classmethod
@@ -608,6 +686,7 @@ class EvaluationResult:
                 f"in response body: {d!r}"
             )
         pc = d.get("primary_citation")
+        dr = d.get("decision_receipt")
         return cls(
             decision=d["decision"],
             action_taken=d["action_taken"],
@@ -620,4 +699,63 @@ class EvaluationResult:
             primary_citation=Citation.from_dict(pc) if pc else None,
             is_near_miss=d.get("is_near_miss", False),
             suggested_response=d.get("suggested_response", ""),
+            decision_receipt=DecisionReceipt.from_dict(dr) if isinstance(dr, dict) else None,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Escalation  (cmd/tg-proxy/escalation.go)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Escalation:
+    """Wire type returned by the escalation read/approve/deny endpoints."""
+    id: str = ""
+    state: str = ""
+    created_at: str = ""
+    expires_at: str = ""
+    resolved_at: str = ""
+    approver: str = ""
+    approver_reason: str = ""
+    envelope: ActionEnvelope = field(default_factory=ActionEnvelope)
+    decision: EvaluationResult = field(default_factory=EvaluationResult)
+    resolution_receipt: Optional[DecisionReceipt] = None
+
+    def to_dict(self) -> dict:
+        d: dict = {
+            "id": self.id,
+            "state": self.state,
+            "created_at": self.created_at,
+            "expires_at": self.expires_at,
+            "envelope": self.envelope.to_dict(),
+            "decision": self.decision.to_dict(),
+        }
+        if self.resolved_at:
+            d["resolved_at"] = self.resolved_at
+        if self.approver:
+            d["approver"] = self.approver
+        if self.approver_reason:
+            d["approver_reason"] = self.approver_reason
+        if self.resolution_receipt is not None:
+            d["resolution_receipt"] = self.resolution_receipt.to_dict()
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Escalation":
+        resolution_receipt = d.get("resolution_receipt")
+        return cls(
+            id=d.get("id", ""),
+            state=d.get("state", ""),
+            created_at=d.get("created_at", ""),
+            expires_at=d.get("expires_at", ""),
+            resolved_at=d.get("resolved_at", ""),
+            approver=d.get("approver", ""),
+            approver_reason=d.get("approver_reason", ""),
+            envelope=ActionEnvelope.from_dict(d.get("envelope", {})),
+            decision=EvaluationResult.from_dict(d.get("decision", {})),
+            resolution_receipt=(
+                DecisionReceipt.from_dict(resolution_receipt)
+                if isinstance(resolution_receipt, dict)
+                else None
+            ),
         )

@@ -91,7 +91,13 @@ func (p *proxy) escalationByID(w http.ResponseWriter, r *http.Request) {
 		// the human approval/denial as a separate, linked event so a
 		// verifier can replay the full lifecycle and answer "who
 		// approved this and when". docs/escalation.md commits to this.
-		p.emitEscalationResolution(e, approved)
+		if trace, auditErr := p.emitEscalationResolution(e, approved); auditErr == nil {
+			if receipt := receiptForAppendedTrace(trace); receipt != nil {
+				if updated := p.escalations.attachResolutionReceipt(id, e.State, *e.ResolvedAt, receipt); updated != nil {
+					e = updated
+				}
+			}
+		}
 		writeJSON(w, http.StatusOK, e)
 		return
 	}
