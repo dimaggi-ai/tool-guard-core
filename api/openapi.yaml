@@ -96,7 +96,7 @@ paths:
           name: mode
           required: false
           schema: {type: string, enum: [shadow, enforcement]}
-          description: Request mode, subject to the strictest policy-mode floor.
+          description: Call-site default. Each policy's own mode remains authoritative for its contribution; enforcement policies cannot be downgraded.
       requestBody:
         required: true
         content:

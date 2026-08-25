@@ -17,8 +17,8 @@ import (
 )
 
 // cmdSimulate is the batch dry-run: evaluate a whole policy set against a
-// JSONL stream of envelopes and report the decision breakdown plus a
-// per-rule fire count. It lets a policy author answer "what would this
+// JSONL stream of envelopes and report both raw decisions and applied actions,
+// plus a per-rule fire count. It lets a policy author answer "what would this
 // policy set do to yesterday's traffic?" BEFORE deploying — the same
 // question the internal simulator answers, minus any product coupling.
 //
@@ -28,7 +28,7 @@ import (
 // Exit codes:
 //
 //	0  simulation ran (default)
-//	3  simulation ran AND at least one call denied, with -fail-on-deny set
+//	3  simulation ran AND at least one applied action was denied, with -fail-on-deny set
 //	   (lets CI gate a policy change that would start denying real traffic)
 //	1  internal error   2  usage error
 func cmdSimulate(args []string) int {
@@ -39,7 +39,7 @@ func cmdSimulate(args []string) int {
 	modeStr := fs.String("mode", "enforcement", "shadow | enforcement")
 	asJSON := fs.Bool("json", false, "emit the summary as JSON instead of a table")
 	examples := fs.Int("examples", 3, "show up to N example envelope_ids per non-allow decision (table mode)")
-	failOnDeny := fs.Bool("fail-on-deny", false, "exit 3 if any call is denied (useful in CI)")
+	failOnDeny := fs.Bool("fail-on-deny", false, "exit 3 if any applied action is denied (shadow-only denies do not fail; useful in CI)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -86,6 +86,7 @@ func cmdSimulate(args []string) int {
 	ev := engine.NewEvaluator()
 	sum := simSummary{
 		decisions: map[domain.Decision]int{},
+		actions:   map[domain.ActionTaken]int{},
 		ruleFires: map[string]int{},
 		byRuleEff: map[string]domain.Effect{},
 		examples:  map[domain.Decision][]string{},
@@ -114,6 +115,7 @@ func cmdSimulate(args []string) int {
 		res := ev.Evaluate(&env, policies, mode)
 		sum.total++
 		sum.decisions[res.Decision]++
+		sum.actions[res.ActionTaken]++
 		if res.Decision != domain.DecisionAllowed && len(sum.examples[res.Decision]) < *examples {
 			id := env.EnvelopeID
 			if id == "" {
@@ -139,7 +141,7 @@ func cmdSimulate(args []string) int {
 		sum.printTable(len(policies), *examples)
 	}
 
-	if *failOnDeny && sum.decisions[domain.DecisionDenied] > 0 {
+	if *failOnDeny && sum.actions[domain.ActionDenied] > 0 {
 		return 3
 	}
 	return 0
@@ -180,6 +182,7 @@ type simSummary struct {
 	malformed int
 	firstErr  string
 	decisions map[domain.Decision]int
+	actions   map[domain.ActionTaken]int
 	ruleFires map[string]int
 	byRuleEff map[string]domain.Effect
 	examples  map[domain.Decision][]string
@@ -190,6 +193,11 @@ var simDecisionOrder = []domain.Decision{
 	domain.DecisionEscalated, domain.DecisionDenied,
 }
 
+var simActionOrder = []domain.ActionTaken{
+	domain.ActionAllowed, domain.ActionAllowedShadow, domain.ActionFlagged,
+	domain.ActionEscalated, domain.ActionDenied,
+}
+
 func (s *simSummary) printTable(policyCount, exampleN int) {
 	fmt.Printf("Tool Guard simulate — %d policies, %d calls", policyCount, s.total)
 	if s.malformed > 0 {
@@ -197,6 +205,7 @@ func (s *simSummary) printTable(policyCount, exampleN int) {
 	}
 	fmt.Println()
 	fmt.Println(strings.Repeat("─", 48))
+	fmt.Println("  rule decisions (what policy logic concluded):")
 	for _, d := range simDecisionOrder {
 		n := s.decisions[d]
 		pct := 0.0
@@ -209,6 +218,16 @@ func (s *simSummary) printTable(policyCount, exampleN int) {
 				fmt.Printf("             e.g. %s\n", strings.Join(ex, ", "))
 			}
 		}
+	}
+	fmt.Println(strings.Repeat("─", 48))
+	fmt.Println("  applied actions (what would execute):")
+	for _, action := range simActionOrder {
+		n := s.actions[action]
+		pct := 0.0
+		if s.total > 0 {
+			pct = 100 * float64(n) / float64(s.total)
+		}
+		fmt.Printf("  %-14s %6d  %5.1f%%\n", action, n, pct)
 	}
 	if len(s.ruleFires) > 0 {
 		fmt.Println(strings.Repeat("─", 48))
@@ -243,6 +262,10 @@ func (s *simSummary) printJSON(policyCount int) {
 	for d, n := range s.decisions {
 		decisions[string(d)] = n
 	}
+	actions := map[string]int{}
+	for action, n := range s.actions {
+		actions[string(action)] = n
+	}
 	rules := make([]map[string]any, 0, len(s.ruleFires))
 	for id, n := range s.ruleFires {
 		rules = append(rules, map[string]any{"rule_id": id, "fires": n, "effect": string(s.byRuleEff[id])})
@@ -255,6 +278,7 @@ func (s *simSummary) printJSON(policyCount int) {
 		"total":      s.total,
 		"malformed":  s.malformed,
 		"decisions":  decisions,
+		"actions":    actions,
 		"rule_fires": rules,
 	}
 	if s.firstErr != "" {

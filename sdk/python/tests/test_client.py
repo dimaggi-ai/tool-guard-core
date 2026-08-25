@@ -8,13 +8,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from toolguard.client import ToolGuard, _more_restrictive, _SEVERITY
+from toolguard.client import ToolGuard
 from toolguard.errors import ToolDenied, ToolEscalated
 from toolguard.types import (
     ActionTaken,
     Decision,
     EnvelopeContext,
-    EvaluationResult,
 )
 
 
@@ -156,7 +155,7 @@ class TestCLIMode:
         assert str(policy) in cmd
 
     def test_multiple_policies_most_restrictive(self, tmp_path):
-        """Two policies, one allows, one denies → final result is denied."""
+        """A policy directory is passed to the engine as one set."""
         pol1 = tmp_path / "a.yaml"
         pol2 = tmp_path / "b.yaml"
         pol1.write_text("policy_id: a\nstatus: approved\nmode: enforcement\n"
@@ -166,20 +165,16 @@ class TestCLIMode:
 
         client = ToolGuard(mode="cli", policy_dir=str(tmp_path), agent_id="a", org_id="o")
 
-        call_count = 0
         def fake_run(cmd, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            # First policy allows, second denies
-            if call_count == 1:
-                return _fake_proc(0, stdout=_eval_result_json("allowed"))
             return _fake_proc(3, stdout=_eval_result_json("denied"))
 
-        with patch("subprocess.run", side_effect=fake_run):
+        with patch("subprocess.run", side_effect=fake_run) as mock_run:
             result = client.evaluate_raw("issue_refund", {"amount": 1000})
 
         assert result.decision == Decision.DENIED
-        assert call_count == 2
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        assert cmd[2:4] == ["-policy-dir", str(tmp_path)]
 
     def test_envelope_fields_in_call_json(self, tmp_path):
         """The envelope written to the temp file must carry correct field names."""
@@ -331,29 +326,3 @@ class TestConstructor:
     def test_proxy_url_trailing_slash_stripped(self):
         client = ToolGuard(mode="proxy", proxy_url="http://localhost:9090/")
         assert not client.proxy_url.endswith("/")
-
-
-# ---------------------------------------------------------------------------
-# _more_restrictive helper
-# ---------------------------------------------------------------------------
-
-class TestMoreRestrictive:
-    def test_deny_beats_allow(self):
-        allow = EvaluationResult(decision=Decision.ALLOWED, action_taken=ActionTaken.ALLOWED)
-        deny = EvaluationResult(decision=Decision.DENIED, action_taken=ActionTaken.DENIED)
-        assert _more_restrictive(allow, deny).decision == Decision.DENIED
-
-    def test_deny_beats_escalate(self):
-        esc = EvaluationResult(decision=Decision.ESCALATED, action_taken=ActionTaken.ESCALATED)
-        deny = EvaluationResult(decision=Decision.DENIED, action_taken=ActionTaken.DENIED)
-        assert _more_restrictive(esc, deny).decision == Decision.DENIED
-
-    def test_escalate_beats_allow(self):
-        allow = EvaluationResult(decision=Decision.ALLOWED, action_taken=ActionTaken.ALLOWED)
-        esc = EvaluationResult(decision=Decision.ESCALATED, action_taken=ActionTaken.ESCALATED)
-        assert _more_restrictive(allow, esc).decision == Decision.ESCALATED
-
-    def test_same_keeps_first(self):
-        a = EvaluationResult(decision=Decision.ALLOWED, action_taken=ActionTaken.ALLOWED)
-        b = EvaluationResult(decision=Decision.ALLOWED, action_taken=ActionTaken.ALLOWED)
-        assert _more_restrictive(a, b) is a

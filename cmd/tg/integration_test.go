@@ -159,6 +159,25 @@ func TestIntegration_EvaluateExitCodes(t *testing.T) {
 		}
 	})
 
+	t.Run("policy directory evaluates mixed modes as one set", func(t *testing.T) {
+		policyDir := filepath.Join(dir, "mixed-policies")
+		if err := os.Mkdir(policyDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		shadowPolicy := strings.Replace(policyDenyOver500, "policy_id: pol-int", "policy_id: pol-shadow", 1)
+		shadowPolicy = strings.Replace(shadowPolicy, "mode: enforcement", "mode: shadow", 1)
+		writeFile(t, policyDir, "00-shadow.yaml", shadowPolicy)
+		writeFile(t, policyDir, "10-enforcement.yaml", policyDenyOver500)
+
+		code, stdout, stderr := exitCode(t, "evaluate", "-policy-dir", policyDir, "-call", over)
+		if code != 3 {
+			t.Fatalf("mixed policy set exit = %d, want 3; stdout=%s stderr=%s", code, stdout, stderr)
+		}
+		if !strings.Contains(stdout, `"action_taken":"denied"`) {
+			t.Errorf("mixed policy set did not preserve enforcement deny: %s", stdout)
+		}
+	})
+
 	t.Run("missing -policy → exit 2 (usage error)", func(t *testing.T) {
 		code, _, stderr := exitCode(t, "evaluate", "-call", under)
 		if code != 2 {
@@ -166,6 +185,13 @@ func TestIntegration_EvaluateExitCodes(t *testing.T) {
 		}
 		if !strings.Contains(stderr, "evaluate:") {
 			t.Errorf("expected verb-prefixed stderr; got: %s", stderr)
+		}
+	})
+
+	t.Run("both policy selectors → exit 2 (usage error)", func(t *testing.T) {
+		code, _, stderr := exitCode(t, "evaluate", "-policy", pol, "-policy-dir", dir, "-call", under)
+		if code != 2 {
+			t.Errorf("exit = %d, want 2; stderr=%s", code, stderr)
 		}
 	})
 

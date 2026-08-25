@@ -1,9 +1,9 @@
 """
 toolguard.client — ToolGuard client: CLI and proxy backends.
 
-CLI mode  — shells out to ``tg evaluate -policy <file> -call <tmpfile>``.
-            Each .yaml in policy_dir is evaluated independently; the most
-            restrictive decision across all policies is returned.
+CLI mode  — shells out to ``tg evaluate -policy|-policy-dir ... -call <tmpfile>``.
+            A policy directory is evaluated as one set by the Go engine so
+            mixed shadow/enforcement semantics match the proxy exactly.
             Exit-code contract (from cmd/tg/main.go):
               0 → allowed / allowed_shadow
               3 → denied
@@ -41,31 +41,6 @@ from toolguard.types import (
 )
 
 
-# Decision severity — used to pick the most restrictive result when evaluating
-# multiple policies in CLI mode.
-_SEVERITY: dict[str, int] = {
-    Decision.ALLOWED: 0,
-    ActionTaken.ALLOWED_SHADOW: 0,
-    Decision.FLAGGED: 1,
-    Decision.ESCALATED: 2,
-    Decision.DENIED: 3,
-}
-# Any decision string this SDK version doesn't recognize (a future engine
-# value it hasn't been taught yet) must win the "most restrictive" compare
-# below, not lose it — defaulting an unknown value to severity 0 would let
-# it be silently outranked by a known-but-more-permissive decision from
-# another policy, discarding exactly the signal that matters most: "this
-# result means something this SDK doesn't understand."
-_UNKNOWN_SEVERITY = max(_SEVERITY.values()) + 1
-
-
-def _more_restrictive(a: EvaluationResult, b: EvaluationResult) -> EvaluationResult:
-    """Return whichever EvaluationResult carries the higher-severity decision."""
-    if _SEVERITY.get(b.decision, _UNKNOWN_SEVERITY) > _SEVERITY.get(a.decision, _UNKNOWN_SEVERITY):
-        return b
-    return a
-
-
 # Exit code → Decision (cmd/tg/main.go, cmdEvaluate)
 _EXITCODE_DECISION: dict[int, str] = {
     0: Decision.ALLOWED,
@@ -90,8 +65,8 @@ class ToolGuard:
     proxy_url : str
         Base URL of the ``tg-proxy`` service.  Proxy mode only.
     policy_dir : str, optional
-        Directory of ``*.yaml`` / ``*.yml`` policy files.  All files are
-        evaluated; the most restrictive decision wins.  CLI mode only.
+        Directory of ``*.yaml`` / ``*.yml`` policy files. All files are
+        evaluated together as one policy set. CLI mode only.
     policy_file : str, optional
         Path to a single policy YAML.  Used when ``policy_dir`` is not
         set.  CLI mode only.
@@ -264,7 +239,7 @@ class ToolGuard:
         )
 
     # ------------------------------------------------------------------
-    # CLI backend  (tg evaluate -policy FILE -call FILE)
+    # CLI backend  (tg evaluate -policy|-policy-dir ... -call FILE)
     # ------------------------------------------------------------------
 
     def _evaluate_cli(self, envelope: ActionEnvelope) -> EvaluationResult:
@@ -285,11 +260,11 @@ class ToolGuard:
             call_path = f.name
 
         try:
-            best: Optional[EvaluationResult] = None
-            for policy_path in policy_files:
-                result = self._run_tg_evaluate(policy_path, call_path)
-                best = result if best is None else _more_restrictive(best, result)
-            return best  # type: ignore[return-value]
+            if self.policy_dir:
+                policy_args = ["-policy-dir", self.policy_dir]
+            else:
+                policy_args = ["-policy", policy_files[0]]
+            return self._run_tg_evaluate(policy_args, call_path)
         finally:
             try:
                 os.unlink(call_path)
@@ -309,16 +284,16 @@ class ToolGuard:
         return []
 
     def _run_tg_evaluate(
-        self, policy_path: str, call_path: str
+        self, policy_args: list[str], call_path: str
     ) -> EvaluationResult:
         """
-        Shell out to ``tg evaluate -policy <policy_path> -call <call_path>``.
+        Shell out to ``tg evaluate <policy_args> -call <call_path>``.
 
         Returns an EvaluationResult parsed from stdout JSON.
         Falls back to mapping the exit code when stdout is empty or
         unparseable (e.g. engine compiled without a matching policy).
         """
-        cmd = [self.tg_bin, "evaluate", "-policy", policy_path, "-call", call_path]
+        cmd = [self.tg_bin, "evaluate", *policy_args, "-call", call_path]
         proc = subprocess.run(
             cmd,
             capture_output=True,

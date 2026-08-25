@@ -115,7 +115,8 @@ exact line where the chain broke and exits 5.
 
 Before deploying a policy change, see what it would do to real traffic.
 `tg simulate` runs the whole policy set against a JSONL file of envelopes
-(one per line) and prints the decision breakdown plus per-rule fire counts:
+(one per line) and prints rule decisions, applied actions, and per-rule fire
+counts:
 
 ```sh
 ./bin/tg simulate -policy-dir policies -calls yesterdays-calls.jsonl
@@ -124,11 +125,19 @@ Before deploying a policy change, see what it would do to real traffic.
 ```
 Tool Guard simulate — 3 policies, 1000 calls
 ────────────────────────────────────────────────
+  rule decisions (what policy logic concluded):
   allowed        942   94.2%
   flagged          6    0.6%
   escalated       21    2.1%
   denied          31    3.1%
              e.g. env-8831, env-9002, env-9114
+────────────────────────────────────────────────
+  applied actions (what would execute):
+  allowed           942   94.2%
+  allowed_shadow       0    0.0%
+  flagged             6    0.6%
+  escalated          21    2.1%
+  denied             31    3.1%
 ────────────────────────────────────────────────
   rule fires (by rule_id):
     rule-amount-cap               22  [deny]
@@ -136,14 +145,16 @@ Tool Guard simulate — 3 policies, 1000 calls
     ...
 ```
 
-It uses the exact same engine as `tg evaluate` and the proxy, so a
-simulate verdict can't diverge from a live one. Add `-fail-on-deny` to
-exit 3 when any call denies (gate a policy change in CI), `-json` for
-machine-readable output, or `-calls -` to read from stdin.
+It uses the exact same engine as `tg evaluate` and the proxy, and reports both
+the raw rule decision and the applied action. Add `-fail-on-deny` to exit 3
+when any applied action denies (gate a policy change in CI), `-json` for
+machine-readable output, or `-calls -` to read from stdin. A shadow-only deny
+remains visible in the decision counts but does not fail the applied-action
+gate because the call would proceed.
 
 ## 5b. Measure coverage — what fraction of calls is governed at all
 
-`tg simulate` shows the *decisions*; `tg coverage` shows the *blind spots* —
+`tg simulate` shows the *decisions and applied actions*; `tg coverage` shows the *blind spots* —
 how many of your agent's tool calls have any governing policy versus pass only
 because nothing governs them. It reads envelopes **or** decision traces, so you
 can point it straight at an audit log:

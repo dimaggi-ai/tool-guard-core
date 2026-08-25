@@ -52,15 +52,11 @@ result = guard.evaluate_raw("issue_refund", {"amount": 100})
 print(result.decision)  # "allowed"
 ```
 
-**Known limitation: CLI mode cannot run in shadow mode today.** The SDK
-never passes `-mode` to `tg evaluate`, which defaults to `enforcement` —
-a `mode: shadow` policy still evaluates under CLI mode, but the engine's
-own mode-escalation rule (a policy's own `mode: enforcement` always wins)
-means the *proxy* backend is the only one where shadow-mode-as-a-fleet-
-default currently works end to end. If you need shadow mode, use
-`mode="proxy"` against a `tg-proxy` started with `-default-mode shadow`
-(see the shadow-mode test in `tests/test_contract.py`,
-`TestProxyShadowModeContract`, for a worked example).
+CLI mode evaluates the whole policy directory as one set. Each policy's YAML
+mode owns its contribution: a `mode: shadow` policy remains observe-only under
+the CLI's default `enforcement` call-site mode, while a `mode: enforcement`
+policy cannot be downgraded by a shadow default. Mixed-mode behavior is pinned
+against the real Go engine in `tests/test_contract.py`.
 
 `evaluate()` raises `ToolDenied` or `ToolEscalated` on a block.
 `evaluate_raw()` always returns the `EvaluationResult` without raising.

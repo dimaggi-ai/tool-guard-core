@@ -1,8 +1,11 @@
 package main
 
 import (
+	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -55,6 +58,44 @@ func TestSimulate_JSONMode(t *testing.T) {
 	calls := writeTemp(t, "calls.jsonl", simCalls)
 	if code := cmdSimulate([]string{"-policy", pol, "-calls", calls, "-json"}); code != 0 {
 		t.Errorf("json simulate exit = %d, want 0", code)
+	}
+}
+
+func TestSimulate_ShadowDeniesAreReportedButDoNotFailAppliedActionGate(t *testing.T) {
+	shadowPolicy := strings.Replace(simPolicy, "mode: enforcement", "mode: shadow", 1)
+	pol := writeTemp(t, "shadow.yaml", shadowPolicy)
+	calls := writeTemp(t, "calls.jsonl", simCalls)
+
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	code := cmdSimulate([]string{"-policy", pol, "-calls", calls, "-json", "-fail-on-deny"})
+	_ = w.Close()
+	os.Stdout = oldStdout
+	out, readErr := io.ReadAll(r)
+	_ = r.Close()
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+
+	if code != 0 {
+		t.Fatalf("shadow-only simulation must not fail the applied-deny gate; exit = %d, output=%s", code, out)
+	}
+	var summary struct {
+		Decisions map[string]int `json:"decisions"`
+		Actions   map[string]int `json:"actions"`
+	}
+	if err := json.Unmarshal(out, &summary); err != nil {
+		t.Fatalf("decode simulation JSON: %v; output=%s", err, out)
+	}
+	if summary.Decisions["denied"] != 2 {
+		t.Errorf("raw denied decisions = %d, want 2", summary.Decisions["denied"])
+	}
+	if summary.Actions["allowed_shadow"] != 2 || summary.Actions["denied"] != 0 {
+		t.Errorf("applied actions = %#v, want allowed_shadow=2 and denied=0", summary.Actions)
 	}
 }
 

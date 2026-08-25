@@ -186,6 +186,27 @@ func TestEvaluator_ModePrecedenceMatrix(t *testing.T) {
 	}
 }
 
+func TestEvaluator_InvalidCallSiteModeFailsClosed(t *testing.T) {
+	eval := NewEvaluator()
+	env := makeEnvelope(800, "issue_refund", "agent-001", "org-001")
+	policy := makePolicy([]domain.Rule{{
+		RuleID:     "rule-deny",
+		Name:       "deny-high-amount",
+		Conditions: domain.Condition{Field: "amount", Operator: domain.OpGt, Value: float64(500)},
+		Effect:     domain.EffectDeny,
+		Citation:   domain.Citation{DocumentID: "doc-001", Excerpt: "Refunds over $500 are denied"},
+	}})
+	policy.Mode = domain.PolicyModeShadow
+
+	result := eval.Evaluate(env, []domain.Policy{policy}, domain.PolicyMode("invalid"))
+	if result.ActionTaken != domain.ActionDenied {
+		t.Fatalf("invalid call-site mode must fail closed: action_taken = %q, want denied", result.ActionTaken)
+	}
+	if result.EffectiveMode != domain.PolicyModeEnforcement {
+		t.Errorf("invalid call-site mode: effective_mode = %q, want enforcement", result.EffectiveMode)
+	}
+}
+
 func TestEvaluator_DeniedInEnforcementMode(t *testing.T) {
 	eval := NewEvaluator()
 	env := makeEnvelope(800, "issue_refund", "agent-001", "org-001")

@@ -103,6 +103,18 @@ func requireHTTPMethod(w http.ResponseWriter, r *http.Request, method string) bo
 	return false
 }
 
+// actionProceeds reports whether the evaluated tool call may execute. Runtime
+// side effects must branch on ActionTaken, not Decision: in shadow mode the
+// decision records what would have happened while the action still proceeds.
+func actionProceeds(action domain.ActionTaken) bool {
+	switch action {
+	case domain.ActionAllowed, domain.ActionAllowedShadow, domain.ActionFlagged:
+		return true
+	default:
+		return false
+	}
+}
+
 func (p *proxy) reloadHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")
@@ -354,7 +366,7 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 		IsNearMiss:           result.IsNearMiss,
 		EvaluationDurationMs: 0,
 	}
-	// When the decision is escalated, register the pending entry so
+	// When the applied action is escalated, register the pending entry so
 	// the approver endpoints can find it and the agent can poll.
 	// EnvelopeID serves as the escalation ID. The per-rule
 	// EffectConfig.TimeoutMinutes (if set) overrides the default.
@@ -365,7 +377,7 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 	// poll URL would let an agent see another entry's approval
 	// state, and escalating past the cap would silently drop the
 	// pending entry. Better to surface a clean deny.
-	if result.Decision == domain.DecisionEscalated {
+	if result.ActionTaken == domain.ActionEscalated {
 		timeoutMin := p.escalationDefaultMin
 		if t := timeoutFromMatchedRules(result, policies); t > 0 {
 			timeoutMin = t
@@ -388,10 +400,10 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 	if auditErr != nil {
 		log.Printf("tg-proxy: append audit trace: %v", auditErr)
 		p.auditFailureCount.Add(1)
-		if p.failClosed && result.Decision == domain.DecisionAllowed {
+		if p.failClosed && actionProceeds(result.ActionTaken) {
 			result.Decision = domain.DecisionDenied
 			result.ActionTaken = domain.ActionDenied
-			result.DecisionReason = "decision was allow but audit append failed; downgraded to deny (--fail-closed=true)"
+			result.DecisionReason = "applied action would proceed but audit append failed; downgraded to deny (--fail-closed=true)"
 			trace.Decision = result.Decision
 			trace.ActionTaken = result.ActionTaken
 			trace.DecisionReason = result.DecisionReason
@@ -399,14 +411,14 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	switch result.Decision {
-	case domain.DecisionAllowed:
+	switch result.ActionTaken {
+	case domain.ActionAllowed, domain.ActionAllowedShadow:
 		p.allowCount.Add(1)
-	case domain.DecisionDenied:
+	case domain.ActionDenied:
 		p.denyCount.Add(1)
-	case domain.DecisionEscalated:
+	case domain.ActionEscalated:
 		p.escalateCount.Add(1)
-	case domain.DecisionFlagged:
+	case domain.ActionFlagged:
 		p.flagCount.Add(1)
 	}
 
@@ -414,12 +426,11 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 	// call actually proceeds (allow or flag). Denied and escalated calls
 	// did not execute, so counting them would let a rejected attempt
 	// inflate the window and deny the next legitimate call.
-	if velWindow != nil && velHasAmount &&
-		(result.Decision == domain.DecisionAllowed || result.Decision == domain.DecisionFlagged) {
+	if velWindow != nil && velHasAmount && actionProceeds(result.ActionTaken) {
 		velWindow.record(velNow, velAmount)
 	}
 
-	if result.Decision == domain.DecisionEscalated {
+	if result.ActionTaken == domain.ActionEscalated {
 		writeJSON(w, http.StatusAccepted, map[string]any{
 			"decision":           result.Decision,
 			"action_taken":       result.ActionTaken,

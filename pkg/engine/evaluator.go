@@ -86,7 +86,12 @@ func (e *Evaluator) Evaluate(envelope *domain.ActionEnvelope, policies []domain.
 	effectiveMode := domain.PolicyModeEnforcement // unknown modes fail closed
 	if enforcedDecision == domain.DecisionAllowed {
 		actionDecision = decision
-		if shadowEffectMatched || mode == domain.PolicyModeShadow {
+		// Loaders and CLI/HTTP entry points reject invalid modes, but Evaluate is
+		// also a public Go API. Preserve its fail-closed boundary: only the two
+		// known call-site modes may allow a shadow contribution to become
+		// observe-only. An unknown direct-call value stays enforcement.
+		validCallSiteMode := mode == domain.PolicyModeShadow || mode == domain.PolicyModeEnforcement
+		if validCallSiteMode && (shadowEffectMatched || mode == domain.PolicyModeShadow) {
 			effectiveMode = domain.PolicyModeShadow
 		}
 	}

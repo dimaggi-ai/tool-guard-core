@@ -1,6 +1,6 @@
 // tg is the Tool Guard Core CLI. One binary, four verbs:
 //
-//	tg evaluate -policy POLICY.yaml -call CALL.json     # run one tool call against one policy
+//	tg evaluate (-policy-dir DIR | -policy POLICY.yaml) -call CALL.json
 //	tg verify   -file DECISIONS.jsonl                   # replay the audit chain offline
 //	tg lint     -policy POLICY.yaml                     # warn on scope-too-narrow + other footguns
 //	tg benchmark                                        # report deterministic eval p99 on this host
@@ -37,7 +37,7 @@ import (
 const usage = `tg — Tool Guard Core CLI
 
 Usage:
-  tg evaluate  -policy POLICY.yaml -call CALL.json [-mode shadow|enforcement]
+  tg evaluate  (-policy-dir DIR | -policy POLICY.yaml) -call CALL.json [-mode shadow|enforcement]
   tg simulate  (-policy-dir DIR | -policy POLICY.yaml) -calls CALLS.jsonl
   tg coverage  (-policy-dir DIR | -policy POLICY.yaml) -calls CALLS.jsonl
   tg hook      (-policy-dir DIR | -policy POLICY.yaml) [-protect-self] [-fail-closed-tools ...]
@@ -125,7 +125,7 @@ func main() {
 
 // ── tg evaluate ────────────────────────────────────────────────────────────
 //
-// Reads ONE policy (YAML) and ONE tool call (JSON), runs them through the
+// Reads one policy set (a YAML file or directory) and one tool call (JSON), runs them through the
 // engine, and prints the decision as a single JSONL line. Exit 0 on
 // allow (and allowed_shadow), 3 on deny, 4 on escalate.
 //
@@ -136,28 +136,31 @@ func main() {
 
 func cmdEvaluate(args []string) int {
 	fs := flag.NewFlagSet("evaluate", flag.ExitOnError)
-	policyPath := fs.String("policy", "", "Path to policy YAML")
+	policyDir := fs.String("policy-dir", "", "directory of *.yaml/*.yml policies (mutually exclusive with -policy)")
+	policyPath := fs.String("policy", "", "single policy YAML (mutually exclusive with -policy-dir)")
 	callPath := fs.String("call", "", "Path to tool-call JSON")
 	modeStr := fs.String("mode", "enforcement", "shadow | enforcement")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if *policyPath == "" || *callPath == "" {
-		fmt.Fprintln(os.Stderr, "evaluate: -policy and -call are required")
+	if (*policyDir == "") == (*policyPath == "") {
+		fmt.Fprintln(os.Stderr, "evaluate: exactly one of -policy-dir or -policy is required")
+		fs.Usage()
+		return 2
+	}
+	if *callPath == "" {
+		fmt.Fprintln(os.Stderr, "evaluate: -call is required")
 		fs.Usage()
 		return 2
 	}
 
-	policy, err := policyload.Load(*policyPath)
+	policies, err := loadPolicySet(*policyDir, *policyPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "evaluate:", err)
 		return 1
 	}
-	// Same structural gate the proxy applies at load: unknown effects,
-	// bad regexes/types/depth, classifiers under not:, etc. must refuse
-	// to evaluate rather than silently fail open.
-	if err := engine.ValidatePolicy(&policy); err != nil {
-		fmt.Fprintln(os.Stderr, "evaluate:", err)
+	if len(policies) == 0 {
+		fmt.Fprintln(os.Stderr, "evaluate: no policies loaded")
 		return 1
 	}
 	env, err := loadEnvelopeJSON(*callPath)
@@ -175,7 +178,7 @@ func cmdEvaluate(args []string) int {
 		return 2
 	}
 
-	result := engine.NewEvaluator().Evaluate(env, []domain.Policy{policy}, mode)
+	result := engine.NewEvaluator().Evaluate(env, policies, mode)
 	enc := json.NewEncoder(os.Stdout)
 	if err := enc.Encode(result); err != nil {
 		fmt.Fprintln(os.Stderr, "evaluate: encode:", err)

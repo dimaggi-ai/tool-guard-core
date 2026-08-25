@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -34,6 +35,24 @@ type conformanceCase struct {
 		Decision    string `json:"decision"`
 		ActionTaken string `json:"action_taken"`
 	} `json:"expect"`
+}
+
+func TestShadowConformanceFixtureDiffersOnlyByMode(t *testing.T) {
+	base, err := policyload.Load(filepath.Join("..", "..", "policies", "refund_cap.yaml"))
+	if err != nil {
+		t.Fatalf("load shipped refund policy: %v", err)
+	}
+	shadow, err := policyload.Load(filepath.Join("..", "..", "testdata", "conformance", "fixtures", "refund_cap_shadow.yaml"))
+	if err != nil {
+		t.Fatalf("load shadow fixture: %v", err)
+	}
+	if base.Mode != domain.PolicyModeEnforcement || shadow.Mode != domain.PolicyModeShadow {
+		t.Fatalf("fixture modes = base:%q shadow:%q, want enforcement/shadow", base.Mode, shadow.Mode)
+	}
+	shadow.Mode = base.Mode
+	if !reflect.DeepEqual(shadow, base) {
+		t.Fatal("shadow fixture drifted from policies/refund_cap.yaml in fields other than mode")
+	}
 }
 
 func TestConformance(t *testing.T) {

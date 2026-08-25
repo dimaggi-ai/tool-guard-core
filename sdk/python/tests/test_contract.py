@@ -96,6 +96,25 @@ rules:
       excerpt: "Allow refunds up to $500"
 """
 
+_ESCALATE_POLICY = """\
+policy_id: sdk-contract-escalate-cap
+status: approved
+mode: enforcement
+scope:
+  tool_names: [issue_refund]
+  tool_groups: [monetary_outflow]
+rules:
+  - rule_id: rule-escalate-cap
+    conditions:
+      field: amount
+      operator: gt
+      value: 500
+    effect: escalate
+    citation:
+      document_id: sdk-contract-test
+      excerpt: "Escalate refunds over $500 in the contract test"
+"""
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -399,6 +418,48 @@ class TestContract:
             "issue_refund", {"amount": 50}, tool_group="monetary_outflow"
         )
         assert result.decision == Decision.ALLOWED
+
+    @pytest.mark.parametrize(
+        ("enforcement_policy", "expected_exception", "expected_action"),
+        [
+            (_DENY_POLICY, ToolDenied, "denied"),
+            (_ESCALATE_POLICY, ToolEscalated, "escalated"),
+        ],
+    )
+    def test_mixed_modes_preserve_enforcement_action(
+        self,
+        tg_binary,
+        tmp_path,
+        enforcement_policy,
+        expected_exception,
+        expected_action,
+    ):
+        """A lexically earlier shadow deny cannot mask an enforced action."""
+        shadow = _DENY_POLICY.replace(
+            "policy_id: sdk-contract-deny-cap",
+            "policy_id: sdk-contract-shadow-deny-cap",
+        ).replace("mode: enforcement", "mode: shadow")
+        (tmp_path / "00-shadow-deny.yaml").write_text(shadow)
+        (tmp_path / "10-enforcement.yaml").write_text(enforcement_policy)
+        client = ToolGuard(
+            mode="cli",
+            tg_bin=tg_binary,
+            policy_dir=str(tmp_path),
+            agent_id="sdk-contract-agent",
+            org_id="sdk-contract-org",
+        )
+
+        with pytest.raises(expected_exception) as exc_info:
+            client.evaluate(
+                "issue_refund",
+                {"amount": 1000},
+                tool_group="monetary_outflow",
+            )
+
+        result = exc_info.value.result
+        assert result.decision == Decision.DENIED
+        assert result.action_taken == expected_action
+        assert result.is_near_miss is True
 
 
 # ---------------------------------------------------------------------------
