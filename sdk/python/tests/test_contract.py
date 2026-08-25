@@ -30,6 +30,7 @@ import time
 import pytest
 
 from toolguard.client import ToolGuard
+from toolguard.adapters.memory import receipt_reference
 from toolguard.errors import ToolDenied, ToolEscalated
 from toolguard.types import Decision
 
@@ -303,6 +304,7 @@ class TestContract:
 
         assert sdk_result.decision == engine_decision
         assert engine_decision == Decision.ALLOWED
+        assert sdk_result.decision_receipt is None  # non-durable CLI path
 
     def test_denied_call_matches_engine(self, sdk_client, tg_binary, policy_dir):
         """SDK decision for a denied call (amount $1000) must match raw engine."""
@@ -432,6 +434,11 @@ class TestProxyShadowModeContract:
 
         assert result.decision == Decision.DENIED
         assert result.action_taken == "allowed_shadow"
+        assert result.decision_receipt is not None
+        assert result.decision_receipt.canonical_trace_version == "v2"
+        assert result.decision_receipt.decision == Decision.DENIED
+        assert result.decision_receipt.action_taken == "allowed_shadow"
+        assert receipt_reference(result) == result.decision_receipt.receipt_uri
 
     def test_shadow_mode_allows_stay_allowed(self, tg_proxy_shadow):
         """Sanity check: a call the shadow policy wouldn't deny anyway
