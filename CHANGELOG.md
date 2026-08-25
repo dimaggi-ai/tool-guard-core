@@ -4,6 +4,16 @@ All notable changes to Tool Guard Core are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Release verification
+
+- Tag-triggered releases now call the complete CI workflow and cannot build or
+  publish Go, container, or Python artifacts until the same race, platform,
+  vulnerability, policy-lint, SDK, and release-config gates used for merges
+  pass on the tagged commit. The release workflow no longer maintains a
+  separate test list, and publish permissions are limited to publishing jobs.
+
 ## [0.7.0] — 2026-08-20
 
 Release focus: **policy-loading hardening** and **release-integrity
