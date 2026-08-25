@@ -87,7 +87,9 @@ func goldenTrace() *domain.DecisionTrace {
 
 func goldenTraceV2() *domain.DecisionTrace {
 	tr := goldenTrace()
-	tr.CanonicalVersion = CanonicalTraceVersion
+	// Keep historical fixtures pinned to their schema. A later writer-version
+	// bump must not silently move this fixture to v3 and stop covering v2.
+	tr.CanonicalVersion = canonicalTraceVersionV2
 	tr.RuleResults[0].Citation = domain.Citation{
 		DocumentID: "policy-handbook",
 		Section:    "4.2",
@@ -195,6 +197,20 @@ func TestCanonicalTraceBytes_V2Golden(t *testing.T) {
 	}
 	if parsed["_canonical_v"] != "v2" {
 		t.Fatalf("canonical v2 marker = %v", parsed["_canonical_v"])
+	}
+}
+
+func TestCanonicalTraceBytesV2UsesImmutableMarker(t *testing.T) {
+	got, err := canonicalTraceBytesV2(goldenTraceV2())
+	if err != nil {
+		t.Fatalf("canonicalTraceBytesV2: %v", err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(got, &parsed); err != nil {
+		t.Fatalf("canonical v2 output is invalid JSON: %v", err)
+	}
+	if parsed["_canonical_v"] != canonicalTraceVersionV2 {
+		t.Fatalf("immutable v2 encoder emitted marker %v, want %q", parsed["_canonical_v"], canonicalTraceVersionV2)
 	}
 }
 

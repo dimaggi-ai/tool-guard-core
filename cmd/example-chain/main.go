@@ -61,9 +61,9 @@ func mkTrace(traceID, envelopeID, prev string, ts time.Time, d domain.Decision, 
 // from the prior record's TraceHash and stamping each record's
 // TraceHash with the current canonical hasher (covers the versioned
 // decision projection, not just the 6-field identity tuple). After this returns, the slice is
-// a valid chain that `tg verify` will report as intact, and mutating
-// any field of any record (decision_reason, rule_results, agent_id,
-// amount, etc.) will break verification.
+// a valid chain that `tg verify` will report as intact. Mutating any
+// hash-bearing field in the versioned canonical projection (for example
+// decision_reason, rule_results, agent_id, or amount) breaks verification.
 func chain(traces []domain.DecisionTrace) {
 	var prev string
 	for i := range traces {

@@ -21,9 +21,7 @@ import (
 // The tail hash is read by seeking to the END of the file (not scanning the
 // whole thing), so appending stays O(1) per call even as the log grows across
 // a long agent session.
-func appendHookAudit(path string, env *domain.ActionEnvelope, decision, reason string) error {
-	dec, act := hookDecisionToDomain(decision)
-
+func appendHookAudit(path string, env *domain.ActionEnvelope, result *domain.EvaluationResult, decision, reason string) error {
 	trace := domain.DecisionTrace{
 		CanonicalVersion: audit.CanonicalTraceVersion,
 		TraceID:          fmt.Sprintf("trc-%d", time.Now().UnixNano()),
@@ -34,9 +32,30 @@ func appendHookAudit(path string, env *domain.ActionEnvelope, decision, reason s
 		SessionID:        env.SessionID,
 		ToolName:         env.ToolName,
 		ToolGroup:        env.ToolGroup,
-		Decision:         dec,
-		ActionTaken:      act,
-		DecisionReason:   reason,
+	}
+	if result == nil {
+		// Pre-evaluation operational decisions have no engine provenance. Keep a
+		// synthetic outcome for those paths only (protected paths, load errors,
+		// unknown-tool rejection, and configured fail-open/fail-closed handling).
+		trace.Decision, trace.ActionTaken = hookDecisionToDomain(decision)
+		trace.DecisionReason = reason
+	} else {
+		// Preserve the engine's complete result. Reducing this to the hook's
+		// allow|ask|deny response discards shadow-mode telemetry: a raw deny with
+		// action_taken=allowed_shadow must remain visible in the audit record.
+		trace.Decision = result.Decision
+		trace.ActionTaken = result.ActionTaken
+		trace.DecisionReason = result.DecisionReason
+		trace.Mode = result.EffectiveMode
+		trace.PoliciesMatched = result.PoliciesMatched
+		trace.RulesEvaluated = result.RulesEvaluated
+		trace.RulesTriggered = result.RulesTriggered
+		trace.RuleResults = result.RuleResults
+		trace.AppliedRuleResults = result.AppliedRuleResults
+		trace.PrimaryCitation = result.PrimaryCitation
+		trace.AppliedPrimaryCitation = result.AppliedPrimaryCitation
+		trace.SuggestedResponse = result.SuggestedResponse
+		trace.IsNearMiss = result.IsNearMiss
 	}
 
 	// Serialize concurrent hook processes: two appends that both read the same

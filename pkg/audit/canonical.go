@@ -356,7 +356,7 @@ func canonicalTraceBytesV1(t *domain.DecisionTrace) ([]byte, error) {
 
 func canonicalTraceBytesV2(t *domain.DecisionTrace) ([]byte, error) {
 	c := canonicalTraceV2{
-		CanonicalV: CanonicalTraceVersion,
+		CanonicalV: canonicalTraceVersionV2,
 		TraceID:    t.TraceID,
 		Timestamp:  t.Timestamp.UTC().Format(time.RFC3339Nano),
 		OrgID:      t.OrgID,

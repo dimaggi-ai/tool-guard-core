@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/dimaggi-ai/tool-guard-core/pkg/audit"
+	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 )
 
 // hookDecision decodes the JSON written to stdout by runHook and returns
@@ -167,6 +170,53 @@ func TestHook_ShadowMode_ObservesDoesNotEnforce(t *testing.T) {
 	}
 	if d := hookDecision(t, out); d != "allow" {
 		t.Errorf("shadow mode must never block — expected allow (near-miss observed, not enforced), got %q; output=%s", d, out)
+	}
+}
+
+func TestHook_ShadowPolicyAuditPreservesEvaluation(t *testing.T) {
+	shadowDenyPolicy := strings.Replace(hookDenyPolicy, "mode: enforcement", "mode: shadow", 1)
+	pol := writeHookPolicy(t, shadowDenyPolicy)
+	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
+	stdin := `{"tool_name":"bash","tool_input":{"command":"rm -rf /tmp/x"}}`
+	out, code := runHookStr(t, stdin, "-policy", pol, "-audit-log", auditPath)
+	if code != 0 {
+		t.Fatalf("hook must always exit 0, got %d", code)
+	}
+	if d := hookDecision(t, out); d != "allow" {
+		t.Fatalf("shadow policy must not block; permission decision = %q, output=%s", d, out)
+	}
+
+	raw, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatalf("read hook audit: %v", err)
+	}
+	var trace domain.DecisionTrace
+	if err := json.Unmarshal(bytes.TrimSpace(raw), &trace); err != nil {
+		t.Fatalf("decode hook audit: %v\n%s", err, raw)
+	}
+	if trace.Decision != domain.DecisionDenied || trace.ActionTaken != domain.ActionAllowedShadow {
+		t.Fatalf("audit outcome = decision %q action %q, want denied/allowed_shadow", trace.Decision, trace.ActionTaken)
+	}
+	if trace.Mode != domain.PolicyModeShadow {
+		t.Errorf("audit mode = %q, want shadow", trace.Mode)
+	}
+	if trace.PoliciesMatched != 1 || trace.RulesEvaluated != 1 || trace.RulesTriggered != 1 {
+		t.Errorf("audit counts = policies:%d evaluated:%d triggered:%d, want 1/1/1", trace.PoliciesMatched, trace.RulesEvaluated, trace.RulesTriggered)
+	}
+	if len(trace.RuleResults) != 1 || !trace.RuleResults[0].Matched || trace.RuleResults[0].Effect != domain.EffectDeny {
+		t.Fatalf("audit rule results did not preserve shadow deny: %#v", trace.RuleResults)
+	}
+	if trace.PrimaryCitation == nil || trace.PrimaryCitation.Excerpt != "no rm" {
+		t.Fatalf("audit primary citation = %#v, want shadow rule citation", trace.PrimaryCitation)
+	}
+	if len(trace.AppliedRuleResults) != 0 || trace.AppliedPrimaryCitation != nil {
+		t.Fatalf("shadow-only audit must not claim applied rule provenance: rules=%#v citation=%#v", trace.AppliedRuleResults, trace.AppliedPrimaryCitation)
+	}
+	if !trace.IsNearMiss {
+		t.Error("shadow deny audit must retain is_near_miss=true")
+	}
+	if ok, err := audit.VerifyCanonicalTraceHash(&trace); err != nil || !ok {
+		t.Fatalf("hook audit hash invalid: ok=%v err=%v", ok, err)
 	}
 }
 

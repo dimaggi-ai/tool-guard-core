@@ -141,10 +141,10 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	// emitAudited emits the decision and, when -audit-log is set, appends it
 	// to the hash chain (best-effort — an audit failure never changes the
 	// decision). Used for every decision that has a real envelope.
-	emitAudited := func(dec, reason string) {
+	emitAudited := func(dec, reason string, result *domain.EvaluationResult) {
 		emitHookDecisionTo(stdout, dec, reason)
 		if *auditLog != "" {
-			_ = appendHookAudit(*auditLog, env, dec, reason)
+			_ = appendHookAudit(*auditLog, env, result, dec, reason)
 		}
 	}
 
@@ -154,7 +154,7 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 		protectList = append(selfProtectPaths(*policyDir, *policyFile), protectList...)
 	}
 	if violated, reason := engine.ViolatesProtectedPaths(env, protectList); violated {
-		emitAudited("deny", reason)
+		emitAudited("deny", reason, nil)
 		return 0
 	}
 
@@ -163,7 +163,7 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	// fail-open/closed policy applies. (Protected paths above still ran.)
 	if *policyDir == "" && *policyFile == "" {
 		d, reason := failDecide(tool)
-		emitAudited(d, reason)
+		emitAudited(d, reason, nil)
 		return 0
 	}
 
@@ -172,18 +172,19 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 		mode = domain.PolicyModeShadow
 	}
 
-	dec, reason := evalHook(*policyDir, *policyFile, env, mode, failDecide, *unknownToolsDeny)
-	emitAudited(dec, reason)
+	dec, reason, result := evalHook(*policyDir, *policyFile, env, mode, failDecide, *unknownToolsDeny)
+	emitAudited(dec, reason, result)
 	return 0
 }
 
 // evalHook loads the policy set and evaluates env, recovering from any panic
 // so the hook can never crash the agent. On load failure or panic it returns
 // the fail-open/closed decision for env.ToolName.
-func evalHook(policyDir, policyFile string, env *domain.ActionEnvelope, mode domain.PolicyMode, failDecide func(string) (string, string), unknownToolsDeny bool) (dec string, reason string) {
+func evalHook(policyDir, policyFile string, env *domain.ActionEnvelope, mode domain.PolicyMode, failDecide func(string) (string, string), unknownToolsDeny bool) (dec string, reason string, result *domain.EvaluationResult) {
 	defer func() {
 		if r := recover(); r != nil {
 			dec, reason = failDecide(env.ToolName)
+			result = nil
 			if reason == "" && dec == "deny" {
 				reason = fmt.Sprintf("Tool Guard hook panicked during evaluation: %v", r)
 			}
@@ -203,7 +204,8 @@ func evalHook(policyDir, policyFile string, env *domain.ActionEnvelope, mode dom
 		} else {
 			fmt.Fprintln(os.Stderr, "tg hook: no policies loaded — no policy enforced for this call")
 		}
-		return failDecide(env.ToolName)
+		dec, reason = failDecide(env.ToolName)
+		return dec, reason, nil
 	}
 
 	// Tool-name spoof guard, evaluated BEFORE the engine call so a denied
@@ -213,10 +215,10 @@ func evalHook(policyDir, policyFile string, env *domain.ActionEnvelope, mode dom
 	// count). Closes the coverage gap where tg-proxy had this gate and tg
 	// hook — the actual coding-agent enforcement point — did not.
 	if unknownToolsDeny && !engine.ToolNameKnown(env.ToolName, policies) {
-		return "deny", fmt.Sprintf("tool_name %q is not declared in scope.tool_names of any loaded ENFORCEMENT policy (-unknown-tools-deny)", env.ToolName)
+		return "deny", fmt.Sprintf("tool_name %q is not declared in scope.tool_names of any loaded ENFORCEMENT policy (-unknown-tools-deny)", env.ToolName), nil
 	}
 
-	result := engine.NewEvaluator().Evaluate(env, policies, mode)
+	result = engine.NewEvaluator().Evaluate(env, policies, mode)
 	// Branches on ActionTaken (what actually happened), NOT Decision (what
 	// would have happened). In shadow mode the engine reports
 	// Decision=denied/escalated alongside ActionTaken=allowed_shadow — the
@@ -229,11 +231,11 @@ func evalHook(policyDir, policyFile string, env *domain.ActionEnvelope, mode dom
 	// looking for it after the SDK fixes landed.
 	switch result.ActionTaken {
 	case domain.ActionDenied:
-		return "deny", hookReason(result)
+		return "deny", hookReason(result), result
 	case domain.ActionEscalated:
-		return "ask", hookReason(result)
+		return "ask", hookReason(result), result
 	default:
-		return "allow", ""
+		return "allow", "", result
 	}
 }
 

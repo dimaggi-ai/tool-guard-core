@@ -64,7 +64,7 @@ func readChain(t *testing.T, path string) [][2]string {
 func TestAppendHookAudit_ChainLinks(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.jsonl")
 	for i := 0; i < 5; i++ {
-		if err := appendHookAudit(path, auditEnv("env"), "allow", "ok"); err != nil {
+		if err := appendHookAudit(path, auditEnv("env"), nil, "allow", "ok"); err != nil {
 			t.Fatalf("append %d: %v", i, err)
 		}
 	}
@@ -95,7 +95,7 @@ func TestAppendHookAudit_ConcurrentNoFork(t *testing.T) {
 			defer wg.Done()
 			// Ignore lock-contention give-ups; the ones that DID write must
 			// still form a valid chain.
-			_ = appendHookAudit(path, auditEnv("env"), "allow", "ok")
+			_ = appendHookAudit(path, auditEnv("env"), nil, "allow", "ok")
 		}()
 	}
 	wg.Wait()
@@ -137,7 +137,7 @@ func TestLastTraceHash_TailReadDropsPartialLine(t *testing.T) {
 	// Write enough records that the earliest ones fall outside the 64KB tail.
 	const n = 400
 	for i := 0; i < n; i++ {
-		if err := appendHookAudit(path, auditEnv("env"), "allow", strings.Repeat("x", 300)); err != nil {
+		if err := appendHookAudit(path, auditEnv("env"), nil, "allow", strings.Repeat("x", 300)); err != nil {
 			t.Fatalf("append %d: %v", i, err)
 		}
 	}
