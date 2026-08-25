@@ -33,8 +33,8 @@
 //	./bin/stress-test -target http://localhost:9090 -tg-bin ./bin/tg -audit-log /tmp/stress.jsonl
 //
 // Output
-//   - One results line per concurrency level (req/s, latency percentiles,
-//     error breakdown by cause).
+//   - One results line per concurrency level (successful 2xx req/s, latency
+//     percentiles, error breakdown by cause).
 //   - One line for the overload phase, classified as PASS (failed closed:
 //     rejected, errored, or denied — never auto-allowed an over-cap refund) or
 //     FAIL (let an over-cap refund back through with a 200 that wasn't a deny,
@@ -96,7 +96,7 @@ func main() {
 		overloadTimeout  = flag.Duration("overload-timeout", 10*time.Second, "a request outstanding this long during the overload phase counts as a hang, not a slow success")
 		tgBin            = flag.String("tg-bin", "tg", "path to the tg binary, used to verify the audit chain afterward")
 		auditLog         = flag.String("audit-log", "", "path tg-proxy was started with -audit-log; if set, verified with `tg verify` after all phases")
-		floorConcurrency = flag.Int("floor-concurrency", 0, "if set, must also appear in -concurrency: assert the published floor at this level (0 disables floor checking)")
+		floorConcurrency = flag.Int("floor-concurrency", 0, "if set, must also appear in -concurrency: assert the qualified regression floor at this level (0 disables floor checking)")
 		floorMinRPS      = flag.Float64("floor-min-rps", 0, "minimum acceptable req/s at -floor-concurrency")
 		floorMaxP99      = flag.Duration("floor-max-p99", 0, "maximum acceptable p99 latency at -floor-concurrency")
 	)
@@ -124,14 +124,14 @@ func main() {
 
 		if *floorConcurrency != 0 && c == *floorConcurrency {
 			sort.Slice(res.latencies, func(i, j int) bool { return res.latencies[i] < res.latencies[j] })
-			gotRPS := float64(len(res.latencies)) / duration.Seconds()
+			gotRPS := successfulRPS(res, *duration)
 			gotP99 := percentile(res.latencies, 0.99)
 			if *floorMinRPS > 0 && gotRPS < *floorMinRPS {
-				fmt.Printf("  ⚠ FLOOR MISS: req/s %.1f < published floor %.1f at concurrency=%d\n", gotRPS, *floorMinRPS, c)
+				fmt.Printf("  ⚠ FLOOR MISS: req/s %.1f < qualified regression floor %.1f at concurrency=%d\n", gotRPS, *floorMinRPS, c)
 				floorMet = false
 			}
 			if *floorMaxP99 > 0 && gotP99 > *floorMaxP99 {
-				fmt.Printf("  ⚠ FLOOR MISS: p99 %s > published floor %s at concurrency=%d\n", gotP99, *floorMaxP99, c)
+				fmt.Printf("  ⚠ FLOOR MISS: p99 %s > qualified regression floor %s at concurrency=%d\n", gotP99, *floorMaxP99, c)
 				floorMet = false
 			}
 			if floorMet && (*floorMinRPS > 0 || *floorMaxP99 > 0) {
@@ -190,8 +190,8 @@ type levelResult struct {
 	byStatus   map[int]int64
 	timeouts   int64
 	connErrors int64
-	wrongDec   int64 // 200 OK but decision didn't match what the amount should have produced
-	latencies  []time.Duration
+	wrongDec   int64           // 200 OK but decision didn't match what the amount should have produced
+	latencies  []time.Duration // completed 2xx responses only
 	worstHang  time.Duration
 }
 
@@ -249,8 +249,8 @@ func runLevel(target string, concurrency int, duration time.Duration, perReqTime
 					continue
 				}
 				localStatus[out.statusCode]++
+				local = appendSuccessfulLatency(local, out)
 				if out.statusCode == http.StatusOK {
-					local = append(local, out.latency)
 					// Fail-open = an over-cap refund that came back 200 without
 					// being denied (auto-allowed, or a corrupt/empty decision).
 					// A denial is fail-CLOSED and safe — including the
@@ -267,6 +267,24 @@ func runLevel(target string, concurrency int, duration time.Duration, perReqTime
 	}
 	wg.Wait()
 	return agg
+}
+
+// appendSuccessfulLatency records every completed 2xx response. HTTP 202 is a
+// successful escalation outcome from tg-proxy, so excluding it makes the
+// throughput metric depend on the random policy-decision mix rather than the
+// number of requests the server handled.
+func appendSuccessfulLatency(dst []time.Duration, out reqOutcome) []time.Duration {
+	if out.statusCode >= 200 && out.statusCode < 300 {
+		return append(dst, out.latency)
+	}
+	return dst
+}
+
+func successfulRPS(result levelResult, duration time.Duration) float64 {
+	if duration <= 0 {
+		return 0
+	}
+	return float64(len(result.latencies)) / duration.Seconds()
 }
 
 func buildEnvelope(rng *rand.Rand) (envelope, bool) {
@@ -397,8 +415,8 @@ func percentile(sorted []time.Duration, p float64) time.Duration {
 
 func printLevel(concurrency int, duration time.Duration, r levelResult) {
 	sort.Slice(r.latencies, func(i, j int) bool { return r.latencies[i] < r.latencies[j] })
-	ok := int64(len(r.latencies))
-	rps := float64(ok) / duration.Seconds()
+	successful := int64(len(r.latencies))
+	rps := successfulRPS(r, duration)
 
 	statusStr := make([]string, 0, len(r.byStatus))
 	for code, n := range r.byStatus {
@@ -407,8 +425,8 @@ func printLevel(concurrency int, duration time.Duration, r levelResult) {
 	sort.Strings(statusStr)
 
 	fmt.Printf(
-		"concurrency=%-5d total=%-8d ok=%-8d req/s=%-8.1f p50=%-8s p95=%-8s p99=%-8s max=%-8s conn_err=%-5d timeouts=%-5d wrong_decision=%-4d status=[%s]\n",
-		concurrency, r.total, ok, rps,
+		"concurrency=%-5d total=%-8d success_2xx=%-8d req/s=%-8.1f p50=%-8s p95=%-8s p99=%-8s max=%-8s conn_err=%-5d timeouts=%-5d wrong_decision=%-4d status=[%s]\n",
+		concurrency, r.total, successful, rps,
 		percentile(r.latencies, 0.50), percentile(r.latencies, 0.95), percentile(r.latencies, 0.99),
 		percentile(r.latencies, 1.0),
 		r.connErrors, r.timeouts, r.wrongDec,

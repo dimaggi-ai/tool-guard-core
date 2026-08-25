@@ -1,23 +1,21 @@
 name: Nightly stress
 
 # Runs the load/overload/audit-chain suite (cmd/stress-test) with a longer
-# fuzz budget than the 30s/target PR gate in ci.yml, asserts a published
-# throughput/latency floor, and enforces the pathological-SQL duration ceiling.
+# fuzz budget than the 30s/target PR gate in ci.yml, asserts a qualified
+# throughput/latency regression floor, and enforces the pathological-SQL
+# duration ceiling.
 #
 # NOT run on every PR: GitHub-hosted runners have noisy, shared-tenant
-# performance (confirmed locally — the same run varied from ~10k to ~26k
-# req/s at concurrency=50 depending on machine load). Gating every PR on
-# that noise would produce flaky failures unrelated to the actual code
-# change. Nightly on a fixed schedule instead — real regressions still get
-# caught within a day, false failures don't block anyone's PR.
+# performance. The five post-fix runs cited below span 1,949.6-2,593.8 req/s
+# on unchanged code. Gating every PR on that noise would produce failures
+# unrelated to the reviewed change. Nightly on a fixed schedule instead —
+# regressions still surface within a day without blocking unrelated PRs.
 #
-# The floor values below are deliberately conservative relative to
-# real measurements (~10k-26k req/s, ~4-24ms p99 at concurrency=50 on a
-# 16-thread desktop) — wide enough margin to absorb a slower/shared CI
-# runner without false-failing, tight enough to still catch a genuine
-# throughput collapse (e.g. the audit-mutex contention point becoming
-# pathological, or a regression that serializes something that shouldn't
-# be).
+# The throughput floor is based on successful 2xx responses, including the 202
+# returned for a valid escalation. Five healthy post-harness-fix runs on this
+# runner class measured 1,949.6-2,593.8 req/s at concurrency 50. The 1,900
+# floor leaves runner headroom while still failing a 10% regression from the
+# prior 2,000 baseline. docs/performance.md records the run dates and method.
 
 on:
   schedule:
@@ -68,16 +66,17 @@ jobs:
           echo $! > /tmp/nightly-stress/proxy.pid
           sleep 1
 
-      - name: Load + overload + published floor + audit-chain integrity
+      - name: Load + overload + regression floor + audit-chain integrity
         run: |
           ./bin/stress-test \
             -target http://127.0.0.1:9090 \
             -concurrency 1,10,50,200 \
+            -duration 15s \
             -overload 2000 \
             -tg-bin ./bin/tg \
             -audit-log /tmp/nightly-stress/decisions.jsonl \
             -floor-concurrency 50 \
-            -floor-min-rps 2000 \
+            -floor-min-rps 1900 \
             -floor-max-p99 200ms
 
       - name: Stop tg-proxy
