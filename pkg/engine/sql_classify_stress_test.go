@@ -61,7 +61,10 @@ func TestStress_SQLClassifyPathologicalInput(t *testing.T) {
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+			// Keep these cases serial. Each one is intentionally CPU-heavy, and
+			// running every case in parallel makes the deadline measure scheduler
+			// contention (especially under the race detector) rather than the
+			// classifier's latency for a single adversarial input.
 			done := make(chan struct{})
 			var fired bool
 			var panicked any
