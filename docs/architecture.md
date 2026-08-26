@@ -161,7 +161,10 @@ of the canonical hash. The exact hashed sets are the immutable versioned
 structs in `pkg/audit/canonical.go`; records without `_canonical_v` use v1,
 while new records carry `_canonical_v: "v2"`. Escalation approvals are
 written as their own chained entries, so the approval record is itself
-tamper-evident.
+tamper-evident. The v2 writer transition is a coordinated upgrade: 0.8 can
+verify mixed v1/v2 chains, but 0.7 cannot verify or resume after a v2 record.
+See the [upgrade path](operating.md#upgrade-path) before enabling a 0.8 writer
+on an existing chain.
 
 On startup, the proxy reads the audit log tail, recomputes its
 canonical hash, and refuses to start if the stored hash doesn't

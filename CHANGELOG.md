@@ -4,6 +4,24 @@ All notable changes to Tool Guard Core are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Breaking audit-format migration planned for 0.8.0
+
+- New audit writers stamp canonical trace v2 so the raw decision and the
+  applied-action provenance are both covered by the trace hash. Canonical v1
+  remains byte-identical and the 0.8 verifier accepts mixed v1/v2 chains, but
+  0.7 binaries cannot verify or resume a chain after its first v2 record.
+- Upgrade every verifier and writer that shares an audit chain before resuming
+  writes. Do not roll a writer back to 0.7 after a v2 append. The detailed
+  quiesce, backup, verification, and rollback procedure is in
+  `docs/operating.md`.
+- This intentionally supersedes the 0.7 documentation that described a future
+  v2 writer as opt-in. Keeping v1 as the default would leave the new
+  applied-action attribution outside the integrity commitment. Because Tool
+  Guard is pre-1.0, 0.8 carries this explicitly documented breaking migration
+  in a minor release rather than weakening the audit guarantee.
+
 ## [0.7.0] — 2026-08-20
 
 Release focus: **policy-loading hardening** and **release-integrity

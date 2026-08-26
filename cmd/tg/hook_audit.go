@@ -79,7 +79,7 @@ func appendHookAudit(path string, env *domain.ActionEnvelope, result *domain.Eva
 	}
 	trace.TraceHash = h
 
-	line, err := marshalHookAuditTrace(&trace)
+	line, err := audit.MarshalTraceRecord(&trace)
 	if err != nil {
 		return err
 	}
@@ -92,20 +92,6 @@ func appendHookAudit(path string, env *domain.ActionEnvelope, result *domain.Eva
 		return err
 	}
 	return f.Sync()
-}
-
-// marshalHookAuditTrace applies the same per-record ceiling as the streaming
-// verifier. Refusing an oversized record before opening the log prevents a
-// hook from creating a chain that tg verify cannot replay.
-func marshalHookAuditTrace(trace *domain.DecisionTrace) ([]byte, error) {
-	line, err := json.Marshal(trace)
-	if err != nil {
-		return nil, err
-	}
-	if len(line) > audit.MaxTraceRecordBytes {
-		return nil, fmt.Errorf("audit record is %d bytes; maximum is %d", len(line), audit.MaxTraceRecordBytes)
-	}
-	return line, nil
 }
 
 // appendHookAuditBestEffort preserves the hook decision when audit persistence

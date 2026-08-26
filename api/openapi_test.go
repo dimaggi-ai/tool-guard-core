@@ -88,10 +88,23 @@ func TestEvaluationSchemasAllowOnlyDeclaredComposedProperties(t *testing.T) {
 		t.Fatal("EvaluationResultFields must remain composable; close only the concrete schemas")
 	}
 	properties := asMap(t, base["properties"], "components.schemas.EvaluationResultFields.properties")
-	for _, field := range []string{"applied_rule_results", "applied_primary_citation"} {
-		if _, ok := properties[field]; !ok {
-			t.Errorf("EvaluationResultFields missing applied-action provenance field %q", field)
-		}
+	appliedRules := asMap(t, properties["applied_rule_results"], "EvaluationResultFields.properties.applied_rule_results")
+	if appliedRules["type"] != "array" {
+		t.Errorf("applied_rule_results type=%v, want array", appliedRules["type"])
+	}
+	appliedItems := asMap(t, appliedRules["items"], "EvaluationResultFields.properties.applied_rule_results.items")
+	if appliedItems["$ref"] != "#/components/schemas/RuleResult" {
+		t.Errorf("applied_rule_results items ref=%v, want RuleResult", appliedItems["$ref"])
+	}
+
+	appliedCitation := asMap(t, properties["applied_primary_citation"], "EvaluationResultFields.properties.applied_primary_citation")
+	allOf, ok := appliedCitation["allOf"].([]any)
+	if !ok || len(allOf) != 1 {
+		t.Fatalf("applied_primary_citation must compose exactly one Citation schema")
+	}
+	citationRef := asMap(t, allOf[0], "EvaluationResultFields.properties.applied_primary_citation.allOf[0]")
+	if citationRef["$ref"] != "#/components/schemas/Citation" {
+		t.Errorf("applied_primary_citation ref=%v, want Citation", citationRef["$ref"])
 	}
 }
 

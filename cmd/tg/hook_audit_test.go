@@ -232,9 +232,9 @@ func TestAppendHookAudit_LargeRecordKeepsNextLink(t *testing.T) {
 	}
 }
 
-func TestMarshalHookAuditTrace_RecordSizeBoundary(t *testing.T) {
+func TestHookAudit_RecordSizeBoundary(t *testing.T) {
 	exact := hookAuditTraceOfSize(t, audit.MaxTraceRecordBytes)
-	line, err := marshalHookAuditTrace(exact)
+	line, err := audit.MarshalTraceRecord(exact)
 	if err != nil {
 		t.Fatalf("marshal exact-max record: %v", err)
 	}
@@ -243,7 +243,7 @@ func TestMarshalHookAuditTrace_RecordSizeBoundary(t *testing.T) {
 	}
 
 	tooLarge := hookAuditTraceOfSize(t, audit.MaxTraceRecordBytes+1)
-	if _, err := marshalHookAuditTrace(tooLarge); err == nil || !strings.Contains(err.Error(), "maximum") {
+	if _, err := audit.MarshalTraceRecord(tooLarge); err == nil || !strings.Contains(err.Error(), "maximum") {
 		t.Fatalf("marshal max+1 error = %v, want maximum-size error", err)
 	}
 }
@@ -251,7 +251,7 @@ func TestMarshalHookAuditTrace_RecordSizeBoundary(t *testing.T) {
 func TestAppendHookAudit_ExtendsExactMaxRecord(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.jsonl")
 	first := hookAuditTraceOfSize(t, audit.MaxTraceRecordBytes)
-	line, err := marshalHookAuditTrace(first)
+	line, err := audit.MarshalTraceRecord(first)
 	if err != nil {
 		t.Fatalf("marshal exact-max record: %v", err)
 	}

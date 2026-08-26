@@ -36,11 +36,15 @@ func (p *proxy) recoverAuditTail() (domain.DecisionTrace, bool, error) {
 			return domain.DecisionTrace{}, false, err
 		}
 		sc := bufio.NewScanner(f)
-		sc.Buffer(make([]byte, 0, 1<<20), 4*1024*1024)
+		sc.Buffer(make([]byte, 0, 1<<20), audit.MaxTraceRecordScanBytes)
 		var last domain.DecisionTrace
 		var sawAny bool
 		for sc.Scan() {
 			line := sc.Bytes()
+			if len(line) > audit.MaxTraceRecordBytes {
+				_ = f.Close()
+				return domain.DecisionTrace{}, false, fmt.Errorf("audit log %q contains a record exceeding %d bytes — repair or rotate it before restarting", path, audit.MaxTraceRecordBytes)
+			}
 			if len(line) == 0 {
 				continue
 			}
@@ -242,7 +246,7 @@ func (p *proxy) appendTrace(t *domain.DecisionTrace) error {
 		return fmt.Errorf("canonical hash: %w", err)
 	}
 	t.TraceHash = h
-	raw, err := json.Marshal(t)
+	raw, err := audit.MarshalTraceRecord(t)
 	if err != nil {
 		return err
 	}

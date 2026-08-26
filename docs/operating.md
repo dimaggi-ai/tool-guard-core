@@ -364,11 +364,34 @@ hashed and chained correctly), not fail-recoverable.
 
 ## Upgrade path
 
-Tool Guard follows semver. Between minor versions the canonical
-trace schemas are immutable. Current writers stamp
-`CanonicalTraceVersion = v2`; records written before the on-record
-`_canonical_v` marker are interpreted with the byte-identical v1 encoder.
-Mixed v1/v2 chains remain `tg verify`-able across an upgrade.
+Tool Guard follows semver and is still pre-1.0. Version 0.8.0 contains one
+explicitly documented breaking audit-format migration: new writers stamp
+`CanonicalTraceVersion = v2` so the raw decision and applied-action provenance
+are both bound by the canonical hash. Canonical v1 remains byte-identical;
+records written before the on-record `_canonical_v` marker are interpreted by
+the v1 encoder, and the 0.8 verifier accepts mixed v1/v2 chains.
+
+The reverse is not true: a 0.7 binary cannot verify a v2 record or resume a
+chain whose tail is v2. This intentionally supersedes the 0.7 documentation
+that described a future v2 writer as opt-in. Defaulting to v1 would either omit
+the applied-action attribution or record it outside the integrity commitment,
+which is not a safe default.
+
+Before the first 0.8 writer appends to an existing chain:
+
+1. Quiesce every writer that shares the chain and back up the complete active
+   file plus its rotated siblings.
+2. Verify the backup with the existing 0.7 `tg verify` binary, then verify the
+   same bytes with the 0.8 binary. Both checks must pass before proceeding.
+3. Deploy the 0.8 verifier to every audit consumer, then upgrade every writer
+   for that chain as one coordinated change. Do not run mixed 0.7/0.8 writers.
+4. Resume traffic. The first new record is v2 and links to the existing v1
+   tail; subsequent `tg verify` runs must use 0.8 or newer.
+
+After a v2 record exists, do not roll a writer back to 0.7 against that log. An
+emergency downgrade requires either restoring the verified v1-only backup or
+starting a clearly documented new chain while preserving the v2 files as
+evidence; never truncate the original chain to make an old binary start.
 
 To upgrade:
 

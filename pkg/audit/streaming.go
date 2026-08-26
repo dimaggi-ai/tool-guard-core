@@ -18,7 +18,21 @@ const MaxTraceRecordBytes = 4 * 1024 * 1024
 // bytes cover both the LF emitted by Tool Guard and CRLF input produced by
 // Windows tooling; the explicit record-length check below still enforces the
 // public MaxTraceRecordBytes contract.
-const traceRecordDelimiterHeadroom = 2
+const MaxTraceRecordScanBytes = MaxTraceRecordBytes + 2
+
+// MarshalTraceRecord serializes one JSONL record and enforces the same logical
+// record ceiling as VerifyChainFromReader. All audit writers use this helper so
+// none can create a chain that the verifier cannot replay.
+func MarshalTraceRecord(trace *domain.DecisionTrace) ([]byte, error) {
+	raw, err := json.Marshal(trace)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > MaxTraceRecordBytes {
+		return nil, fmt.Errorf("audit record is %d bytes; maximum is %d", len(raw), MaxTraceRecordBytes)
+	}
+	return raw, nil
+}
 
 // StreamReport is the result of a streaming chain verification.
 //
@@ -57,7 +71,7 @@ func VerifyChainFromReader(r io.Reader) (*StreamReport, error) {
 	// the scanner's per-line ceiling so big-but-valid records are not
 	// silently truncated. 4 MiB is comfortably above a realistic trace.
 	buf := make([]byte, 0, 1<<20)
-	sc.Buffer(buf, MaxTraceRecordBytes+traceRecordDelimiterHeadroom)
+	sc.Buffer(buf, MaxTraceRecordScanBytes)
 
 	rep := &StreamReport{Intact: true}
 	var prevHash string
