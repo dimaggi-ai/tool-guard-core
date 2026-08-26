@@ -46,7 +46,6 @@ func newOperationalTestProxy(t *testing.T, policies []domain.Policy, trackVeloci
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = auditLog.Close() })
 	p := &proxy{
 		policies:             policies,
 		auditLog:             auditLog,
@@ -61,6 +60,9 @@ func newOperationalTestProxy(t *testing.T, policies []domain.Policy, trackVeloci
 		eval:                 engine.NewEvaluator(),
 		startedAt:            time.Now().UTC(),
 	}
+	// Rotation replaces p.auditLog. Close the handle that is current at cleanup
+	// time so Windows can remove the temporary directory after rotating tests.
+	t.Cleanup(func() { _ = p.auditLog.Close() })
 	if trackVelocity {
 		p.velocity = newVelocityTracker()
 		p.velocityKeyBy = "agent_id"
