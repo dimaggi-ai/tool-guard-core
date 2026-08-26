@@ -87,6 +87,9 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   terminal state only after it succeeds. If rollback cannot be proven, the
   writer is poisoned and the escalation becomes `indeterminate` for operator
   reconciliation instead of claiming an ordinary pending or approved state.
+  Rotation now flushes its rename and replacement-file metadata before a
+  forced-durable approval can return 200 (directory fsync on POSIX;
+  write-through rename plus file sync on Windows).
 - Compile-only `js/wasm` and `wasip1/wasm` proxy builds no longer reference
   unavailable process-signal constants. Native SIGHUP reload and graceful
   shutdown behavior is unchanged.

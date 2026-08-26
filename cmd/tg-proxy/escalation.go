@@ -184,7 +184,7 @@ func (s *escalationStore) resolveAudited(
 	}
 	if beforeCommit != nil {
 		if err := beforeCommit(&candidate); err != nil {
-			if errors.Is(err, errAuditRecordCommitted) {
+			if errors.Is(err, errAuditStateIndeterminate) {
 				candidate.State = EscIndeterminate
 				*e = candidate
 				indeterminate := *e

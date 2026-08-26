@@ -42,7 +42,7 @@ func operationalPolicy(id string, mode domain.PolicyMode, effect domain.Effect, 
 func newOperationalTestProxy(t *testing.T, policies []domain.Policy, trackVelocity bool) *proxy {
 	t.Helper()
 	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
-	auditLog, err := os.OpenFile(auditPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0o600)
+	auditLog, err := openDiskAuditLog(auditPath)
 	if err != nil {
 		t.Fatal(err)
 	}

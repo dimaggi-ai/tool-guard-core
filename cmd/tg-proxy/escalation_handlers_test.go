@@ -1,8 +1,10 @@
 package main
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -57,7 +59,7 @@ func TestEscalationResolution_AuditPrecedesTerminalState(t *testing.T) {
 	}
 }
 
-func TestEscalationApproval_AuditRollbackFailureLeavesPending(t *testing.T) {
+func TestEscalationApproval_AuditRollbackFailureBecomesIndeterminate(t *testing.T) {
 	p := newOperationalTestProxy(t, nil, false)
 	p.approverToken = "secret"
 	id := "approval-audit-failure"
@@ -80,23 +82,53 @@ func TestEscalationApproval_AuditRollbackFailureLeavesPending(t *testing.T) {
 	}
 	body := rec.Body.String()
 	if !strings.Contains(body, `"error":"audit_append_failed"`) ||
-		!strings.Contains(body, `"state":"pending"`) {
-		t.Fatalf("structured failure response missing error/pending state: %s", rec.Body.String())
+		!strings.Contains(body, `"state":"indeterminate"`) {
+		t.Fatalf("structured failure response missing error/indeterminate state: %s", rec.Body.String())
 	}
 	if !strings.Contains(body, "resubmitted with a fresh envelope ID") ||
 		!strings.Contains(body, "do not retry this escalation ID") ||
 		strings.Contains(body, "wait for /readyz") {
 		t.Fatalf("structured failure response has an inaccurate recovery hint: %s", body)
 	}
-	pending := p.escalations.get(id)
-	if pending == nil || pending.State != EscPending || pending.ResolvedAt != nil || pending.Approver != "" {
-		t.Fatalf("failed approval mutated escalation: %#v", pending)
+	indeterminate := p.escalations.get(id)
+	if indeterminate == nil || indeterminate.State != EscIndeterminate || indeterminate.ResolvedAt == nil {
+		t.Fatalf("failed rollback state = %#v, want indeterminate", indeterminate)
 	}
 	if fault.writeCalls != 1 || !p.auditPoisoned || p.auditFailureCount.Load() != 1 {
 		t.Fatalf(
 			"audit failure state: writes=%d poisoned=%v failures=%d, want 1/true/1",
 			fault.writeCalls, p.auditPoisoned, p.auditFailureCount.Load(),
 		)
+	}
+}
+
+func TestEscalationApproval_FullWriteErrorRollbackFailureBecomesIndeterminate(t *testing.T) {
+	p := newOperationalTestProxy(t, nil, false)
+	p.approverToken = "secret"
+	id := "approval-full-write-error"
+	if e := p.escalations.add(envFor(id), decisionFor(domain.DecisionEscalated), 15); e == nil {
+		t.Fatal("seed escalation failed")
+	}
+	fault := &faultInjectAuditFile{
+		auditLogFile:             p.auditLog,
+		fullWriteErrorsRemaining: 1,
+		failTruncate:             true,
+	}
+	p.auditLog = fault
+
+	rec := resolveEscalationRequest(t, p, id, "approve")
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), `"state":"indeterminate"`) {
+		t.Fatalf("full-write error response = %d %s, want 503 indeterminate", rec.Code, rec.Body.String())
+	}
+	if got := p.escalations.get(id); got == nil || got.State != EscIndeterminate {
+		t.Fatalf("full-write error state = %#v, want indeterminate", got)
+	}
+	if fault.writeCalls != 1 || !p.auditPoisoned {
+		t.Fatalf("full-write error audit state: writes=%d poisoned=%v, want 1/true", fault.writeCalls, p.auditPoisoned)
+	}
+	traces := readOperationalTraces(t, p)
+	if len(traces) != 1 || traces[0].ActionTaken != domain.ActionAllowed {
+		t.Fatalf("full-write error trace = %#v, want one possibly-written approval", traces)
 	}
 }
 
@@ -209,5 +241,64 @@ func TestEscalationApproval_FullWriteRollbackFailureBecomesIndeterminate(t *test
 	}
 	if fresh := resolveEscalationRequest(t, restarted, freshID, "approve"); fresh.Code != http.StatusOK {
 		t.Fatalf("fresh resubmitted escalation status = %d, want 200; body=%s", fresh.Code, fresh.Body.String())
+	}
+}
+
+func TestEscalationApproval_DurableRotationBarrierPrecedesApproval(t *testing.T) {
+	p := newOperationalTestProxy(t, nil, false)
+	p.approverToken = "secret"
+	p.auditSyncMode = "none"
+	p.auditRotateBytes = 1
+	id := "approval-durable-rotation"
+	if e := p.escalations.add(envFor(id), decisionFor(domain.DecisionEscalated), 15); e == nil {
+		t.Fatal("seed escalation failed")
+	}
+	directorySyncCalls := 0
+	p.auditDirectorySync = func(path string) error {
+		directorySyncCalls++
+		return syncAuditDirectory(path)
+	}
+
+	rec := resolveEscalationRequest(t, p, id, "approve")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("rotating approval status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if directorySyncCalls != 1 {
+		t.Fatalf("rotation directory barriers = %d, want 1", directorySyncCalls)
+	}
+	if _, err := os.Stat(p.auditPath + ".1"); err != nil {
+		t.Fatalf("rotated audit file: %v", err)
+	}
+	if err := p.verifyFullAuditChain(); err != nil {
+		t.Fatalf("rotated approval chain: %v", err)
+	}
+	if got := p.escalations.get(id); got == nil || got.State != EscApproved {
+		t.Fatalf("rotating approval state = %#v, want approved", got)
+	}
+}
+
+func TestEscalationApproval_RotationBarrierFailureBecomesIndeterminate(t *testing.T) {
+	p := newOperationalTestProxy(t, nil, false)
+	p.approverToken = "secret"
+	p.auditSyncMode = "none"
+	p.auditRotateBytes = 1
+	p.auditDirectorySync = func(string) error { return errors.New("forced directory sync failure") }
+	id := "approval-rotation-indeterminate"
+	if e := p.escalations.add(envFor(id), decisionFor(domain.DecisionEscalated), 15); e == nil {
+		t.Fatal("seed escalation failed")
+	}
+
+	rec := resolveEscalationRequest(t, p, id, "approve")
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), `"state":"indeterminate"`) {
+		t.Fatalf("rotation barrier response = %d %s, want 503 indeterminate", rec.Code, rec.Body.String())
+	}
+	if got := p.escalations.get(id); got == nil || got.State != EscIndeterminate {
+		t.Fatalf("rotation barrier state = %#v, want indeterminate", got)
+	}
+	if !p.auditPoisoned {
+		t.Fatal("rotation barrier failure did not poison the audit writer")
+	}
+	if _, err := os.Stat(p.auditPath + ".1"); err != nil {
+		t.Fatalf("uncertain rotated audit file: %v", err)
 	}
 }

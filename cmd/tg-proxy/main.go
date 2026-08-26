@@ -86,15 +86,18 @@ type proxy struct {
 	// records cannot be concatenated across a file or rotation boundary.
 	auditNeedsSeparator bool
 
-	defaultMode          domain.PolicyMode
-	failClosed           bool
-	unknownToolsDeny     bool
-	maxJSONDepth         int
-	auditSyncMode        string // every | interval | none
-	auditSyncEvery       int
-	auditRotateBytes     int64
-	auditAppendSeq       int64
-	auditCurrentBytes    int64
+	defaultMode       domain.PolicyMode
+	failClosed        bool
+	unknownToolsDeny  bool
+	maxJSONDepth      int
+	auditSyncMode     string // every | interval | none
+	auditSyncEvery    int
+	auditRotateBytes  int64
+	auditAppendSeq    int64
+	auditCurrentBytes int64
+	// auditDirectorySync overrides the platform rotation-metadata barrier in
+	// tests. Production leaves it nil and uses syncAuditDirectory.
+	auditDirectorySync   func(string) error
 	rateLimit            *rateLimiter // nil if disabled
 	rateLimitKeyBy       string
 	velocity             *velocityTracker // nil if disabled

@@ -20,13 +20,14 @@ import (
 // can separately fail Stat, Sync, or Truncate to exercise recovery boundaries.
 type faultInjectAuditFile struct {
 	auditLogFile
-	shortWritesRemaining  int
-	statFailuresRemaining int
-	syncFailuresRemaining int
-	failTruncate          bool
-	writeCalls            int
-	statCalls             int
-	syncCalls             int
+	shortWritesRemaining     int
+	fullWriteErrorsRemaining int
+	statFailuresRemaining    int
+	syncFailuresRemaining    int
+	failTruncate             bool
+	writeCalls               int
+	statCalls                int
+	syncCalls                int
 }
 
 func (f *faultInjectAuditFile) Sync() error {
@@ -49,6 +50,14 @@ func (f *faultInjectAuditFile) Stat() (os.FileInfo, error) {
 
 func (f *faultInjectAuditFile) Write(record []byte) (int, error) {
 	f.writeCalls++
+	if f.fullWriteErrorsRemaining > 0 {
+		f.fullWriteErrorsRemaining--
+		n, err := f.auditLogFile.Write(record)
+		if err != nil {
+			return n, err
+		}
+		return n, errors.New("forced error after full write")
+	}
 	if f.shortWritesRemaining == 0 {
 		return f.auditLogFile.Write(record)
 	}

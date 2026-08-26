@@ -133,12 +133,19 @@ func TestEscalationSchemaIncludesIndeterminateAuditState(t *testing.T) {
 	if !ok {
 		t.Fatalf("Escalation.state enum = %T, want array", state["enum"])
 	}
+	got := make([]string, 0, len(values))
 	for _, value := range values {
-		if value == "indeterminate" {
-			return
+		state, ok := value.(string)
+		if !ok {
+			t.Fatalf("Escalation.state enum contains %T, want strings", value)
 		}
+		got = append(got, state)
 	}
-	t.Fatalf("Escalation.state enum = %v, want indeterminate", values)
+	sort.Strings(got)
+	want := []string{"approved", "denied", "expired", "indeterminate", "pending"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("Escalation.state enum = %v, want exactly %v", got, want)
+	}
 }
 
 func walkRefs(t *testing.T, value any, components map[string]any) {

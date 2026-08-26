@@ -337,8 +337,9 @@ append-only ledger:
 - **Rotation** - `-audit-rotate-bytes` rotates the active file
   when it crosses the cap. Rotated files are named
   `<auditPath>.1`, `<auditPath>.2`, ... `tg verify` reads the
-  rotation set in order. Retain the complete set: its oldest record must be
-  the genesis record with an empty `previous_trace_hash`. A detached suffix
+  rotation set in order. Rotation durably flushes the rename and replacement
+  active-file metadata before completing. Retain the complete set: its oldest
+  record must be the genesis record with an empty `previous_trace_hash`. A detached suffix
   is rejected unless a future trusted-anchor protocol explicitly validates
   its predecessor.
 - **Off-host backup** - `cron` an rsync to a separate host every

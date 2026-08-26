@@ -22,7 +22,8 @@ import (
 // fsync modes. tg verify walks the rotation set across files.
 
 var (
-	errAuditWriterPoisoned = errors.New("audit writer poisoned")
+	errAuditWriterPoisoned     = errors.New("audit writer poisoned")
+	errAuditStateIndeterminate = errors.New("audit state indeterminate")
 	// errAuditRecordCommitted marks an uncertain durability-barrier error after
 	// the full record reached the file and the in-memory chain advanced. The
 	// writer is poisoned at the same time: callers must not append a conflicting
@@ -332,10 +333,11 @@ func (p *proxy) appendTraceWithDurability(t *domain.DecisionTrace, forceDurable 
 	}
 	if err != nil {
 		if rollbackErr := p.rollbackAuditWriteLocked(preWriteSize); rollbackErr != nil {
-			return p.poisonAuditLocked(fmt.Sprintf(
+			reason := fmt.Sprintf(
 				"append failed after writing %d of %d bytes (%v); rollback to byte %d failed: %v",
 				n, len(record), err, preWriteSize, rollbackErr,
-			))
+			)
+			return p.poisonIndeterminateAuditLocked(reason, n == len(record))
 		}
 		p.auditCurrentBytes = preWriteSize
 		return fmt.Errorf("append audit record after writing %d of %d bytes: %w (partial write rolled back)", n, len(record), err)
@@ -373,6 +375,12 @@ func (p *proxy) appendTraceWithDurability(t *domain.DecisionTrace, forceDurable 
 	// loses at most this single append, not the whole pending chunk.
 	if p.auditRotateBytes > 0 && p.auditCurrentBytes >= p.auditRotateBytes {
 		if err := p.rotateAuditLocked(); err != nil {
+			if forceDurable {
+				return p.poisonIndeterminateAuditLocked(
+					fmt.Sprintf("durable audit record rotation barrier failed: %v", err),
+					true,
+				)
+			}
 			log.Printf("tg-proxy: audit rotation: %v (continuing on old file)", err)
 		}
 	}
@@ -423,11 +431,19 @@ func (p *proxy) poisonCommittedAuditLocked(syncErr, rollbackErr error) error {
 		"full audit record write completed but durability sync failed (%v) and rollback could not be proven durable (%v)",
 		syncErr, rollbackErr,
 	)
-	poisonErr := p.poisonAuditLocked(reason)
-	return errors.Join(
-		fmt.Errorf("%w: %s", errAuditRecordCommitted, reason),
-		poisonErr,
-	)
+	return p.poisonIndeterminateAuditLocked(reason, true)
+}
+
+// poisonIndeterminateAuditLocked marks any unprovable rollback as an
+// indeterminate audit transition. A complete record may also be present, which
+// is reported separately so callers and diagnostics can distinguish it from a
+// truncated tail. The caller must hold auditMu.
+func (p *proxy) poisonIndeterminateAuditLocked(reason string, recordComplete bool) error {
+	errs := []error{errAuditStateIndeterminate, p.poisonAuditLocked(reason)}
+	if recordComplete {
+		errs = append(errs, errAuditRecordCommitted)
+	}
+	return errors.Join(errs...)
 }
 
 func (p *proxy) auditPoisonErrorLocked() error {
@@ -461,7 +477,7 @@ func (p *proxy) rotateAuditLocked() error {
 	for {
 		candidate := fmt.Sprintf("%s.%d", p.auditPath, idx)
 		if _, err := os.Stat(candidate); errors.Is(err, os.ErrNotExist) {
-			if err := os.Rename(p.auditPath, candidate); err != nil {
+			if err := renameAuditFile(p.auditPath, candidate); err != nil {
 				p.reopenAuditLocked() // recover; ignore reopen err — already broken
 				return fmt.Errorf("rename to %s: %w", candidate, err)
 			}
@@ -483,6 +499,16 @@ func (p *proxy) rotateAuditLocked() error {
 	}
 	p.auditLog = f
 	p.auditCurrentBytes = 0
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("sync new active audit file: %w", err)
+	}
+	directorySync := syncAuditDirectory
+	if p.auditDirectorySync != nil {
+		directorySync = p.auditDirectorySync
+	}
+	if err := directorySync(filepath.Dir(p.auditPath)); err != nil {
+		return fmt.Errorf("sync audit rotation directory: %w", err)
+	}
 	log.Printf("tg-proxy: rotated audit log → %s.%d", p.auditPath, idx)
 	return nil
 }
