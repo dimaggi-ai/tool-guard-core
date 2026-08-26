@@ -371,10 +371,14 @@ are both bound by the canonical hash. Canonical v1 remains byte-identical;
 records written before the on-record `_canonical_v` marker are interpreted by
 the v1 encoder, and the 0.8 verifier accepts mixed v1/v2 chains.
 
-The reverse is not true: a 0.7 binary cannot verify a v2 record or resume a
-chain whose tail is v2. This intentionally supersedes the 0.7 documentation
-that described a future v2 writer as opt-in. Defaulting to v1 would either omit
-the applied-action attribution or record it outside the integrity commitment,
+Canonical versions are monotonic within a chain: v1 to v2 is accepted, while
+v2 to v1 is rejected. A 0.7 verifier cannot read a v2 record, so a 0.7 proxy
+cannot resume a chain whose tail is v2. The 0.7 hook does not verify the tail
+before writing and can physically append a markerless v1 record after v2; the
+0.8 verifier rejects that downgrade, so the append does not constitute valid
+resumption. This intentionally supersedes the 0.7 documentation that described
+a future v2 writer as opt-in. Defaulting to v1 would either omit the
+applied-action attribution or record it outside the integrity commitment,
 which is not a safe default.
 
 Before the first 0.8 writer appends to an existing chain:

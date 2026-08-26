@@ -303,6 +303,31 @@ class TestEvaluationResult:
         assert d["applied_rule_results"][0]["policy_id"] == "enforce-pol"
         assert d["applied_primary_citation"]["document_id"] == "enforce-doc"
 
+    def test_v070_positional_constructor_compatibility(self):
+        """0.8 additive fields must not rebind the published 0.7 signature."""
+        citation = Citation(document_id="legacy-doc", excerpt="Legacy citation")
+        rule = RuleResult(rule_id="legacy-rule", matched=True, effect="deny")
+        result = EvaluationResult(
+            Decision.DENIED,
+            ActionTaken.DENIED,
+            "legacy reason",
+            PolicyMode.ENFORCEMENT,
+            1,
+            2,
+            1,
+            [rule],
+            citation,
+            True,
+            "legacy guidance",
+        )
+
+        assert result.primary_citation is citation
+        assert result.is_near_miss is True
+        assert result.suggested_response == "legacy guidance"
+        assert result.applied_rule_results == []
+        assert result.applied_primary_citation is None
+        assert result.to_dict()["primary_citation"]["document_id"] == "legacy-doc"
+
     def test_suggested_response_field_name(self):
         result = EvaluationResult(suggested_response="Please reduce the amount.")
         d = result.to_dict()

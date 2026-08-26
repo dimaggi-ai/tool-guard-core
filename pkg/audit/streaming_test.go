@@ -3,6 +3,7 @@ package audit
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -126,6 +127,24 @@ func TestVerifyChainFromReader_MixedV1V2UpgradeChain(t *testing.T) {
 	}
 	if !rep.Intact || rep.Records != 2 || rep.Tail != v2.TraceHash {
 		t.Fatalf("mixed-version chain report = %#v, want intact 2-record chain", rep)
+	}
+}
+
+// A 0.7 writer emits markerless canonical-v1 records. Once any v2 record has
+// appeared, accepting a later markerless record would let an old writer
+// silently weaken the integrity commitment while preserving valid hashes and
+// links. Physical append is possible; valid chain resumption is not.
+func TestVerifyChainFromReader_RejectsV070WriterAfterV2(t *testing.T) {
+	fixture, err := os.ReadFile("testdata/v2-then-v070-hook.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep, err := VerifyChainFromReader(bytes.NewReader(fixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Intact || rep.FirstFailureAt != 2 || !strings.Contains(rep.FailureReason, "canonical version downgrade from v2 to v1") {
+		t.Fatalf("downgrade report = %#v, want canonical-version failure at line 2", rep)
 	}
 }
 

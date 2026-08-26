@@ -162,7 +162,9 @@ structs in `pkg/audit/canonical.go`; records without `_canonical_v` use v1,
 while new records carry `_canonical_v: "v2"`. Escalation approvals are
 written as their own chained entries, so the approval record is itself
 tamper-evident. The v2 writer transition is a coordinated upgrade: 0.8 can
-verify mixed v1/v2 chains, but 0.7 cannot verify or resume after a v2 record.
+verify a monotonic v1-to-v2 chain and rejects any later v1 record. A 0.7
+verifier cannot read v2, and although the old hook can physically append a
+markerless v1 record, that downgrade is not a valid chain resumption.
 See the [upgrade path](operating.md#upgrade-path) before enabling a 0.8 writer
 on an existing chain.
 

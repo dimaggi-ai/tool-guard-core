@@ -568,11 +568,13 @@ class EvaluationResult:
     rules_evaluated: int = 0
     rules_triggered: int = 0
     rule_results: List[RuleResult] = field(default_factory=list)
-    applied_rule_results: List[RuleResult] = field(default_factory=list)
     primary_citation: Optional[Citation] = None
-    applied_primary_citation: Optional[Citation] = None
     is_near_miss: bool = False
     suggested_response: str = ""
+    # Added in 0.8. Keep additive fields after every 0.7 constructor field so
+    # callers using the published positional signature retain their bindings.
+    applied_rule_results: List[RuleResult] = field(default_factory=list)
+    applied_primary_citation: Optional[Citation] = None
 
     def to_dict(self) -> dict:
         d: dict = {

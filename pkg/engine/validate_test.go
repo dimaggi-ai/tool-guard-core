@@ -367,3 +367,37 @@ func TestValidatePolicy_DepthLimit(t *testing.T) {
 		t.Errorf("200-deep nesting should be refused")
 	}
 }
+
+func TestValidatePolicy_RejectsDuplicateRuleIDs(t *testing.T) {
+	condition := domain.Condition{Field: "amount", Operator: domain.OpGt, Value: 0}
+	policy := &domain.Policy{
+		PolicyID: "duplicate-rules",
+		Version:  1,
+		Rules: []domain.Rule{
+			{RuleID: "same", Conditions: condition, Effect: domain.EffectDeny},
+			{RuleID: "same", Conditions: condition, Effect: domain.EffectEscalate},
+		},
+	}
+	err := engine.ValidatePolicy(policy)
+	if err == nil || !strings.Contains(err.Error(), "duplicate rule_id") {
+		t.Fatalf("ValidatePolicy duplicate-rule error = %v", err)
+	}
+}
+
+func TestValidatePolicySet_RejectsDuplicatePolicyIdentity(t *testing.T) {
+	makePolicy := func(ruleID string) domain.Policy {
+		return domain.Policy{
+			PolicyID: "same-policy",
+			Version:  7,
+			Rules: []domain.Rule{{
+				RuleID:     ruleID,
+				Conditions: domain.Condition{Field: "amount", Operator: domain.OpGt, Value: 0},
+				Effect:     domain.EffectDeny,
+			}},
+		}
+	}
+	err := engine.ValidatePolicySet([]domain.Policy{makePolicy("first"), makePolicy("second")})
+	if err == nil || !strings.Contains(err.Error(), "duplicate policy identity") {
+		t.Fatalf("ValidatePolicySet duplicate-identity error = %v", err)
+	}
+}

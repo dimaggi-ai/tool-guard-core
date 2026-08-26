@@ -160,7 +160,7 @@ func lastTraceHash(path string) (string, error) {
 	// Include the record bytes, its terminating newline, and one preceding
 	// delimiter. That distinguishes a complete max-sized final record from a
 	// window that begins in the middle of an oversized record.
-	tailWindow := int64(audit.MaxTraceRecordBytes + 2)
+	tailWindow := int64(audit.MaxTraceRecordBytes + 3)
 	start := fi.Size() - tailWindow
 	if start < 0 {
 		start = 0
@@ -180,18 +180,18 @@ func lastTraceHash(path string) (string, error) {
 	data = bytes.TrimRight(data, "\r\n")
 	var lastLine []byte
 	if i := bytes.LastIndexByte(data, '\n'); i >= 0 {
-		lastLine = bytes.TrimSpace(data[i+1:])
+		lastLine = data[i+1:]
 	} else {
 		if start > 0 {
 			return "", fmt.Errorf("audit tail: last record exceeds %d bytes", audit.MaxTraceRecordBytes)
 		}
-		lastLine = bytes.TrimSpace(data)
-	}
-	if len(lastLine) == 0 {
-		return "", nil
+		lastLine = data
 	}
 	if len(lastLine) > audit.MaxTraceRecordBytes {
 		return "", fmt.Errorf("audit tail: last record exceeds %d bytes", audit.MaxTraceRecordBytes)
+	}
+	if len(bytes.TrimSpace(lastLine)) == 0 {
+		return "", nil
 	}
 	var rec struct {
 		TraceHash string `json:"trace_hash"`

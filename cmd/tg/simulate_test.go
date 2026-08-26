@@ -124,6 +124,8 @@ func TestSimulate_FailOnDenyRejectsMalformedCorpus(t *testing.T) {
 	}{
 		{name: "all malformed", calls: "not-json\n"},
 		{name: "partially malformed", calls: simCalls + "not-json\n"},
+		{name: "null envelope", calls: "null\n"},
+		{name: "empty object", calls: "{}\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -252,5 +254,19 @@ rules:
 	p := writeTemp(t, "bad.yaml", bad)
 	if _, err := loadPolicySet("", p); err == nil {
 		t.Error("expected loadPolicySet to reject a policy with an uncompilable regex")
+	}
+}
+
+func TestLoadPolicySet_RejectsDuplicatePolicyIdentity(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "first.yaml"), []byte(simPolicy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	second := strings.Replace(simPolicy, "rule_id: cap", "rule_id: second-cap", 1)
+	if err := os.WriteFile(filepath.Join(dir, "second.yaml"), []byte(second), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadPolicySet(dir, ""); err == nil || !strings.Contains(err.Error(), "duplicate policy identity") {
+		t.Fatalf("loadPolicySet duplicate-identity error = %v", err)
 	}
 }

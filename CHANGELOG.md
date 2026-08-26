@@ -11,7 +11,11 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 - New audit writers stamp canonical trace v2 so the raw decision and the
   applied-action provenance are both covered by the trace hash. Canonical v1
   remains byte-identical and the 0.8 verifier accepts mixed v1/v2 chains, but
-  0.7 binaries cannot verify or resume a chain after its first v2 record.
+  canonical versions are monotonic: v1 to v2 is accepted and v2 to v1 is
+  rejected. A 0.7 verifier cannot read a v2 record; a 0.7 proxy therefore
+  cannot resume a v2 tail. The older hook can physically append a markerless
+  v1 record after v2, but 0.8 rejects that downgrade as an invalid chain, so it
+  is not a valid resumption path.
 - Upgrade every verifier and writer that shares an audit chain before resuming
   writes. Do not roll a writer back to 0.7 after a v2 append. The detailed
   quiesce, backup, verification, and rollback procedure is in

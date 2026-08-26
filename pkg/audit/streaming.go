@@ -74,6 +74,8 @@ func VerifyChainFromReader(r io.Reader) (*StreamReport, error) {
 
 	rep := &StreamReport{Intact: true}
 	var prevHash string
+	highestVersionRank := 0
+	highestVersion := ""
 	line := 0
 	for sc.Scan() {
 		line++
@@ -88,6 +90,17 @@ func VerifyChainFromReader(r io.Reader) (*StreamReport, error) {
 		var t domain.DecisionTrace
 		if err := json.Unmarshal(raw, &t); err != nil {
 			return failAt(rep, line, fmt.Sprintf("parse JSON: %v", err)), nil
+		}
+
+		version := effectiveCanonicalTraceVersion(&t)
+		if rank, known := canonicalTraceVersionRank(version); known {
+			if rank < highestVersionRank {
+				return failAt(rep, line, fmt.Sprintf("canonical version downgrade from %s to %s", highestVersion, version)), nil
+			}
+			if rank > highestVersionRank {
+				highestVersionRank = rank
+				highestVersion = version
+			}
 		}
 
 		if rep.Records == 0 {

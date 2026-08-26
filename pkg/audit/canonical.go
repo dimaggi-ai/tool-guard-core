@@ -45,6 +45,28 @@ const (
 // produced before the on-record version marker remain verifiable forever.
 const CanonicalTraceVersion = canonicalTraceVersionV2
 
+// effectiveCanonicalTraceVersion maps records written before the on-record
+// version marker to v1. Keep this interpretation in one place: both canonical
+// hashing and chain verification depend on the absence of _canonical_v meaning
+// the immutable v1 projection.
+func effectiveCanonicalTraceVersion(t *domain.DecisionTrace) string {
+	if t == nil || t.CanonicalVersion == "" {
+		return canonicalTraceVersionV1
+	}
+	return t.CanonicalVersion
+}
+
+func canonicalTraceVersionRank(version string) (int, bool) {
+	switch version {
+	case canonicalTraceVersionV1:
+		return 1, true
+	case canonicalTraceVersionV2:
+		return 2, true
+	default:
+		return 0, false
+	}
+}
+
 // canonicalTraceV1 mirrors domain.DecisionTrace with explicit field order
 // and no omitempty. The struct field order in Go is preserved by
 // encoding/json, so this is our authoritative serialisation shape.
@@ -254,10 +276,7 @@ func CanonicalTraceBytes(t *domain.DecisionTrace) ([]byte, error) {
 	if t == nil {
 		return nil, nil
 	}
-	version := t.CanonicalVersion
-	if version == "" {
-		version = canonicalTraceVersionV1
-	}
+	version := effectiveCanonicalTraceVersion(t)
 	switch version {
 	case canonicalTraceVersionV1:
 		if len(t.AppliedRuleResults) > 0 || t.AppliedPrimaryCitation != nil {

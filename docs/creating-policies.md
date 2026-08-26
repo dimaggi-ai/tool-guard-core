@@ -9,7 +9,7 @@ list of **rules** that say what to do.
 
 ```yaml
 schema_version: 1                 # Tool Guard policy schema
-policy_id: pol-refund-cap          # unique within the loaded set
+policy_id: pol-refund-cap          # policy_id + version is unique in the set
 name: refund-cap                   # human label
 description: >
   Allow refunds under $500; deny above.
@@ -22,7 +22,7 @@ scope:
   tool_groups: [monetary_outflow]  # by tool_group
 
 rules:
-  - rule_id: rule-amount-cap
+  - rule_id: rule-amount-cap       # unique within this policy
     name: Single refund amount limit
     rule_type: threshold
     conditions:

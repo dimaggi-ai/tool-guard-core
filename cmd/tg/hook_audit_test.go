@@ -30,16 +30,21 @@ func auditEnv(id string) *domain.ActionEnvelope {
 // exactly target bytes. It lets the writer and verifier share one executable
 // boundary contract instead of relying on approximate large-record fixtures.
 func hookAuditTraceOfSize(t *testing.T, target int) *domain.DecisionTrace {
+	return hookAuditTraceOfSizeWithPrevious(t, target, "")
+}
+
+func hookAuditTraceOfSizeWithPrevious(t *testing.T, target int, previousHash string) *domain.DecisionTrace {
 	t.Helper()
 	tr := &domain.DecisionTrace{
-		CanonicalVersion: audit.CanonicalTraceVersion,
-		TraceID:          "trc-size-boundary",
-		Timestamp:        time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC),
-		EnvelopeID:       "env-size-boundary",
-		ToolName:         "bash",
-		Decision:         domain.DecisionAllowed,
-		ActionTaken:      domain.ActionAllowed,
-		DecisionReason:   "x",
+		CanonicalVersion:  audit.CanonicalTraceVersion,
+		TraceID:           "trc-size-boundary",
+		Timestamp:         time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC),
+		EnvelopeID:        "env-size-boundary",
+		ToolName:          "bash",
+		Decision:          domain.DecisionAllowed,
+		ActionTaken:       domain.ActionAllowed,
+		DecisionReason:    "x",
+		PreviousTraceHash: previousHash,
 	}
 
 	marshalRehashed := func() []byte {
@@ -273,6 +278,67 @@ func TestAppendHookAudit_ExtendsExactMaxRecord(t *testing.T) {
 	}
 	if !report.Intact || report.Records != 2 {
 		t.Fatalf("exact-max chain verification = %#v, want intact with 2 records", report)
+	}
+}
+
+func TestAppendHookAudit_ExtendsPriorPlusExactMaxCRLFRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	prior := hookAuditTraceOfSize(t, 1024)
+	priorLine, err := audit.MarshalTraceRecord(prior)
+	if err != nil {
+		t.Fatalf("marshal prior record: %v", err)
+	}
+	exact := hookAuditTraceOfSizeWithPrevious(t, audit.MaxTraceRecordBytes, prior.TraceHash)
+	exactLine, err := audit.MarshalTraceRecord(exact)
+	if err != nil {
+		t.Fatalf("marshal exact-max record: %v", err)
+	}
+	contents := append(append(append([]byte(nil), priorLine...), '\n'), exactLine...)
+	contents = append(contents, '\r', '\n')
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
+		t.Fatalf("write two-record chain: %v", err)
+	}
+
+	if err := appendHookAudit(path, auditEnv("next"), nil, "allow", "ok"); err != nil {
+		t.Fatalf("append after prior + exact-max CRLF record: %v", err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	report, err := audit.VerifyChainFromReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Intact || report.Records != 3 {
+		t.Fatalf("CRLF boundary chain = %#v, want intact with 3 records", report)
+	}
+}
+
+func TestAppendHookAudit_RejectsVerifierOversizedWhitespaceRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	exact := hookAuditTraceOfSize(t, audit.MaxTraceRecordBytes)
+	line, err := audit.MarshalTraceRecord(exact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := append(append(append([]byte(nil), line...), ' '), '\n')
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := int64(len(contents))
+
+	err = appendHookAudit(path, auditEnv("next"), nil, "allow", "ok")
+	if err == nil || !strings.Contains(err.Error(), "last record exceeds") {
+		t.Fatalf("append error = %v, want verifier-size rejection", err)
+	}
+	st, statErr := os.Stat(path)
+	if statErr != nil {
+		t.Fatal(statErr)
+	}
+	if st.Size() != before {
+		t.Fatalf("rejected append changed file size from %d to %d", before, st.Size())
 	}
 }
 

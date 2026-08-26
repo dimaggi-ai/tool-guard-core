@@ -104,7 +104,13 @@ func validateOperatorValue(op domain.Operator, value interface{}, ctx string) er
 // Run this at policy load time and refuse to install a policy that
 // fails validation.
 func ValidatePolicy(p *domain.Policy) error {
+	seenRuleIDs := make(map[string]struct{}, len(p.Rules))
 	for i := range p.Rules {
+		if _, exists := seenRuleIDs[p.Rules[i].RuleID]; exists {
+			return fmt.Errorf("policy %q: duplicate rule_id %q — rule identities must be unique within a policy", p.PolicyID, p.Rules[i].RuleID)
+		}
+		seenRuleIDs[p.Rules[i].RuleID] = struct{}{}
+
 		switch p.Rules[i].Effect {
 		case domain.EffectAllow, domain.EffectFlag, domain.EffectEscalate, domain.EffectDeny:
 		default:
@@ -113,6 +119,31 @@ func ValidatePolicy(p *domain.Policy) error {
 		if err := validateCondition(&p.Rules[i].Conditions, fmt.Sprintf("rule %q", p.Rules[i].RuleID), 0, false); err != nil {
 			return fmt.Errorf("policy %q: %w", p.PolicyID, err)
 		}
+	}
+	return nil
+}
+
+// ValidatePolicySet enforces identity invariants that cannot be checked one
+// policy at a time. Evaluation provenance keys rules by
+// (policy_id, version, rule_id); accepting the same policy identity twice
+// makes citations and operator guidance ambiguous even when each file is
+// individually valid.
+func ValidatePolicySet(policies []domain.Policy) error {
+	type policyIdentity struct {
+		id      string
+		version int
+	}
+
+	seen := make(map[policyIdentity]int, len(policies))
+	for i := range policies {
+		if err := ValidatePolicy(&policies[i]); err != nil {
+			return err
+		}
+		identity := policyIdentity{id: policies[i].PolicyID, version: policies[i].Version}
+		if first, exists := seen[identity]; exists {
+			return fmt.Errorf("duplicate policy identity policy_id=%q version=%d at indexes %d and %d — policy identities must be unique within a loaded set", identity.id, identity.version, first, i)
+		}
+		seen[identity] = i
 	}
 	return nil
 }

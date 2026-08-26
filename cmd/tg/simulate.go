@@ -102,7 +102,7 @@ func cmdSimulate(args []string) int {
 		if raw == "" {
 			continue
 		}
-		var env domain.ActionEnvelope
+		var env *domain.ActionEnvelope
 		if err := json.Unmarshal([]byte(raw), &env); err != nil {
 			sum.malformed++
 			if sum.firstErr == "" {
@@ -110,10 +110,17 @@ func cmdSimulate(args []string) int {
 			}
 			continue
 		}
+		if env == nil || strings.TrimSpace(env.ToolName) == "" {
+			sum.malformed++
+			if sum.firstErr == "" {
+				sum.firstErr = fmt.Sprintf("line %d: action envelope must be a non-null JSON object with a non-empty tool_name", line)
+			}
+			continue
+		}
 		if env.Timestamp.IsZero() {
 			env.Timestamp = time.Now().UTC()
 		}
-		res := ev.Evaluate(&env, policies, mode)
+		res := ev.Evaluate(env, policies, mode)
 		sum.total++
 		sum.decisions[res.Decision]++
 		sum.actions[res.ActionTaken]++
@@ -182,6 +189,9 @@ func loadPolicySet(dir, file string) ([]domain.Policy, error) {
 			return nil, fmt.Errorf("%s: %w", p, err)
 		}
 		out = append(out, pol)
+	}
+	if err := engine.ValidatePolicySet(out); err != nil {
+		return nil, fmt.Errorf("validate policy set: %w", err)
 	}
 	return out, nil
 }
