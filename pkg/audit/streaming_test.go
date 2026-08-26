@@ -148,6 +148,24 @@ func TestVerifyChainFromReader_RejectsV070WriterAfterV2(t *testing.T) {
 	}
 }
 
+func TestVerifyChainFromReader_RejectsDetachedSuffix(t *testing.T) {
+	fixture, err := os.ReadFile("testdata/v2-then-v070-hook.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := bytes.Split(bytes.TrimSpace(fixture), []byte{'\n'})
+	if len(lines) != 2 {
+		t.Fatalf("fixture lines = %d, want 2", len(lines))
+	}
+	rep, err := VerifyChainFromReader(bytes.NewReader(append(lines[1], '\n')))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Intact || rep.FirstFailureAt != 1 || !strings.Contains(rep.FailureReason, "genesis previous_trace_hash") {
+		t.Fatalf("detached-suffix report = %#v, want genesis failure at line 1", rep)
+	}
+}
+
 func TestVerifyChainFromReader_TamperedHash(t *testing.T) {
 	ts := time.Now().Truncate(time.Microsecond)
 	t1 := makeTrace("t1", "env-1", "", ts)

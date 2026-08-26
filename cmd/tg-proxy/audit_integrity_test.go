@@ -145,6 +145,37 @@ func TestOpenAuditLog_MiddleRecordBrokenLink_RefusesToStart(t *testing.T) {
 	}
 }
 
+func TestOpenAuditLog_DetachedSuffix_RefusesToStart(t *testing.T) {
+	dir := t.TempDir()
+	active := filepath.Join(dir, "decisions.jsonl")
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "pkg", "audit", "testdata", "v2-then-v070-hook.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := bytes.Split(bytes.TrimSpace(fixture), []byte{'\n'})
+	if len(lines) != 2 {
+		t.Fatalf("fixture lines = %d, want 2", len(lines))
+	}
+	if err := os.WriteFile(active, append(lines[1], '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	p := &proxy{auditPath: active, lastHash: "sha256:stale-from-prior-attempt"}
+	err = p.openAuditLog()
+	if err == nil {
+		if p.auditLog != nil {
+			_ = p.auditLog.Close()
+		}
+		t.Fatal("openAuditLog must refuse a detached suffix with a dangling previous hash")
+	}
+	if !strings.Contains(err.Error(), "genesis previous_trace_hash") {
+		t.Fatalf("detached-suffix error = %v, want genesis failure", err)
+	}
+	if p.lastHash != "" {
+		t.Fatalf("failed open retained untrusted lastHash %q", p.lastHash)
+	}
+}
+
 // TestOpenAuditLog_BrokenLinkAcrossRotationBoundary_RefusesToStart proves
 // the full-chain check walks the WHOLE rotation set (not just the active
 // file) — a break at the seam between a rotated sibling and the active

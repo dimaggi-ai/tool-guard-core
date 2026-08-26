@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -167,6 +168,9 @@ func lastTraceHash(path string) (string, error) {
 	if fi.Size() == 0 {
 		return "", nil
 	}
+	if err := validateAuditGenesis(f, fi.Size()); err != nil {
+		return "", err
+	}
 
 	// The streaming verifier permits empty LF and CRLF records. Seek backward
 	// past that complete suffix before applying the bounded-record window so
@@ -243,11 +247,55 @@ scanBlankSuffix:
 	if len(bytes.TrimSpace(lastLine)) == 0 {
 		return "", fmt.Errorf("audit tail: whitespace-only trailing record")
 	}
-	var rec struct {
-		TraceHash string `json:"trace_hash"`
-	}
+	var rec domain.DecisionTrace
 	if err := json.Unmarshal(lastLine, &rec); err != nil {
 		return "", fmt.Errorf("parse audit tail: %w", err)
 	}
+	ok, err := audit.VerifyCanonicalTraceHash(&rec)
+	if err != nil {
+		return "", fmt.Errorf("verify audit tail: %w", err)
+	}
+	if !ok {
+		return "", fmt.Errorf("verify audit tail: trace %q hash mismatch", rec.TraceID)
+	}
 	return rec.TraceHash, nil
+}
+
+// validateAuditGenesis rejects a detached prefix before the bounded tail read.
+// Reading stops after the first non-empty record, so normal appends do not
+// replay the whole log; operators still use `tg verify` for complete-chain
+// validation. io.NewSectionReader keeps this check independent of f's offset.
+func validateAuditGenesis(f *os.File, size int64) error {
+	sc := bufio.NewScanner(io.NewSectionReader(f, 0, size))
+	sc.Buffer(make([]byte, 0, 64*1024), audit.MaxTraceRecordScanBytes)
+	line := 0
+	for sc.Scan() {
+		line++
+		raw := sc.Bytes()
+		if len(raw) > audit.MaxTraceRecordBytes {
+			return fmt.Errorf("audit genesis: record exceeds %d bytes", audit.MaxTraceRecordBytes)
+		}
+		if len(raw) == 0 {
+			continue
+		}
+		var genesis domain.DecisionTrace
+		if err := json.Unmarshal(raw, &genesis); err != nil {
+			return fmt.Errorf("audit genesis line %d: parse JSON: %w", line, err)
+		}
+		if genesis.PreviousTraceHash != "" {
+			return fmt.Errorf("audit genesis line %d: previous_trace_hash must be empty, got %q", line, genesis.PreviousTraceHash)
+		}
+		ok, err := audit.VerifyCanonicalTraceHash(&genesis)
+		if err != nil {
+			return fmt.Errorf("audit genesis line %d: canonical hash: %w", line, err)
+		}
+		if !ok {
+			return fmt.Errorf("audit genesis line %d: trace %q hash mismatch", line, genesis.TraceID)
+		}
+		return nil
+	}
+	if err := sc.Err(); err != nil {
+		return fmt.Errorf("audit genesis: scan: %w", err)
+	}
+	return nil
 }

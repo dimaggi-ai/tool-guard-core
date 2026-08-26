@@ -34,6 +34,10 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   This is especially important for `tg hook`: a policy-set load error follows
   the configured failure mode, which is `allow` by default. Use the hook's
   documented fail-closed options where a load failure must block execution.
+- Simulation rule-fire rows are now keyed by
+  `(policy_id, policy_version, rule_id)` instead of `rule_id` alone. JSON rows
+  retain `rule_id`, `fires`, and `effect` and add `policy_id` and
+  `policy_version`; distinct policies no longer merge their counts or effects.
 
 ### Breaking audit-format migration planned for 0.8.0
 
@@ -49,6 +53,11 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   writes. Do not roll a writer back to 0.7 after a v2 append. The detailed
   quiesce, backup, verification, and rollback procedure is in
   `docs/operating.md`.
+- Verification now requires the first record in the complete rotation set to
+  be a genesis record with an empty `previous_trace_hash`. A detached suffix
+  is not accepted as an intact chain merely because its remaining hashes link
+  to one another. Preserve every rotated sibling; intentional suffix
+  verification needs an explicit trusted anchor, which 0.8 does not provide.
 - This intentionally supersedes the 0.7 documentation that described a future
   v2 writer as opt-in. Keeping v1 as the default would leave the new
   applied-action attribution outside the integrity commitment. Because Tool

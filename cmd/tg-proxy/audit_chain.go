@@ -113,6 +113,9 @@ func (p *proxy) auditCandidatesNewestFirst() []string {
 // unbroken across server restarts (including a restart right after a
 // rotation).
 func (p *proxy) openAuditLog() error {
+	// Do not carry a prior recovery attempt's tail through a failed reopen.
+	// The value is republished only after the complete rotation set verifies.
+	p.lastHash = ""
 	dir := filepath.Dir(p.auditPath)
 	if dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -146,8 +149,6 @@ func (p *proxy) openAuditLog() error {
 				last.TraceID, last.TraceHash, want,
 			)
 		}
-		p.lastHash = last.TraceHash
-
 		// The tail check above only proves the LAST record is internally
 		// self-consistent (its own hash matches its own fields) — it says
 		// nothing about a tampered record buried in the middle of the file,
@@ -162,6 +163,10 @@ func (p *proxy) openAuditLog() error {
 		if err := p.verifyFullAuditChain(); err != nil {
 			return err
 		}
+		// Publish the recovered tail only after the complete rotation set has
+		// passed verification. A failed open must not leave reusable proxy state
+		// pointing at an untrusted suffix.
+		p.lastHash = last.TraceHash
 	}
 	f, err := os.OpenFile(p.auditPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {

@@ -125,6 +125,7 @@ func TestSimulate_FailOnDenyRejectsMalformedCorpus(t *testing.T) {
 		{name: "all malformed", calls: "not-json\n"},
 		{name: "partially malformed", calls: simCalls + "not-json\n"},
 		{name: "null envelope", calls: "null\n"},
+		{name: "array envelope", calls: "[]\n"},
 		{name: "empty object", calls: "{}\n"},
 	}
 	for _, tt := range tests {
@@ -234,6 +235,63 @@ func TestSimulate_PolicyDirLoadsMultiple(t *testing.T) {
 	calls := writeTemp(t, "calls.jsonl", simCalls)
 	if code := cmdSimulate([]string{"-policy-dir", dir, "-calls", calls}); code != 0 {
 		t.Errorf("policy-dir simulate exit = %d, want 0", code)
+	}
+}
+
+func TestSimulate_SeparatesSameRuleIDAcrossPolicies(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "deny.yaml"), []byte(simPolicy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	second := strings.Replace(simPolicy, "policy_id: sim-pol", "policy_id: sim-pol-2", 1)
+	second = strings.Replace(second, "name: sim-refund-cap", "name: sim-refund-cap-2", 1)
+	second = strings.Replace(second, "effect: deny", "effect: escalate", 1)
+	if err := os.WriteFile(filepath.Join(dir, "escalate.yaml"), []byte(second), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	calls := writeTemp(t, "calls.jsonl", `{"envelope_id":"over","tool_name":"issue_refund","parameters":{"amount":9000}}`+"\n")
+	code, out := captureSimulateOutput(t, func() int {
+		return cmdSimulate([]string{"-policy-dir", dir, "-calls", calls, "-json"})
+	})
+	if code != 0 {
+		t.Fatalf("simulate exit = %d; output=%s", code, out)
+	}
+	var summary struct {
+		RuleFires []struct {
+			PolicyID      string `json:"policy_id"`
+			PolicyVersion int    `json:"policy_version"`
+			RuleID        string `json:"rule_id"`
+			Fires         int    `json:"fires"`
+			Effect        string `json:"effect"`
+		} `json:"rule_fires"`
+	}
+	if err := json.Unmarshal(out, &summary); err != nil {
+		t.Fatalf("decode simulation JSON: %v; output=%s", err, out)
+	}
+	if len(summary.RuleFires) != 2 {
+		t.Fatalf("rule fire rows = %#v, want two distinct policy identities", summary.RuleFires)
+	}
+	seen := map[string]string{}
+	for _, row := range summary.RuleFires {
+		if row.PolicyVersion != 1 || row.RuleID != "cap" || row.Fires != 1 {
+			t.Fatalf("unexpected rule-fire row: %#v", row)
+		}
+		seen[row.PolicyID] = row.Effect
+	}
+	if seen["sim-pol"] != "deny" || seen["sim-pol-2"] != "escalate" {
+		t.Fatalf("rule fires merged or effects overwritten: %#v", seen)
+	}
+
+	tableCode, tableOut := captureSimulateOutput(t, func() int {
+		return cmdSimulate([]string{"-policy-dir", dir, "-calls", calls})
+	})
+	if tableCode != 0 {
+		t.Fatalf("table simulate exit = %d; output=%s", tableCode, tableOut)
+	}
+	for _, identity := range []string{"sim-pol@v1/cap", "sim-pol-2@v1/cap"} {
+		if !strings.Contains(string(tableOut), identity) {
+			t.Errorf("table output missing full rule identity %q:\n%s", identity, tableOut)
+		}
 	}
 }
 

@@ -209,8 +209,11 @@ package main
 
 import (
     "context"
-    "encoding/json"
+    "fmt"
+    "io"
     "os"
+    "sync"
+    "time"
 
     "github.com/dimaggi-ai/tool-guard-core/pkg/audit"
     "github.com/dimaggi-ai/tool-guard-core/pkg/domain"
@@ -221,28 +224,47 @@ import (
 // Construct it once at startup and reuse across requests; it is safe
 // for concurrent use.
 type Guard struct {
-    eval     *engine.Evaluator
-    policies []domain.Policy
+    eval      *engine.Evaluator
+    policies  []domain.Policy
     auditFile *os.File
-    auditEnc  *json.Encoder
-    lastHash string
+    auditMu   sync.Mutex
+    auditErr  error
+    lastHash  string
 }
 
 func NewGuard(policies []domain.Policy, logPath string) (*Guard, error) {
-    f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+    if err := engine.ValidatePolicySet(policies); err != nil {
+        return nil, fmt.Errorf("validate policy set: %w", err)
+    }
+    f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0o600)
     if err != nil {
         return nil, err
     }
+    report, err := audit.VerifyChainFromReader(f)
+    if err != nil {
+        _ = f.Close()
+        return nil, fmt.Errorf("verify existing audit chain: %w", err)
+    }
+    if !report.Intact {
+        _ = f.Close()
+        return nil, fmt.Errorf("existing audit chain failed at line %d: %s",
+            report.FirstFailureAt, report.FailureReason)
+    }
     return &Guard{
-        eval: engine.NewEvaluator(),
+        eval:     engine.NewEvaluator(),
         policies: policies,
         auditFile: f,
-        auditEnc: json.NewEncoder(f),
+        lastHash: report.Tail,
     }, nil
 }
 
-func (g *Guard) Check(ctx context.Context, env *domain.ActionEnvelope) (bool, *domain.EvaluationResult) {
+func (g *Guard) Check(ctx context.Context, env *domain.ActionEnvelope) (bool, *domain.EvaluationResult, error) {
     result := g.eval.Evaluate(env, g.policies, domain.PolicyModeEnforcement)
+    amount, amountStatus := engine.EvaluatedAmount(env)
+    timestamp := env.Timestamp
+    if timestamp.IsZero() {
+        timestamp = time.Now().UTC()
+    }
     // Append to the audit chain. Use the CANONICAL hash
     // (ComputeCanonicalTraceHash) - it covers the decision and the
     // fields that produce it (the exact current set is canonicalTraceV2 in
@@ -253,12 +275,16 @@ func (g *Guard) Check(ctx context.Context, env *domain.ActionEnvelope) (bool, *d
         CanonicalVersion:       audit.CanonicalTraceVersion,
         TraceID:                "trc-" + env.EnvelopeID,
         EnvelopeID:             env.EnvelopeID,
-        Timestamp:              env.Timestamp,
+        Timestamp:              timestamp.UTC(),
         OrgID:                  env.OrgID,
         AgentID:                env.AgentID,
+        AgentVersion:           env.AgentVersion,
         SessionID:              env.SessionID,
+        TurnNumber:             env.TurnNumber,
         ToolName:               env.ToolName,
         ToolGroup:              env.ToolGroup,
+        Amount:                 amount,
+        AmountParseStatus:      amountStatus,
         Decision:               result.Decision,
         ActionTaken:            result.ActionTaken,
         DecisionReason:         result.DecisionReason,
@@ -272,27 +298,60 @@ func (g *Guard) Check(ctx context.Context, env *domain.ActionEnvelope) (bool, *d
         AppliedPrimaryCitation: result.AppliedPrimaryCitation,
         SuggestedResponse:      result.SuggestedResponse,
         IsNearMiss:             result.IsNearMiss,
-        PreviousTraceHash:      g.lastHash,
+        ParametersRedacted:     append([]byte(nil), env.ParametersRedacted...),
     }
+
+    // Serialize link -> hash -> append -> durability -> tail update. Once any
+    // audit operation fails, poison this Guard instance: continuing after a
+    // short write or failed fsync could fork the chain.
+    g.auditMu.Lock()
+    defer g.auditMu.Unlock()
+    if g.auditErr != nil {
+        return false, result, g.auditErr
+    }
+    trace.PreviousTraceHash = g.lastHash
     hash, err := audit.ComputeCanonicalTraceHash(&trace)
     if err != nil {
-        return false, nil // fail closed on audit errors
+        g.auditErr = fmt.Errorf("hash audit trace: %w", err)
+        return false, result, g.auditErr
     }
     trace.TraceHash = hash
-    _ = g.auditEnc.Encode(trace)
+    line, err := audit.MarshalTraceRecord(&trace)
+    if err != nil {
+        g.auditErr = fmt.Errorf("marshal audit trace: %w", err)
+        return false, result, g.auditErr
+    }
+    line = append(line, '\n')
+    n, err := g.auditFile.Write(line)
+    if err == nil && n != len(line) {
+        err = io.ErrShortWrite
+    }
+    if err != nil {
+        g.auditErr = fmt.Errorf("append audit trace: %w", err)
+        return false, result, g.auditErr
+    }
+    if err := g.auditFile.Sync(); err != nil {
+        g.auditErr = fmt.Errorf("sync audit trace: %w", err)
+        return false, result, g.auditErr
+    }
     g.lastHash = trace.TraceHash
 
     // A `flag` effect is a recorded near-miss - the call still proceeds.
     return result.ActionTaken == domain.ActionAllowed ||
            result.ActionTaken == domain.ActionAllowedShadow ||
-           result.ActionTaken == domain.ActionFlagged, result
+           result.ActionTaken == domain.ActionFlagged, result, nil
 }
 ```
 
 Then in your tool-call path:
 
 ```go
-ok, result := guard.Check(ctx, envelope)
+ok, result, err := guard.Check(ctx, envelope)
+if err != nil {
+    // Audit persistence is part of enforcement: fail closed and surface the
+    // operational error instead of executing without a durable record.
+    return "", fmt.Errorf("tool guard audit: %w", err)
+}
 if !ok {
     // Don't execute the tool. Return result.SuggestedResponse to the
     // model so it knows what to say to the user.

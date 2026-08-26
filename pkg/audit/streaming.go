@@ -57,7 +57,10 @@ type StreamReport struct {
 //
 // Verification rules:
 //   - Each line must be a valid JSON DecisionTrace.
-//   - For line N>1, trace.PreviousTraceHash must equal line N-1's TraceHash.
+//   - The first record must be a genesis record with an empty
+//     PreviousTraceHash. Verifying an intentionally detached suffix requires
+//     a separate trusted-anchor protocol; this verifier never assumes one.
+//   - For record N>1, trace.PreviousTraceHash must equal record N-1's TraceHash.
 //   - trace.TraceHash must equal ComputeCanonicalTraceHash(...) with this
 //     record version's canonical field projection.
 //
@@ -105,6 +108,9 @@ func VerifyChainFromReader(r io.Reader) (*StreamReport, error) {
 
 		if rep.Records == 0 {
 			rep.FirstTraceID = t.TraceID
+			if t.PreviousTraceHash != "" {
+				return failAt(rep, line, fmt.Sprintf("genesis previous_trace_hash must be empty, got %q", t.PreviousTraceHash)), nil
+			}
 		} else if t.PreviousTraceHash != prevHash {
 			return failAt(rep, line, fmt.Sprintf("previous_trace_hash %q does not match prior tail %q", t.PreviousTraceHash, prevHash)), nil
 		}

@@ -88,8 +88,8 @@ func cmdSimulate(args []string) int {
 	sum := simSummary{
 		decisions: map[domain.Decision]int{},
 		actions:   map[domain.ActionTaken]int{},
-		ruleFires: map[string]int{},
-		byRuleEff: map[string]domain.Effect{},
+		ruleFires: map[simRuleKey]int{},
+		byRuleEff: map[simRuleKey]domain.Effect{},
 		examples:  map[domain.Decision][]string{},
 	}
 
@@ -133,8 +133,9 @@ func cmdSimulate(args []string) int {
 		}
 		for _, rr := range res.RuleResults {
 			if rr.Matched {
-				sum.ruleFires[rr.RuleID]++
-				sum.byRuleEff[rr.RuleID] = rr.Effect
+				key := simRuleKey{PolicyID: rr.PolicyID, PolicyVersion: rr.PolicyVersion, RuleID: rr.RuleID}
+				sum.ruleFires[key]++
+				sum.byRuleEff[key] = rr.Effect
 			}
 		}
 	}
@@ -196,14 +197,24 @@ func loadPolicySet(dir, file string) ([]domain.Policy, error) {
 	return out, nil
 }
 
+type simRuleKey struct {
+	PolicyID      string
+	PolicyVersion int
+	RuleID        string
+}
+
+func (k simRuleKey) label() string {
+	return fmt.Sprintf("%s@v%d/%s", k.PolicyID, k.PolicyVersion, k.RuleID)
+}
+
 type simSummary struct {
 	total     int
 	malformed int
 	firstErr  string
 	decisions map[domain.Decision]int
 	actions   map[domain.ActionTaken]int
-	ruleFires map[string]int
-	byRuleEff map[string]domain.Effect
+	ruleFires map[simRuleKey]int
+	byRuleEff map[simRuleKey]domain.Effect
 	examples  map[domain.Decision][]string
 }
 
@@ -250,24 +261,24 @@ func (s *simSummary) printTable(policyCount, exampleN int) {
 	}
 	if len(s.ruleFires) > 0 {
 		fmt.Println(strings.Repeat("─", 48))
-		fmt.Println("  rule fires (by rule_id):")
+		fmt.Println("  rule fires (by policy_id@version/rule_id):")
 		type rf struct {
-			id  string
+			key simRuleKey
 			n   int
 			eff domain.Effect
 		}
 		rows := make([]rf, 0, len(s.ruleFires))
-		for id, n := range s.ruleFires {
-			rows = append(rows, rf{id, n, s.byRuleEff[id]})
+		for key, n := range s.ruleFires {
+			rows = append(rows, rf{key, n, s.byRuleEff[key]})
 		}
 		sort.Slice(rows, func(i, j int) bool {
 			if rows[i].n != rows[j].n {
 				return rows[i].n > rows[j].n
 			}
-			return rows[i].id < rows[j].id
+			return rows[i].key.label() < rows[j].key.label()
 		})
 		for _, r := range rows {
-			fmt.Printf("    %-28s %6d  [%s]\n", r.id, r.n, r.eff)
+			fmt.Printf("    %-40s %6d  [%s]\n", r.key.label(), r.n, r.eff)
 		}
 	}
 	if s.firstErr != "" {
@@ -285,12 +296,34 @@ func (s *simSummary) printJSON(policyCount int) {
 	for action, n := range s.actions {
 		actions[string(action)] = n
 	}
-	rules := make([]map[string]any, 0, len(s.ruleFires))
-	for id, n := range s.ruleFires {
-		rules = append(rules, map[string]any{"rule_id": id, "fires": n, "effect": string(s.byRuleEff[id])})
+	type ruleFire struct {
+		PolicyID      string `json:"policy_id"`
+		PolicyVersion int    `json:"policy_version"`
+		RuleID        string `json:"rule_id"`
+		Fires         int    `json:"fires"`
+		Effect        string `json:"effect"`
+	}
+	rules := make([]ruleFire, 0, len(s.ruleFires))
+	for key, n := range s.ruleFires {
+		rules = append(rules, ruleFire{
+			PolicyID:      key.PolicyID,
+			PolicyVersion: key.PolicyVersion,
+			RuleID:        key.RuleID,
+			Fires:         n,
+			Effect:        string(s.byRuleEff[key]),
+		})
 	}
 	sort.Slice(rules, func(i, j int) bool {
-		return rules[i]["fires"].(int) > rules[j]["fires"].(int)
+		if rules[i].Fires != rules[j].Fires {
+			return rules[i].Fires > rules[j].Fires
+		}
+		if rules[i].PolicyID != rules[j].PolicyID {
+			return rules[i].PolicyID < rules[j].PolicyID
+		}
+		if rules[i].PolicyVersion != rules[j].PolicyVersion {
+			return rules[i].PolicyVersion < rules[j].PolicyVersion
+		}
+		return rules[i].RuleID < rules[j].RuleID
 	})
 	out := map[string]any{
 		"policies":   policyCount,

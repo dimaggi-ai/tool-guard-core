@@ -358,8 +358,72 @@ func TestAppendHookAudit_RejectsBareCRBeyondExactMaxRecord(t *testing.T) {
 	}
 
 	err = appendHookAudit(path, auditEnv("next"), nil, "allow", "ok")
-	if err == nil || !strings.Contains(err.Error(), "last record exceeds") {
+	if err == nil || !strings.Contains(err.Error(), "record exceeds") {
 		t.Fatalf("append error = %v, want verifier-size rejection", err)
+	}
+}
+
+func TestAppendHookAudit_RejectsDetachedSuffix(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "pkg", "audit", "testdata", "v2-then-v070-hook.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := bytes.Split(bytes.TrimSpace(fixture), []byte{'\n'})
+	if len(lines) != 2 {
+		t.Fatalf("fixture lines = %d, want 2", len(lines))
+	}
+	contents := append(append([]byte(nil), lines[1]...), '\n')
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err = appendHookAudit(path, auditEnv("next"), nil, "allow", "ok")
+	if err == nil || !strings.Contains(err.Error(), "previous_trace_hash must be empty") {
+		t.Fatalf("append error = %v, want detached-genesis rejection", err)
+	}
+	got, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !bytes.Equal(got, contents) {
+		t.Fatal("rejected detached-suffix append changed the audit file")
+	}
+}
+
+func TestAppendHookAudit_RejectsTamperedTailHash(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	if err := appendHookAudit(path, auditEnv("first"), nil, "allow", "ok"); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var trace domain.DecisionTrace
+	if err := json.Unmarshal(bytes.TrimSpace(raw), &trace); err != nil {
+		t.Fatal(err)
+	}
+	trace.TraceHash = "sha256:forged"
+	tampered, err := json.Marshal(&trace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tampered = append(tampered, '\n')
+	if err := os.WriteFile(path, tampered, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err = appendHookAudit(path, auditEnv("next"), nil, "allow", "ok")
+	if err == nil || !strings.Contains(err.Error(), "hash mismatch") {
+		t.Fatalf("append error = %v, want tampered-hash rejection", err)
+	}
+	got, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !bytes.Equal(got, tampered) {
+		t.Fatal("rejected tampered-tail append changed the audit file")
 	}
 }
 
@@ -377,7 +441,7 @@ func TestAppendHookAudit_RejectsVerifierOversizedWhitespaceRecord(t *testing.T) 
 	before := int64(len(contents))
 
 	err = appendHookAudit(path, auditEnv("next"), nil, "allow", "ok")
-	if err == nil || !strings.Contains(err.Error(), "last record exceeds") {
+	if err == nil || !strings.Contains(err.Error(), "record exceeds") {
 		t.Fatalf("append error = %v, want verifier-size rejection", err)
 	}
 	st, statErr := os.Stat(path)

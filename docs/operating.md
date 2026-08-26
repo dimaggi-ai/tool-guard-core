@@ -337,7 +337,10 @@ append-only ledger:
 - **Rotation** - `-audit-rotate-bytes` rotates the active file
   when it crosses the cap. Rotated files are named
   `<auditPath>.1`, `<auditPath>.2`, ... `tg verify` reads the
-  rotation set in order.
+  rotation set in order. Retain the complete set: its oldest record must be
+  the genesis record with an empty `previous_trace_hash`. A detached suffix
+  is rejected unless a future trusted-anchor protocol explicitly validates
+  its predecessor.
 - **Off-host backup** - `cron` an rsync to a separate host every
   hour. The hash chain links across rotations, so `tg verify` on
   the backup is the same operation as on the live host.
@@ -380,6 +383,12 @@ resumption. This intentionally supersedes the 0.7 documentation that described
 a future v2 writer as opt-in. Defaulting to v1 would either omit the
 applied-action attribution or record it outside the integrity commitment,
 which is not a safe default.
+
+The 0.8 verifier also requires the first record across the complete active
+file and rotation set to have an empty `previous_trace_hash`. This detects
+prefix truncation instead of treating the surviving suffix as a new intact
+chain. Keep every rotated sibling when moving or restoring a chain; 0.8 has no
+trusted-anchor option for intentionally verifying a detached suffix.
 
 Before the first 0.8 writer appends to an existing chain:
 

@@ -139,9 +139,9 @@ Tool Guard simulate — 3 policies, 1000 calls
   escalated          21    2.1%
   denied             31    3.1%
 ────────────────────────────────────────────────
-  rule fires (by rule_id):
-    rule-amount-cap               22  [deny]
-    rule-refund-1h-sum             9  [deny]
+  rule fires (by policy_id@version/rule_id):
+    pol-refund-cap@v1/rule-amount-cap          22  [deny]
+    pol-refund-velocity@v1/rule-refund-1h-sum   9  [deny]
     ...
 ```
 
@@ -150,7 +150,8 @@ the raw rule decision and the applied action. Add `-fail-on-deny` to exit 3
 when any applied action is denied; in this CI-gating mode, an empty corpus or
 malformed call records fail with exit 1 rather than passing vacuously or being
 skipped. Use `-json` for machine-readable output, or `-calls -` to read from
-stdin. A shadow-only deny
+stdin. Each JSON `rule_fires` row includes `policy_id`, `policy_version`, and
+`rule_id`, so identical rule IDs in different policies remain distinct. A shadow-only deny
 remains visible in the decision counts but does not fail the applied-action
 gate because the call would proceed.
 
