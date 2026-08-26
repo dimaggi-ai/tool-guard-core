@@ -14,19 +14,18 @@ package main
 // in someone's production deployment. See testdata/policy-compat/README.md
 // for how to add a new version snapshot after a release.
 //
-// A case is skipped for a given version if that version's snapshot
-// directory doesn't contain a file with the case's policy basename (e.g.
-// coding_agent_egress.yaml didn't exist yet at v0.2.0) — that's a missing
-// policy, not a compatibility break.
+// A case is skipped for a given version if that version's snapshot directory
+// lacks one of its shipped policy files, if it contains only fixtures, or if
+// policy_compat_since says the case relies on policy content introduced later.
+// Fixture policies in a multi-policy composition case remain live inputs while
+// shipped policies are replaced by their frozen snapshots.
 
 import (
-	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/engine"
@@ -50,6 +49,7 @@ func TestPolicyCompat(t *testing.T) {
 	if len(versionDirs) == 0 {
 		t.Fatal("no version snapshots found under testdata/policy-compat/")
 	}
+	shippedDir := filepath.Clean(filepath.Join("..", "..", "policies"))
 
 	for _, vd := range versionDirs {
 		if !vd.IsDir() {
@@ -63,51 +63,58 @@ func TestPolicyCompat(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read case %s: %v", file, err)
 			}
-			var c conformanceCase
-			if err := json.Unmarshal(raw, &c); err != nil {
+			c, err := decodeConformanceCase(raw)
+			if err != nil {
 				t.Fatalf("parse case %s: %v", file, err)
 			}
+			if c.PolicyCompatSince != "" {
+				eligible, err := releaseAtLeast(version, c.PolicyCompatSince)
+				if err != nil {
+					t.Fatalf("compare snapshot version for case %s: %v", filepath.Base(file), err)
+				}
+				if !eligible {
+					continue
+				}
+			}
 
-			snapshotPath := filepath.Join(compatRoot, version, filepath.Base(c.PolicyFile))
-			if _, err := os.Stat(snapshotPath); os.IsNotExist(err) {
-				continue // this policy didn't exist yet at this version — not a compat break
+			paths, err := c.policyPaths()
+			if err != nil {
+				t.Fatalf("policy paths for case %s: %v", filepath.Base(file), err)
+			}
+			policies := make([]domain.Policy, 0, len(paths))
+			hasSnapshotPolicy := false
+			missingSnapshotPolicy := false
+			for _, path := range paths {
+				resolved := filepath.Clean(filepath.Join(filepath.Dir(file), path))
+				loadPath := resolved
+				if filepath.Dir(resolved) == shippedDir {
+					hasSnapshotPolicy = true
+					loadPath = filepath.Join(compatRoot, version, filepath.Base(resolved))
+					if _, err := os.Stat(loadPath); os.IsNotExist(err) {
+						missingSnapshotPolicy = true
+						break // this policy did not exist in this release
+					} else if err != nil {
+						t.Fatalf("stat %s policy snapshot %q: %v", version, loadPath, err)
+					}
+				}
+				policy, err := policyload.Load(loadPath)
+				if err != nil {
+					t.Fatalf("load %s policy input %q: %v", version, loadPath, err)
+				}
+				if err := engine.ValidatePolicy(&policy); err != nil {
+					t.Fatalf("%s policy input %q fails validation under the current engine: %v", version, loadPath, err)
+				}
+				policies = append(policies, policy)
+			}
+			// Fixture-only cases exercise current schema coverage, not frozen
+			// policy snapshots. Multi-policy cases remain eligible as long as at
+			// least one referenced shipped policy exists in the snapshot.
+			if !hasSnapshotPolicy || missingSnapshotPolicy {
+				continue
 			}
 
 			t.Run(version+"/"+c.Name, func(t *testing.T) {
-				policy, err := policyload.Load(snapshotPath)
-				if err != nil {
-					t.Fatalf("load %s policy snapshot %q: %v", version, snapshotPath, err)
-				}
-				if err := engine.ValidatePolicy(&policy); err != nil {
-					t.Fatalf("%s snapshot %q fails validation under the current engine: %v", version, snapshotPath, err)
-				}
-
-				envJSON, err := json.Marshal(c.Envelope)
-				if err != nil {
-					t.Fatalf("re-marshal envelope: %v", err)
-				}
-				var env domain.ActionEnvelope
-				if err := json.Unmarshal(envJSON, &env); err != nil {
-					t.Fatalf("parse envelope: %v", err)
-				}
-				if env.Timestamp.IsZero() {
-					env.Timestamp = time.Now()
-				}
-				if env.EnvelopeID == "" {
-					env.EnvelopeID = "policy-compat-" + version + "-" + c.Name
-				}
-
-				var mode domain.PolicyMode
-				switch c.Mode {
-				case "shadow":
-					mode = domain.PolicyModeShadow
-				case "enforcement", "":
-					mode = domain.PolicyModeEnforcement
-				default:
-					t.Fatalf("case %q: unknown mode %q", c.Name, c.Mode)
-				}
-
-				result := engine.NewEvaluator().Evaluate(&env, []domain.Policy{policy}, mode)
+				result := evaluateConformanceCase(c, policies)
 
 				if string(result.Decision) != c.Expect.Decision {
 					t.Errorf("%s (%s): decision = %q, want %q (reason: %s) — a %s-vintage policy file now evaluates differently than the corpus expects",
@@ -118,6 +125,29 @@ func TestPolicyCompat(t *testing.T) {
 						c.Description, version, result.ActionTaken, c.Expect.ActionTaken, result.DecisionReason, version)
 				}
 			})
+		}
+	}
+}
+
+func TestReleaseAtLeast(t *testing.T) {
+	tests := []struct {
+		version string
+		minimum string
+		want    bool
+	}{
+		{"v0.5.0", "v0.5.0", true},
+		{"v0.5.1", "v0.5.0", true},
+		{"v0.6.0", "v0.5.9", true},
+		{"v1.0.0", "v0.99.99", true},
+		{"v0.4.9", "v0.5.0", false},
+	}
+	for _, tt := range tests {
+		got, err := releaseAtLeast(tt.version, tt.minimum)
+		if err != nil {
+			t.Fatalf("releaseAtLeast(%q, %q): %v", tt.version, tt.minimum, err)
+		}
+		if got != tt.want {
+			t.Errorf("releaseAtLeast(%q, %q) = %v, want %v", tt.version, tt.minimum, got, tt.want)
 		}
 	}
 }

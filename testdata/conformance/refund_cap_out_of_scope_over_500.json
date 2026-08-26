@@ -1,0 +1,17 @@
+{
+  "name": "refund_cap_out_of_scope_over_500",
+  "description": "The deliberately narrow example policy does not apply to a sibling tool, documenting the substitution gap reported by tg lint.",
+  "policy_file": "../../policies/refund_cap.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "process_return",
+    "tool_group": "returns",
+    "parameters": {
+      "amount": 1000
+    }
+  },
+  "expect": {
+    "decision": "allowed",
+    "action_taken": "allowed"
+  }
+}

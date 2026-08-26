@@ -1,0 +1,21 @@
+{
+  "name": "write_deny_root_path",
+  "description": "A write beneath /root is blocked by the portable write-surface classifier.",
+  "policy_file": "../../policies/coding_agent_writes.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "write",
+    "tool_group": "filesystem_writes",
+    "parameters": {
+      "path": "/root/.ssh/config",
+      "content": "placeholder"
+    }
+  },
+  "expect": {
+    "decision": "denied",
+    "action_taken": "denied",
+    "matched_rule_ids": [
+      "rule-write-surface"
+    ]
+  }
+}

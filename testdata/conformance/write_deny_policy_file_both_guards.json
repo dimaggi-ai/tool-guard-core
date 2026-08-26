@@ -1,0 +1,23 @@
+{
+  "name": "write_deny_policy_file_both_guards",
+  "description": "A policy-file write activates both the broad write classifier and the canonical self-protection backstop.",
+  "policy_file": "../../policies/coding_agent_writes.yaml",
+  "policy_compat_since": "v0.5.0",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "write",
+    "tool_group": "filesystem_writes",
+    "parameters": {
+      "file_path": "policies/custom.yaml",
+      "content": "status: draft"
+    }
+  },
+  "expect": {
+    "decision": "denied",
+    "action_taken": "denied",
+    "matched_rule_ids": [
+      "rule-write-surface",
+      "rule-self-protection"
+    ]
+  }
+}

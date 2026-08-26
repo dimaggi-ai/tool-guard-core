@@ -1,0 +1,19 @@
+{
+  "name": "floor_escalate_production_deploy",
+  "description": "A production deployment is classified irreversible and cannot auto-run.",
+  "policy_file": "../../policies/irreversibility_floor.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "deploy_production",
+    "parameters": {
+      "version": "v1.2.3"
+    }
+  },
+  "expect": {
+    "decision": "escalated",
+    "action_taken": "escalated",
+    "matched_rule_ids": [
+      "rule-irreversible-escalate"
+    ]
+  }
+}

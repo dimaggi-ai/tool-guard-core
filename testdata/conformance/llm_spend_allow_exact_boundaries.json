@@ -1,0 +1,26 @@
+{
+  "name": "llm_spend_allow_exact_boundaries",
+  "description": "Exact hourly, daily, and token ceilings remain allowed because every threshold is strict greater-than.",
+  "policy_file": "../../policies/llm_token_spend_guard.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "llm_call",
+    "tool_group": "llm_usage",
+    "parameters": {
+      "prompt": "summarize"
+    },
+    "context": {
+      "verified": {
+        "agent_velocity": {
+          "llm_cost_usd_1h": 50,
+          "llm_cost_usd_24h": 300,
+          "token_count_24h": 10000000
+        }
+      }
+    }
+  },
+  "expect": {
+    "decision": "allowed",
+    "action_taken": "allowed"
+  }
+}

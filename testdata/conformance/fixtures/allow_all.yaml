@@ -1,0 +1,24 @@
+schema_version: 1
+policy_id: conformance-allow-all
+name: conformance-allow-all
+description: A matched allow used to prove that the irreversibility floor wins policy composition.
+version: 1
+status: approved
+mode: enforcement
+
+scope:
+  intentionally_global: true
+
+rules:
+  - rule_id: fixture-allow-all
+    name: allow every named tool
+    rule_type: conformance
+    conditions:
+      field: tool_name
+      operator: exists
+      value: true
+    effect: allow
+    citation:
+      document_id: CONFORMANCE-FLOOR
+      section: "1"
+      excerpt: "A lower-severity allow cannot override the irreversibility floor."
