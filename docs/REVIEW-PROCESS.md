@@ -257,6 +257,22 @@ passes have real precedent instead of a starting from scratch.
   contract-valid 200/202 bodies while requiring the audit report to contain at
   least the corresponding candidate records. → pillars 2, 4, and 6.
 
+- **2026-08 · v0.8.0 exact-head release finalization.** Local seats in panel
+  cycles that could not be stamped because the required cloud seats were
+  unavailable found five more release-gate defects. The runbook required a
+  tag-derived Python version before the local tag existed; the tag preflight
+  accepted any ancestor of `main` instead of the reviewed exact head; the
+  stress response validator accepted impossible decision/action pairs while
+  rejecting legitimate mixed shadow/enforcement outcomes; malformed non-string
+  receipt fields could crash the Python memory adapter; and candidate-only
+  warm-up filled the candidate escalation store before comparison with a fresh
+  baseline. The fixes add transaction-order and annotated-tag preflight tests,
+  a complete response-pair matrix, tolerant receipt-field tests, and a phase
+  plan plus identical-binary probe that compares both proxies before either is
+  warmed independently. → pillars 2, 4, and 6. The panel remains incomplete
+  until all required seats return verdicts; these fixes do not substitute for
+  that gate.
+
 ## Where this fits in the release checklist
 
 `RELEASING.md`'s "Before tagging at all" section should include running
