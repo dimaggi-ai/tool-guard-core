@@ -245,8 +245,8 @@ func cmdVerify(args []string) int {
 // ── tg lint ────────────────────────────────────────────────────────────────
 //
 // Static checks on a policy YAML for the footguns the battle test
-// surfaced. Today this applies eight heuristics; the list grows as we
-// surface more bypass classes.
+// surfaced. The implementation-to-docs guard counts these finding IDs, so
+// the public list cannot silently drift as the rule set grows.
 
 type LintFinding struct {
 	Rule     string `json:"rule"`

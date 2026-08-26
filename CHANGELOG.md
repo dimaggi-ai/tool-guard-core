@@ -133,6 +133,13 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   pipelines without a new runtime dependency. A damaged chain is rejected
   before stdout receives any record.
 
+### Documentation integrity
+
+- The complete `tg` command reference, classifier list, and lint-check table
+  now have AST-backed drift guards. Package maps include the shared strict
+  policy loader, the documentation index covers every current guide, and
+  CHANGELOG release links are checked against repository tags.
+
 ## [0.7.0] — 2026-08-20
 
 Release focus: **policy-loading hardening** and **release-integrity
@@ -1053,9 +1060,10 @@ reliable self-protection is outside the policy, at operator-flag level.
   policy-dir loading, validation of a bad policy.
 - Full suite green under `-race -count=1`, including the integration tag.
 
-## [0.1.0] — 2026-06-09
+## 0.1.0 development snapshot (pre-release, no tag) — 2026-06-09
 
-Initial public release.
+Initial public development snapshot. No `v0.1.0` tag or GitHub release was
+published; the tagged release history begins at `v0.2.0`.
 
 ### Multimodal content-safety classifier — `pkg/llmguard` (new)
 
@@ -1330,5 +1338,4 @@ Lint heuristics shipped (8):
 [0.5.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/dimaggi-ai/tool-guard-core/releases/tag/v0.1.0
+[0.2.0]: https://github.com/dimaggi-ai/tool-guard-core/releases/tag/v0.2.0

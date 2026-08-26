@@ -489,7 +489,10 @@ func TestIntegration_Help(t *testing.T) {
 		if code != 0 {
 			t.Errorf("exit = %d, want 0", code)
 		}
-		for _, verb := range []string{"evaluate", "verify", "export", "lint", "benchmark"} {
+		for _, verb := range []string{
+			"evaluate", "simulate", "coverage", "hook", "protect", "status",
+			"unprotect", "verify", "export", "lint", "benchmark", "version",
+		} {
 			if !strings.Contains(stdout, verb) {
 				t.Errorf("usage missing verb %q", verb)
 			}

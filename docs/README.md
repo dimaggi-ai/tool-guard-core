@@ -5,14 +5,12 @@ authoring policies for, and operating Tool Guard Core.
 
 ## Start here
 
-- [**Release notes**](../Release-Notes.md) - curated per-release highlights;
-  0.3.0 adds file-write (`write_classify`) and egress (`http_classify`)
-  governance, tamper-evident `tg hook -audit-log`, and the `tg coverage`
-  metric. 0.2.0 adds velocity / amount-fragmentation mitigation, the `tg hook`
-  coding-agent guard, self-protection (`-protect-paths`), five new operators,
-  and `tg simulate`.
+- [**Release notes**](../Release-Notes.md) - curated highlights and upgrade
+  notes for every published release.
 - [**Getting Started**](getting-started.md) - install, build, run
   your first policy in 5 commands.
+- [**CLI Reference**](cli-reference.md) - the complete, CI-checked `tg`
+  command list and links to each workflow.
 - [**Architecture**](architecture.md) - how the engine, the audit
   chain, and the classifiers fit together.
 - [**Go API stability**](api-stability.md) - public package scope,
@@ -31,6 +29,10 @@ authoring policies for, and operating Tool Guard Core.
   Anthropic / OpenAI tool-use loops.
 - [**Escalation flow**](escalation.md) - the human-in-the-loop
   approval path, token configuration, audit semantics.
+- [**Coding-agent protection**](protect.md) - managed Claude Code hooks,
+  dry-run/apply behavior, rollback, and compatibility boundaries.
+- [**Performance**](performance.md) - benchmark method, latency results,
+  and reproducibility notes.
 
 ## Specific bundles
 
@@ -52,6 +54,8 @@ authoring policies for, and operating Tool Guard Core.
 - [**Core vs Enterprise**](oss-vs-enterprise.md) - what ships in
   this repo, what the Enterprise platform adds, and what exists in
   neither edition.
+- [**Review process**](REVIEW-PROCESS.md) - security review gates,
+  reviewer roles, and prior panel decisions.
 
 ## External
 

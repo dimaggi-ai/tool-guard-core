@@ -22,7 +22,7 @@ make build
 Output:
 
 ```
-bin/tg            # one-shot CLI: evaluate / verify / lint / benchmark
+bin/tg            # one-shot CLI; see docs/cli-reference.md for every command
 bin/tg-proxy      # HTTP service: POST /evaluate, hash-chained audit log
 bin/battle-test   # adversarial harness driving a local Ollama model
 bin/example-chain # generator for the sample audit chain

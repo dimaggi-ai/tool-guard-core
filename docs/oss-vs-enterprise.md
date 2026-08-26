@@ -3,7 +3,7 @@
 Tool Guard ships in two editions:
 
 - **Tool Guard Core** - Apache 2.0, this repository. The Policy Decision Point (PDP) for AI agent tool calls:
-  policy evaluation engine, SQL/path/shell/LLM classifiers, the `/evaluate` service, Go library, and the hash-chained
+  policy evaluation engine, SQL/path/shell/write/HTTP/LLM classifiers, the `/evaluate` service, Go library, and the hash-chained
   audit primitive. Core decides and records; your tool-execution layer enforces. No usage limit, no feature gate, deploy at any scale.
 - **Tool Guard Enterprise** - a commercial, self-hosted enforcement layer:
   an MCP gateway that intercepts all agent-tool traffic, calls Core on every tool call, forwards allowed calls,
@@ -24,7 +24,7 @@ alongside Enterprise), not that Enterprise removes it.
 |---|---|---|
 | **Enforcement Point / Gateway** | ✗ (Integrator wires the decision into tool-execution code) | ✔ (Turnkey MCP gateway: single point of access, forwards allowed/blocks denied) |
 | **Decision Engine** (policy eval, scope, condition trees) | ✔ (The engine lives here, full stop) | Calls the same engine; never a stronger one |
-| **Classifiers** (SQL, path, shell, local-LLM content) | ✔ | Same classifiers |
+| **Classifiers** (SQL, path, shell, write, HTTP, local-LLM content) | ✔ | Same classifiers |
 | **Shadow / Observe-only Mode** | ✔ | ✔ |
 | **Audit Primitive** | ✔ (SHA-256 hash-chained JSONL + offline `tg verify` tool) | Consumes it |
 | **Audit Management** | ✗ | ✔ (PostgreSQL-backed traces, dashboard search, signed Evidence Packs) |

@@ -34,12 +34,16 @@ JSON `ActionEnvelope`.
 
 ```
 pkg/domain/      Tool-call envelopes, policy / rule / condition types,
-                 decision traces. JSON-tagged; YAML loaders in cmd/tg.
+                 decision traces. JSON-tagged; no loading or I/O.
+
+pkg/policyload/  Strict YAML loading and deterministic policy-set hashing.
+                 Every policy-loading binary uses this package, so schema
+                 acceptance is identical at CLI, hook, and proxy boundaries.
 
 pkg/engine/      Pure policy evaluation. No I/O. Given an envelope and
                  a set of policies, returns a decision in microseconds.
-                 Hosts the path_classify / shell_classify predicates and
-                 the regex compile cache.
+                 Hosts path, shell, write, HTTP, and reversibility
+                 classification plus the regex compile cache.
 
 pkg/sqlguard/    Four-dialect SQL classifier (postgres / mysql / sqlite
                  / mssql). The tokenizer-based lite implementation is
@@ -71,7 +75,9 @@ pkg/audit/       SHA-256 hash-chained traces, offline replay verifier,
                  Escalation approvals are written as their own chained
                  entries.
 
-cmd/tg/          The one-shot CLI: evaluate / verify / lint / benchmark.
+cmd/tg/          The one-shot CLI for policy authoring, local evaluation,
+                 coding-agent protection, and offline audit workflows.
+                 See cli-reference.md for the complete command list.
 
 cmd/tg-proxy/    HTTP service: POST /evaluate, hash-chained JSONL
                  audit with rotation, SIGHUP policy reload, /metrics,
@@ -103,8 +109,7 @@ For every `/evaluate` request the proxy walks this sequence:
 4. **Engine evaluation** - every loaded policy whose scope matches
    the envelope contributes its rules to the evaluation. Each rule
    walks its condition tree (`and` / `or` / `not` plus leaf
-   comparisons or one of the classifiers: `sql_classify`,
-   `path_classify`, `shell_classify`, `llm_classify`).
+   comparisons or one of the six classifier leaves listed below).
 5. **Effect resolution** - among all rules that fired, the strongest
    effect wins by severity hierarchy (`deny` > `escalate` > `flag` >
    `allow`).
@@ -126,7 +131,20 @@ For every `/evaluate` request the proxy walks this sequence:
 
 ## The condition DSL
 
-Conditions are recursive trees. The four leaf shapes are:
+Conditions are recursive trees. A leaf is either a field comparison or one
+of these classifier conditions:
+
+| Classifier condition | Surface governed |
+|---|---|
+| `sql_classify` | SQL statements and dialect-specific safety requirements |
+| `path_classify` | Filesystem paths, traversal, symlinks, and shell metacharacters |
+| `shell_classify` | Parsed argument vectors, executable allowlists, and shell escapes |
+| `llm_classify` | Local-LLM classification of text and multimodal generation requests |
+| `write_classify` | File-write destinations, size ceilings, and denied content |
+| `http_classify` | Outbound HTTP hosts, schemes, methods, and ports |
+
+This table is checked against the classifier fields on `domain.Condition` in
+CI. The recursive shapes are:
 
 ```yaml
 # Leaf: simple field comparison
@@ -141,6 +159,8 @@ conditions:
   path_classify: ...
   shell_classify: ...
   llm_classify: ...
+  write_classify: ...
+  http_classify: ...
 
 # Tree shapes
 conditions:

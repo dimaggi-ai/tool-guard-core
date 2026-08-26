@@ -22,7 +22,8 @@ answer is `deny`, you don't run the call — one `if` statement at the
 point where your agent executes tools, with working patterns for MCP,
 LangChain, AutoGen, and native Anthropic/OpenAI tool-use loops in
 [docs/integration.md](docs/integration.md). This repo is the complete
-engine: policy evaluation, the SQL / path / shell / LLM classifiers,
+engine: policy evaluation, the SQL / path / shell / write / HTTP / LLM
+classifiers,
 the `/evaluate` service, the Go library, and the audit primitive.
 Nothing in it is gated.
 
@@ -483,12 +484,15 @@ to run.
 
 ```
 pkg/domain/      Tool-call envelopes, policy / rule / condition types,
-                 decision traces. JSON-tagged; YAML loaders in cmd/tg.
+                 decision traces. JSON-tagged; no loading or I/O.
+
+pkg/policyload/  Strict YAML loading and deterministic policy-set hashing.
+                 Shared by every policy-loading binary.
 
 pkg/engine/      Pure policy evaluation. No I/O. Given an envelope and a
                  set of policies, returns a decision in microseconds.
-                 Hosts the path_classify / shell_classify predicates and
-                 the regex compile cache.
+                 Hosts path, shell, write, HTTP, and reversibility
+                 classification plus the regex compile cache.
 
 pkg/sqlguard/    Four-dialect SQL classifier. The tokenizer-based
                  lite implementation (postgres / mysql / sqlite) and the
@@ -606,6 +610,7 @@ policy loading.
 Comprehensive docs live in [`docs/`](docs/README.md):
 
 - [Getting Started](docs/getting-started.md) — install, build, first policy in 5 commands
+- [CLI Reference](docs/cli-reference.md) — every `tg` command, checked against the binary in CI
 - [Architecture](docs/architecture.md) — engine, audit chain, classifiers
 - [Creating Policies](docs/creating-policies.md) — full YAML schema, every operator and classifier
 - [Operating in production](docs/operating.md) — systemd, k8s, metrics, backup, recovery
@@ -716,7 +721,7 @@ Tool Guard governs **what an agent does**. Many AI-safety tools govern
 | Conversation-flow guardrails | Dialogue flow + content | Whether a conversation follows an allowed path or response flow |
 | Structured-output validators | Model output | Whether model output matches a schema, regex, topic, or format requirement |
 | Pre-deployment eval suites | Test/eval time | Whether prompts and responses pass benchmark or regression checks before release |
-| **Tool Guard Core** | **Tool execution** | **What action is about to run** — SQL/shell/path/LLM classifiers plus policy evaluation on the structured tool call, before the API executes; tamper-evident audit trail |
+| **Tool Guard Core** | **Tool execution** | **What action is about to run** — SQL/path/shell/write/HTTP/LLM classifiers plus policy evaluation on the structured tool call, before the API executes; tamper-evident audit trail |
 
 Use prompt and response guardrails when you need to control model text.
 Use Tool Guard when agents call tools that touch money, customer data,

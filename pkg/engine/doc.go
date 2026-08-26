@@ -24,6 +24,6 @@
 //	}
 //
 // Use [github.com/dimaggi-ai/tool-guard-core/pkg/audit] to hash-chain the
-// resulting traces, and the `tg` CLI (under cmd/tg) for the offline
-// verify / lint / benchmark workflow.
+// resulting traces, and the `tg` CLI (under cmd/tg) for policy tooling and
+// offline audit workflows.
 package engine
