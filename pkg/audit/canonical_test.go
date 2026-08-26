@@ -90,6 +90,7 @@ func goldenTraceV2() *domain.DecisionTrace {
 	// Keep historical fixtures pinned to their schema. A later writer-version
 	// bump must not silently move this fixture to v3 and stop covering v2.
 	tr.CanonicalVersion = canonicalTraceVersionV2
+	tr.AmountParseStatus = "ok"
 	tr.RuleResults[0].Citation = domain.Citation{
 		DocumentID: "policy-handbook",
 		Section:    "4.2",
@@ -187,7 +188,7 @@ func TestCanonicalTraceBytes_V2Golden(t *testing.T) {
 		t.Fatalf("CanonicalTraceBytes v2: %v", err)
 	}
 	sum := fmt.Sprintf("%x", sha256.Sum256(got))
-	const wantSHA256 = "8848c5cd254d191e1d75b771c292d70123cca396db140671ee1d3b3bf9c40d68"
+	const wantSHA256 = "d07017f2a7ed6c6e64e4471b1b9033a77a4c2005b138338cd3a00d26d990093f"
 	if sum != wantSHA256 {
 		t.Fatalf("canonical v2 bytes drifted: sha256=%s, want %s\nbytes=%s", sum, wantSHA256, got)
 	}
@@ -226,6 +227,8 @@ func TestCanonicalTraceV2AppliedProvenanceTamperFailsVerification(t *testing.T) 
 		{"rule diagnostic", func(tr *domain.DecisionTrace) { tr.RuleResults[0].Details = "forged" }},
 		{"deep fail-closed marker", func(tr *domain.DecisionTrace) { tr.DeepEvalResult.FailClosedTriggered = true }},
 		{"deep temperature", func(tr *domain.DecisionTrace) { tr.DeepEvalResult.Temperature = 0.25 }},
+		{"sub-cent amount", func(tr *domain.DecisionTrace) { tr.Amount += 0.001 }},
+		{"amount parse status", func(tr *domain.DecisionTrace) { tr.AmountParseStatus = "invalid_fail_closed" }},
 		{"version downgrade", func(tr *domain.DecisionTrace) { tr.CanonicalVersion = "" }},
 	}
 	for _, tt := range tests {
@@ -240,6 +243,36 @@ func TestCanonicalTraceV2AppliedProvenanceTamperFailsVerification(t *testing.T) 
 			ok, err := VerifyCanonicalTraceHash(tr)
 			if err == nil && ok {
 				t.Fatal("verification accepted tampered v2 provenance")
+			}
+		})
+	}
+}
+
+func TestCanonicalTraceV2RuleOrderTamperFailsVerification(t *testing.T) {
+	for _, field := range []string{"raw", "applied"} {
+		t.Run(field, func(t *testing.T) {
+			tr := goldenTraceV2()
+			second := tr.RuleResults[0]
+			second.RuleID = "r-002"
+			second.RuleName = "second rule"
+			tr.RuleResults = append(tr.RuleResults, second)
+			tr.AppliedRuleResults = append([]domain.RuleResult(nil), tr.RuleResults...)
+			hash, err := ComputeCanonicalTraceHash(tr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tr.TraceHash = hash
+			if field == "raw" {
+				tr.RuleResults[0], tr.RuleResults[1] = tr.RuleResults[1], tr.RuleResults[0]
+			} else {
+				tr.AppliedRuleResults[0], tr.AppliedRuleResults[1] = tr.AppliedRuleResults[1], tr.AppliedRuleResults[0]
+			}
+			ok, err := VerifyCanonicalTraceHash(tr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ok {
+				t.Fatalf("reversing %s rule results did not break the v2 hash", field)
 			}
 		})
 	}

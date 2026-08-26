@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dimaggi-ai/tool-guard-core/pkg/audit"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/engine"
 )
@@ -125,6 +127,64 @@ func assertOperationalDenyHasNoPolicyAttribution(t *testing.T, result domain.Eva
 	if result.PrimaryCitation != nil || result.SuggestedResponse != "" {
 		t.Errorf("operational deny retained policy attribution: citation=%#v guidance=%q",
 			result.PrimaryCitation, result.SuggestedResponse)
+	}
+}
+
+func TestProxy_AuditBindsEvaluatedAmountProvenance(t *testing.T) {
+	tests := []struct {
+		name       string
+		parameters any
+		wantAmount float64
+		wantStatus string
+	}{
+		{name: "sub-cent", parameters: map[string]any{"amount": 1.001}, wantAmount: 1.001, wantStatus: engine.AmountParseOK},
+		{name: "malformed", parameters: map[string]any{"amount": map[string]any{"value": 100}}, wantAmount: 1e18, wantStatus: engine.AmountParseInvalidFailClosed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newOperationalTestProxy(t, []domain.Policy{
+				operationalPolicy("amount-provenance", domain.PolicyModeEnforcement, domain.EffectDeny, "amount", 0),
+			}, false)
+			body, err := json.Marshal(map[string]any{
+				"envelope_id": "amount-" + tt.name,
+				"agent_id":    "audit-agent",
+				"session_id":  "audit-session",
+				"org_id":      "audit-org",
+				"tool_name":   "issue_refund",
+				"tool_group":  "monetary_outflow",
+				"parameters":  tt.parameters,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest(http.MethodPost, "/evaluate", bytes.NewReader(body))
+			rec := httptest.NewRecorder()
+			p.evaluate(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
+			}
+
+			traces := readOperationalTraces(t, p)
+			if len(traces) != 1 {
+				t.Fatalf("audit trace count = %d, want 1", len(traces))
+			}
+			trace := traces[0]
+			if trace.Amount != tt.wantAmount || trace.AmountParseStatus != tt.wantStatus {
+				t.Fatalf("amount provenance = (%v, %q), want (%v, %q)", trace.Amount, trace.AmountParseStatus, tt.wantAmount, tt.wantStatus)
+			}
+			ok, err := audit.VerifyCanonicalTraceHash(&trace)
+			if err != nil || !ok {
+				t.Fatalf("canonical amount verification: ok=%v err=%v", ok, err)
+			}
+			trace.Amount = math.Nextafter(trace.Amount, math.Inf(1))
+			ok, err = audit.VerifyCanonicalTraceHash(&trace)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ok {
+				t.Fatal("sub-cent amount tamper did not break the audit hash")
+			}
+		})
 	}
 }
 
@@ -258,6 +318,9 @@ func TestProxy_EscalationRegistrationFailureClearsPolicyAttribution(t *testing.T
 			}
 			if last.ActionTaken != domain.ActionDenied {
 				t.Errorf("audit action = %q, want denied", last.ActionTaken)
+			}
+			if last.Amount != 100 || last.AmountParseStatus != engine.AmountParseOK {
+				t.Errorf("audit amount provenance = (%v, %q), want (100, %q)", last.Amount, last.AmountParseStatus, engine.AmountParseOK)
 			}
 			if len(last.AppliedRuleResults) != 0 || last.AppliedPrimaryCitation != nil {
 				t.Errorf("audit operational deny retained applied provenance: rules=%#v citation=%#v",

@@ -345,19 +345,24 @@ func main() {
 					// original "escalated" trace with no record
 					// that the lifecycle ended in deny-by-timeout.
 					for _, e := range expired {
+						amount, amountStatus := evaluatedAmountFromEnvelope(&e.Envelope)
 						trace := domain.DecisionTrace{
-							TraceID:        fmt.Sprintf("trc-%d", time.Now().UnixNano()),
-							Timestamp:      time.Now().UTC(),
-							EnvelopeID:     e.Envelope.EnvelopeID,
-							AgentID:        e.Envelope.AgentID,
-							SessionID:      e.Envelope.SessionID,
-							OrgID:          e.Envelope.OrgID,
-							ToolName:       e.Envelope.ToolName,
-							ToolGroup:      e.Envelope.ToolGroup,
-							Decision:       domain.DecisionDenied,
-							ActionTaken:    domain.ActionDenied,
-							DecisionReason: fmt.Sprintf("escalation %s expired without approval", e.ID),
-							Mode:           domain.PolicyModeEnforcement,
+							TraceID:           fmt.Sprintf("trc-%d", time.Now().UnixNano()),
+							Timestamp:         time.Now().UTC(),
+							EnvelopeID:        e.Envelope.EnvelopeID,
+							AgentID:           e.Envelope.AgentID,
+							AgentVersion:      e.Envelope.AgentVersion,
+							SessionID:         e.Envelope.SessionID,
+							TurnNumber:        e.Envelope.TurnNumber,
+							OrgID:             e.Envelope.OrgID,
+							ToolName:          e.Envelope.ToolName,
+							ToolGroup:         e.Envelope.ToolGroup,
+							Amount:            amount,
+							AmountParseStatus: amountStatus,
+							Decision:          domain.DecisionDenied,
+							ActionTaken:       domain.ActionDenied,
+							DecisionReason:    fmt.Sprintf("escalation %s expired without approval", e.ID),
+							Mode:              domain.PolicyModeEnforcement,
 						}
 						if err := p.appendTrace(&trace); err != nil {
 							log.Printf("tg-proxy: append expiry trace for %s: %v", e.ID, err)

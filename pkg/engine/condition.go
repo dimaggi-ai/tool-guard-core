@@ -482,15 +482,8 @@ func FlattenEnvelope(env *domain.ActionEnvelope) map[string]interface{} {
 	// fires, which is the fail-closed semantic. A hostile envelope
 	// that tries to dodge an amount-cap by sending an unparseable
 	// value now gets caught.
-	amt, err := env.Amount()
-	if err != nil {
-		// 1e18 is one quintillion — well above any legitimate
-		// monetary action, well below math.MaxFloat64 so it
-		// participates in normal float comparisons without overflow.
-		fields["amount"] = 1e18
-	} else {
-		fields["amount"] = amt
-	}
+	amt, _ := EvaluatedAmount(env)
+	fields["amount"] = amt
 
 	// Parameters as nested map
 	if env.Parameters != nil {
@@ -590,4 +583,28 @@ func FlattenEnvelope(env *domain.ActionEnvelope) map[string]interface{} {
 	}
 
 	return fields
+}
+
+const (
+	// AmountParseOK means the amount field parsed successfully. A missing
+	// amount is a valid zero, matching ActionEnvelope.Amount's contract.
+	AmountParseOK = "ok"
+	// AmountParseInvalidFailClosed means evaluation substituted the sentinel
+	// because the supplied amount was malformed, negative, or non-finite.
+	AmountParseInvalidFailClosed = "invalid_fail_closed"
+	invalidAmountSentinel        = 1e18
+)
+
+// EvaluatedAmount returns the exact float64 used by amount conditions plus a
+// stable parse-status marker for audit provenance. Audit writers must call
+// this helper instead of ActionEnvelope.Amount directly so the recorded value
+// cannot diverge from FlattenEnvelope's fail-closed semantics.
+func EvaluatedAmount(env *domain.ActionEnvelope) (float64, string) {
+	amt, err := env.Amount()
+	if err != nil {
+		// One quintillion is above any legitimate monetary cap while remaining
+		// finite and exactly serializable as a float64-backed JSON number.
+		return invalidAmountSentinel, AmountParseInvalidFailClosed
+	}
+	return amt, AmountParseOK
 }

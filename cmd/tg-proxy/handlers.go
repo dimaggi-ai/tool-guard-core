@@ -363,6 +363,7 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	traceID := fmt.Sprintf("trc-%d", time.Now().UnixNano())
+	amount, amountStatus := evaluatedAmountFromEnvelope(&env)
 	trace := domain.DecisionTrace{
 		TraceID:                traceID,
 		Timestamp:              env.Timestamp.UTC(),
@@ -374,7 +375,8 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 		TurnNumber:             env.TurnNumber,
 		ToolName:               env.ToolName,
 		ToolGroup:              env.ToolGroup,
-		Amount:                 amountFromEnvelope(&env),
+		Amount:                 amount,
+		AmountParseStatus:      amountStatus,
 		Decision:               result.Decision,
 		ActionTaken:            result.ActionTaken,
 		DecisionReason:         result.DecisionReason,

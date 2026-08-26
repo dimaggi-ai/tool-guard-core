@@ -43,6 +43,10 @@ type DecisionTrace struct {
 	ToolName     string  `json:"tool_name"`
 	ToolGroup    string  `json:"tool_group"`
 	Amount       float64 `json:"amount,omitempty"`
+	// AmountParseStatus records whether Amount is the parsed envelope value or
+	// the fail-closed sentinel used when the input amount was malformed. v2
+	// binds both fields so an audit record matches the numeric value evaluated.
+	AmountParseStatus string `json:"amount_parse_status,omitempty"`
 
 	// Evaluation result
 	Decision       Decision    `json:"decision"`

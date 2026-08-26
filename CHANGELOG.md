@@ -12,7 +12,8 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   enforcement call-site could override a `mode: shadow` policy and block its
   deny or escalation. In 0.8, that policy still reports the raw denied or
   escalated decision, but its applied action is `allowed_shadow`: `tg
-  evaluate` exits 0, the proxy executes the tool, and `tg hook` emits `allow`.
+  evaluate` exits 0, the proxy returns `allowed_shadow` so the integration may
+  execute the tool, and `tg hook` emits `allow`.
   The Python SDK exposes both `decision` and `action_taken` so integrations can
   distinguish observation from enforcement. The reverse downgrade is not
   allowed: a shadow call-site cannot weaken a `mode: enforcement` policy.
@@ -20,6 +21,19 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   `mode: enforcement` if its matches must continue blocking execution; leave
   it in shadow only when observe-without-blocking is intentional. Test the
   resulting set with `tg simulate` before rollout.
+
+### Breaking policy-identity validation planned for 0.8.0
+
+- Loaded sets now reject duplicate `(policy_id, version)` identities, and each
+  policy rejects duplicate `rule_id` values. Older releases accepted these
+  ambiguous identities; their citations and suggested responses could be
+  attributed to the wrong rule.
+- Before upgrading, run the 0.8 binary's `tg lint` against every policy file,
+  then run `tg simulate -policy-dir <dir> -calls <representative.jsonl>` to
+  exercise set-level loading. Rename every reported duplicate before rollout.
+  This is especially important for `tg hook`: a policy-set load error follows
+  the configured failure mode, which is `allow` by default. Use the hook's
+  documented fail-closed options where a load failure must block execution.
 
 ### Breaking audit-format migration planned for 0.8.0
 

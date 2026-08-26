@@ -10,6 +10,7 @@ import (
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/audit"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
+	"github.com/dimaggi-ai/tool-guard-core/pkg/engine"
 )
 
 // appendHookAudit writes the hook's decision to a SHA-256 hash-chained JSONL
@@ -22,7 +23,7 @@ import (
 // (not by scanning the whole thing), so appending stays O(1) per call even as
 // the log grows across a long agent session.
 func appendHookAudit(path string, env *domain.ActionEnvelope, result *domain.EvaluationResult, decision, reason string) error {
-	amount, _ := env.Amount()
+	amount, amountStatus := engine.EvaluatedAmount(env)
 	timestamp := env.Timestamp
 	if timestamp.IsZero() {
 		timestamp = time.Now().UTC()
@@ -40,6 +41,7 @@ func appendHookAudit(path string, env *domain.ActionEnvelope, result *domain.Eva
 		ToolName:           env.ToolName,
 		ToolGroup:          env.ToolGroup,
 		Amount:             amount,
+		AmountParseStatus:  amountStatus,
 		ParametersRedacted: append([]byte(nil), env.ParametersRedacted...),
 	}
 	if result == nil {
@@ -166,27 +168,63 @@ func lastTraceHash(path string) (string, error) {
 		return "", nil
 	}
 
-	// Include the record bytes, its terminating newline, and one preceding
-	// delimiter. That distinguishes a complete max-sized final record from a
-	// window that begins in the middle of an oversized record.
-	tailWindow := int64(audit.MaxTraceRecordBytes + 3)
-	start := fi.Size() - tailWindow
+	// The streaming verifier permits empty LF and CRLF records. Seek backward
+	// past that complete suffix before applying the bounded-record window so
+	// any number of blank lines cannot consume delimiter headroom and make a
+	// valid exact-max tail look oversized. A bare CR is record content under
+	// bufio.ScanLines, so only skip one when it immediately precedes an LF.
+	logicalEnd := fi.Size()
+	chunk := make([]byte, 4096)
+	afterLF := false
+
+scanBlankSuffix:
+	for logicalEnd > 0 {
+		chunkStart := logicalEnd - int64(len(chunk))
+		if chunkStart < 0 {
+			chunkStart = 0
+		}
+		n, readErr := f.ReadAt(chunk[:logicalEnd-chunkStart], chunkStart)
+		if readErr != nil && readErr != io.EOF {
+			return "", readErr
+		}
+		i := n - 1
+		for i >= 0 {
+			switch {
+			case chunk[i] == '\n':
+				afterLF = true
+				i--
+			case chunk[i] == '\r' && afterLF:
+				afterLF = false
+				i--
+			default:
+				logicalEnd = chunkStart + int64(i+1)
+				break scanBlankSuffix
+			}
+		}
+		logicalEnd = chunkStart
+	}
+	if logicalEnd == 0 {
+		return "", nil
+	}
+
+	// Include one preceding delimiter. That distinguishes a complete
+	// max-sized final record from a window beginning inside an oversized one.
+	tailWindow := int64(audit.MaxTraceRecordBytes + 1)
+	start := logicalEnd - tailWindow
 	if start < 0 {
 		start = 0
 	}
 	if _, err := f.Seek(start, io.SeekStart); err != nil {
 		return "", err
 	}
-	data, err := io.ReadAll(f)
-	if err != nil {
+	data := make([]byte, logicalEnd-start)
+	if _, err := io.ReadFull(f, data); err != nil {
 		return "", err
 	}
 
-	// Appends always terminate records with '\n'. Trim blank line endings, then
-	// use the final remaining delimiter as the start boundary of the last
-	// record. If the bounded window starts mid-file and contains no such
-	// delimiter, the final record is too large for the verifier as well.
-	data = bytes.TrimRight(data, "\r\n")
+	// Use the final remaining delimiter as the start boundary of the last
+	// record. If the bounded window starts mid-file and contains no delimiter,
+	// the final record is too large for the verifier as well.
 	var lastLine []byte
 	if i := bytes.LastIndexByte(data, '\n'); i >= 0 {
 		lastLine = data[i+1:]

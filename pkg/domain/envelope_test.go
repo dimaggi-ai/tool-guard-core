@@ -110,6 +110,20 @@ func TestAmount_UnparseableStringRejected(t *testing.T) {
 	}
 }
 
+func TestAmount_NonFiniteStringRejected(t *testing.T) {
+	for _, body := range []string{
+		`{"amount": "NaN"}`,
+		`{"amount": "+Inf"}`,
+		`{"amount": "-Inf"}`,
+		`{"amount": "Infinity"}`,
+	} {
+		env := &ActionEnvelope{Parameters: json.RawMessage(body)}
+		if _, err := env.Amount(); err == nil {
+			t.Errorf("%s: expected AmountError, got nil", body)
+		}
+	}
+}
+
 func TestAmount_NegativeBypass_Rejected(t *testing.T) {
 	// Negative amounts could inflate budget by reducing usedToday
 	env := &ActionEnvelope{

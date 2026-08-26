@@ -10,6 +10,7 @@ import (
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/audit"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
+	"github.com/dimaggi-ai/tool-guard-core/pkg/engine"
 )
 
 // hookDecision decodes the JSON written to stdout by runHook and returns
@@ -257,6 +258,9 @@ func TestHook_AuditPreservesHashBoundAmount(t *testing.T) {
 	if trace.Amount != 750 {
 		t.Fatalf("audit amount = %v, want 750", trace.Amount)
 	}
+	if trace.AmountParseStatus != engine.AmountParseOK {
+		t.Fatalf("audit amount status = %q, want %q", trace.AmountParseStatus, engine.AmountParseOK)
+	}
 	report, err := audit.VerifyChainFromReader(bytes.NewReader(raw))
 	if err != nil {
 		t.Fatal(err)
@@ -271,6 +275,40 @@ func TestHook_AuditPreservesHashBoundAmount(t *testing.T) {
 	}
 	if ok {
 		t.Fatal("changing the evaluated amount did not break the canonical hash")
+	}
+}
+
+func TestHook_AuditBindsMalformedAmountFailClosedValue(t *testing.T) {
+	pol := writeHookPolicy(t, hookAmountPolicy)
+	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
+	stdin := `{"tool_name":"issue_refund","tool_input":{"amount":{"not":"a number"}}}`
+	out, code := runHookStr(t, stdin, "-policy", pol, "-audit-log", auditPath)
+	if code != 0 || hookDecision(t, out) != "deny" {
+		t.Fatalf("malformed amount hook result: code=%d output=%s", code, out)
+	}
+
+	raw, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var trace domain.DecisionTrace
+	if err := json.Unmarshal(bytes.TrimSpace(raw), &trace); err != nil {
+		t.Fatal(err)
+	}
+	if trace.Amount != 1e18 || trace.AmountParseStatus != engine.AmountParseInvalidFailClosed {
+		t.Fatalf("malformed amount provenance = amount:%v status:%q", trace.Amount, trace.AmountParseStatus)
+	}
+	ok, err := audit.VerifyCanonicalTraceHash(&trace)
+	if err != nil || !ok {
+		t.Fatalf("malformed amount trace verification: ok=%v err=%v", ok, err)
+	}
+	trace.AmountParseStatus = engine.AmountParseOK
+	ok, err = audit.VerifyCanonicalTraceHash(&trace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("changing malformed amount parse status did not break the hash")
 	}
 }
 

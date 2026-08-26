@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"time"
 )
@@ -216,11 +217,17 @@ func (e *ActionEnvelope) Amount() (float64, error) {
 		if err != nil {
 			return 0, &AmountError{Message: fmt.Sprintf("invalid amount number: %s", a)}
 		}
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return 0, &AmountError{Message: fmt.Sprintf("amount must be finite, got %s", a)}
+		}
 		if f < 0 {
 			return 0, &AmountError{Message: fmt.Sprintf("negative amount not allowed: %.2f", f)}
 		}
 		return f, nil
 	case float64:
+		if math.IsNaN(a) || math.IsInf(a, 0) {
+			return 0, &AmountError{Message: fmt.Sprintf("amount must be finite, got %v", a)}
+		}
 		if a < 0 {
 			return 0, &AmountError{Message: fmt.Sprintf("negative amount not allowed: %.2f", a)}
 		}
@@ -241,6 +248,9 @@ func (e *ActionEnvelope) Amount() (float64, error) {
 		f, err := strconv.ParseFloat(trimmed, 64)
 		if err != nil {
 			return 0, &AmountError{Message: fmt.Sprintf("amount must be a number, got string %q", a)}
+		}
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return 0, &AmountError{Message: fmt.Sprintf("amount must be finite, got string %q", a)}
 		}
 		if f < 0 {
 			return 0, &AmountError{Message: fmt.Sprintf("negative amount not allowed: %.2f", f)}

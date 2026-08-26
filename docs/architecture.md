@@ -154,10 +154,12 @@ Every v2 trace's hash covers the canonical JSON of the decision and the
 fields that explain both the raw decision and applied action:
 `decision_reason`, raw and applied rule results (including their citations
 and diagnostics), primary citations, suggested response, agent identity,
-amount, chain links, and signer. Mutating any of those fields breaks
+exact evaluated amount (as IEEE-754 bits) and its parse status, chain links,
+and signer. Mutating any of those fields breaks
 `tg verify`. Escalation-resolution fields, `parameters_redacted`,
-`context_snapshot`, and token/cost counters are recorded but are not part
-of the canonical hash. The exact hashed sets are the immutable versioned
+`context_snapshot`, and the top-level agent token/cost counters are recorded
+but are not part of the canonical hash. Deep-evaluation `tokens_in` and
+`tokens_out` remain hash-bearing. The exact hashed sets are the immutable versioned
 structs in `pkg/audit/canonical.go`; records without `_canonical_v` use v1,
 while new records carry `_canonical_v: "v2"`. Escalation approvals are
 written as their own chained entries, so the approval record is itself

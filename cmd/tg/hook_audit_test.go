@@ -316,6 +316,53 @@ func TestAppendHookAudit_ExtendsPriorPlusExactMaxCRLFRecord(t *testing.T) {
 	}
 }
 
+func TestAppendHookAudit_ExtendsExactMaxRecordAfterBlankLines(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	first := hookAuditTraceOfSize(t, audit.MaxTraceRecordBytes)
+	line, err := audit.MarshalTraceRecord(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := append(append([]byte(nil), line...), []byte("\n\r\n\n\r\n\n")...)
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := appendHookAudit(path, auditEnv("next"), nil, "allow", "ok"); err != nil {
+		t.Fatalf("append after blank-line suffix: %v", err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	report, err := audit.VerifyChainFromReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Intact || report.Records != 2 {
+		t.Fatalf("blank-line suffix chain = %#v, want intact with 2 records", report)
+	}
+}
+
+func TestAppendHookAudit_RejectsBareCRBeyondExactMaxRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	first := hookAuditTraceOfSize(t, audit.MaxTraceRecordBytes)
+	line, err := audit.MarshalTraceRecord(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := append(append([]byte(nil), line...), '\r')
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err = appendHookAudit(path, auditEnv("next"), nil, "allow", "ok")
+	if err == nil || !strings.Contains(err.Error(), "last record exceeds") {
+		t.Fatalf("append error = %v, want verifier-size rejection", err)
+	}
+}
+
 func TestAppendHookAudit_RejectsVerifierOversizedWhitespaceRecord(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.jsonl")
 	exact := hookAuditTraceOfSize(t, audit.MaxTraceRecordBytes)

@@ -28,11 +28,11 @@ func main() {
 	base := time.Date(2026, time.January, 15, 9, 30, 0, 0, time.UTC)
 
 	traces := []domain.DecisionTrace{
-		mkTrace("trc-0001", "env-0001", "", base.Add(0*time.Second),
+		mkTrace("trc-0001", "env-0001", "", base.Add(0*time.Second), 50,
 			domain.DecisionAllowed, domain.ActionAllowed),
-		mkTrace("trc-0002", "env-0002", "", base.Add(12*time.Second),
+		mkTrace("trc-0002", "env-0002", "", base.Add(12*time.Second), 1000,
 			domain.DecisionDenied, domain.ActionDenied),
-		mkTrace("trc-0003", "env-0003", "", base.Add(47*time.Second),
+		mkTrace("trc-0003", "env-0003", "", base.Add(47*time.Second), 200,
 			domain.DecisionAllowed, domain.ActionAllowed),
 	}
 	chain(traces)
@@ -46,11 +46,13 @@ func main() {
 	}
 }
 
-func mkTrace(traceID, envelopeID, prev string, ts time.Time, d domain.Decision, a domain.ActionTaken) domain.DecisionTrace {
+func mkTrace(traceID, envelopeID, prev string, ts time.Time, amount float64, d domain.Decision, a domain.ActionTaken) domain.DecisionTrace {
 	return domain.DecisionTrace{
 		TraceID:           traceID,
 		EnvelopeID:        envelopeID,
 		Timestamp:         ts,
+		Amount:            amount,
+		AmountParseStatus: "ok",
 		Decision:          d,
 		ActionTaken:       a,
 		PreviousTraceHash: prev,

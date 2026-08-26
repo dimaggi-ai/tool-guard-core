@@ -10,14 +10,14 @@ import (
 	"time"
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
+	"github.com/dimaggi-ai/tool-guard-core/pkg/engine"
 )
 
 // ── helpers ────────────────────────────────────────────────────────────────
 // Small utilities shared across handlers / audit / policy loading.
 
-func amountFromEnvelope(env *domain.ActionEnvelope) float64 {
-	a, _ := env.Amount()
-	return a
+func evaluatedAmountFromEnvelope(env *domain.ActionEnvelope) (float64, string) {
+	return engine.EvaluatedAmount(env)
 }
 
 func writeJSON(w http.ResponseWriter, code int, body any) {
@@ -93,22 +93,24 @@ func timeoutFromMatchedRules(result *domain.EvaluationResult, policies []domain.
 // to the caller — the deny response must still go out even if audit
 // append failed; that's a separate failure surfaced via metrics.
 func (p *proxy) emitBoundaryDeny(env *domain.ActionEnvelope, reason string, mode domain.PolicyMode) {
+	amount, amountStatus := evaluatedAmountFromEnvelope(env)
 	trace := domain.DecisionTrace{
-		TraceID:        fmt.Sprintf("trc-%d", time.Now().UnixNano()),
-		Timestamp:      time.Now().UTC(),
-		OrgID:          env.OrgID,
-		EnvelopeID:     env.EnvelopeID,
-		AgentID:        env.AgentID,
-		AgentVersion:   env.AgentVersion,
-		SessionID:      env.SessionID,
-		TurnNumber:     env.TurnNumber,
-		ToolName:       env.ToolName,
-		ToolGroup:      env.ToolGroup,
-		Amount:         amountFromEnvelope(env),
-		Decision:       domain.DecisionDenied,
-		ActionTaken:    domain.ActionDenied,
-		DecisionReason: reason,
-		Mode:           mode,
+		TraceID:           fmt.Sprintf("trc-%d", time.Now().UnixNano()),
+		Timestamp:         time.Now().UTC(),
+		OrgID:             env.OrgID,
+		EnvelopeID:        env.EnvelopeID,
+		AgentID:           env.AgentID,
+		AgentVersion:      env.AgentVersion,
+		SessionID:         env.SessionID,
+		TurnNumber:        env.TurnNumber,
+		ToolName:          env.ToolName,
+		ToolGroup:         env.ToolGroup,
+		Amount:            amount,
+		AmountParseStatus: amountStatus,
+		Decision:          domain.DecisionDenied,
+		ActionTaken:       domain.ActionDenied,
+		DecisionReason:    reason,
+		Mode:              mode,
 	}
 	if err := p.appendTrace(&trace); err != nil {
 		log.Printf("tg-proxy: emitBoundaryDeny audit: %v", err)
@@ -139,21 +141,23 @@ func (p *proxy) emitEscalationResolution(e *Escalation, approved bool) {
 		actionTaken = domain.ActionDenied
 		reason = fmt.Sprintf("escalation %s denied by %q: %s", e.ID, e.Approver, e.ApproverReason)
 	}
+	amount, amountStatus := evaluatedAmountFromEnvelope(&e.Envelope)
 	trace := domain.DecisionTrace{
-		TraceID:        fmt.Sprintf("trc-%d", time.Now().UnixNano()),
-		Timestamp:      time.Now().UTC(),
-		OrgID:          e.Envelope.OrgID,
-		EnvelopeID:     e.Envelope.EnvelopeID,
-		AgentID:        e.Envelope.AgentID,
-		AgentVersion:   e.Envelope.AgentVersion,
-		SessionID:      e.Envelope.SessionID,
-		TurnNumber:     e.Envelope.TurnNumber,
-		ToolName:       e.Envelope.ToolName,
-		ToolGroup:      e.Envelope.ToolGroup,
-		Amount:         amountFromEnvelope(&e.Envelope),
-		Decision:       decision,
-		ActionTaken:    actionTaken,
-		DecisionReason: reason,
+		TraceID:           fmt.Sprintf("trc-%d", time.Now().UnixNano()),
+		Timestamp:         time.Now().UTC(),
+		OrgID:             e.Envelope.OrgID,
+		EnvelopeID:        e.Envelope.EnvelopeID,
+		AgentID:           e.Envelope.AgentID,
+		AgentVersion:      e.Envelope.AgentVersion,
+		SessionID:         e.Envelope.SessionID,
+		TurnNumber:        e.Envelope.TurnNumber,
+		ToolName:          e.Envelope.ToolName,
+		ToolGroup:         e.Envelope.ToolGroup,
+		Amount:            amount,
+		AmountParseStatus: amountStatus,
+		Decision:          decision,
+		ActionTaken:       actionTaken,
+		DecisionReason:    reason,
 	}
 	if err := p.appendTrace(&trace); err != nil {
 		log.Printf("tg-proxy: emitEscalationResolution audit: %v", err)

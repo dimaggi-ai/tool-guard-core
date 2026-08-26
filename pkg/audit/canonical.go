@@ -14,8 +14,9 @@
 //  3. No omitempty on hash-bearing fields. An auditor must distinguish
 //     "field was empty" from "field was missing".
 //  4. RFC3339Nano UTC for every timestamp.
-//  5. Float source fields are converted to explicitly scaled integers.
-//     If another float is added, lock its precision in a new schema version.
+//  5. Float source fields use a version-locked integer representation: scaled
+//     integers where precision is intentionally bounded, or IEEE-754 bits
+//     where every evaluated float64 value is decision-relevant.
 //
 // Versioning:
 //
@@ -179,7 +180,10 @@ type canonicalTraceV2 struct {
 	TurnNumber   int    `json:"turn_number"`
 	ToolName     string `json:"tool_name"`
 	ToolGroup    string `json:"tool_group"`
-	AmountCents  int64  `json:"amount_cents"`
+	// Exact IEEE-754 bits avoid cross-language decimal-format differences
+	// without rounding decision-relevant sub-cent values.
+	AmountBits        uint64 `json:"amount_bits"`
+	AmountParseStatus string `json:"amount_parse_status"`
 
 	Decision       string `json:"decision"`
 	ActionTaken    string `json:"action_taken"`
@@ -381,13 +385,14 @@ func canonicalTraceBytesV2(t *domain.DecisionTrace) ([]byte, error) {
 		OrgID:      t.OrgID,
 		EnvelopeID: t.EnvelopeID,
 
-		AgentID:      t.AgentID,
-		AgentVersion: t.AgentVersion,
-		SessionID:    t.SessionID,
-		TurnNumber:   t.TurnNumber,
-		ToolName:     t.ToolName,
-		ToolGroup:    t.ToolGroup,
-		AmountCents:  amountCentsCanonical(t.Amount),
+		AgentID:           t.AgentID,
+		AgentVersion:      t.AgentVersion,
+		SessionID:         t.SessionID,
+		TurnNumber:        t.TurnNumber,
+		ToolName:          t.ToolName,
+		ToolGroup:         t.ToolGroup,
+		AmountBits:        math.Float64bits(t.Amount),
+		AmountParseStatus: t.AmountParseStatus,
 
 		Decision:       string(t.Decision),
 		ActionTaken:    string(t.ActionTaken),
@@ -434,15 +439,6 @@ func canonicalRuleResultsV2(results []domain.RuleResult) []canonicalRuleResultV2
 			Details:       r.Details,
 		})
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].RuleID != out[j].RuleID {
-			return out[i].RuleID < out[j].RuleID
-		}
-		if out[i].PolicyID != out[j].PolicyID {
-			return out[i].PolicyID < out[j].PolicyID
-		}
-		return out[i].PolicyVersion < out[j].PolicyVersion
-	})
 	return out
 }
 
