@@ -261,13 +261,13 @@ func TestAppendTrace_PreWriteStatFailureCanRecover(t *testing.T) {
 func makeSizedProxyTrace(t *testing.T, target int) domain.DecisionTrace {
 	t.Helper()
 	tr := domain.DecisionTrace{
-		TraceID:          "trc-size-boundary",
-		EnvelopeID:       "env-size-boundary",
-		Timestamp:        time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC),
-		ToolName:         "bash",
-		Decision:         domain.DecisionAllowed,
-		ActionTaken:      domain.ActionAllowed,
-		DecisionReason:   "x",
+		TraceID:        "trc-size-boundary",
+		EnvelopeID:     "env-size-boundary",
+		Timestamp:      time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC),
+		ToolName:       "bash",
+		Decision:       domain.DecisionAllowed,
+		ActionTaken:    domain.ActionAllowed,
+		DecisionReason: "x",
 	}
 	if err := audit.StampProvenance(&tr, "v0.8.0-test", "sha256:"+strings.Repeat("a", 64)); err != nil {
 		t.Fatal(err)
