@@ -78,18 +78,33 @@ func TestEscalationStore_ResolutionUsesOneDeadlineTimestamp(t *testing.T) {
 	s.now = func() time.Time { return clock }
 
 	before := s.add(envFor("before-deadline"), decisionFor(domain.DecisionEscalated), 15)
-	clock = before.ExpiresAt.Add(-time.Nanosecond)
+	resolutionReads := 0
+	s.now = func() time.Time {
+		resolutionReads++
+		if resolutionReads == 1 {
+			return before.ExpiresAt.Add(-time.Nanosecond)
+		}
+		return before.ExpiresAt
+	}
 	resolved, ok, err := s.resolveAudited("before-deadline", "operator", "verified", true, nil)
 	if err != nil || !ok || resolved.State != EscApproved || resolved.ResolvedAt == nil {
 		t.Fatalf("before-deadline resolution = %#v, ok=%v err=%v", resolved, ok, err)
 	}
-	if !resolved.ResolvedAt.Equal(clock) || !resolved.ResolvedAt.Before(resolved.ExpiresAt) {
+	if resolutionReads != 1 {
+		t.Fatalf("resolution read clock %d times, want exactly 1", resolutionReads)
+	}
+	if !resolved.ResolvedAt.Equal(before.ExpiresAt.Add(-time.Nanosecond)) || !resolved.ResolvedAt.Before(resolved.ExpiresAt) {
 		t.Fatalf("resolved_at=%v expires_at=%v, want captured time strictly before deadline", resolved.ResolvedAt, resolved.ExpiresAt)
 	}
 
 	clock = base
+	s.now = func() time.Time { return clock }
 	atDeadline := s.add(envFor("at-deadline"), decisionFor(domain.DecisionEscalated), 15)
-	clock = atDeadline.ExpiresAt
+	deadlineReads := 0
+	s.now = func() time.Time {
+		deadlineReads++
+		return atDeadline.ExpiresAt
+	}
 	callbackCalled := false
 	rejected, ok, err := s.resolveAudited(
 		"at-deadline", "operator", "too late", true,
@@ -98,8 +113,8 @@ func TestEscalationStore_ResolutionUsesOneDeadlineTimestamp(t *testing.T) {
 			return nil
 		},
 	)
-	if !errors.Is(err, errEscalationPastDue) || ok || callbackCalled {
-		t.Fatalf("deadline resolution = %#v, ok=%v err=%v callback=%v; want rejected before audit", rejected, ok, err, callbackCalled)
+	if !errors.Is(err, errEscalationPastDue) || ok || callbackCalled || deadlineReads != 1 {
+		t.Fatalf("deadline resolution = %#v, ok=%v err=%v callback=%v clock_reads=%d; want one read and rejection before audit", rejected, ok, err, callbackCalled, deadlineReads)
 	}
 	if rejected == nil || rejected.State != EscPending || rejected.ResolvedAt != nil {
 		t.Fatalf("deadline rejection mutated state: %#v", rejected)
