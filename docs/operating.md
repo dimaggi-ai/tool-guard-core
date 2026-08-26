@@ -335,7 +335,9 @@ append-only ledger:
   (ext4, xfs, zfs, btrfs all fine). The proxy uses `O_APPEND`
   which is atomic at the page level.
 - **Rotation** - `-audit-rotate-bytes` rotates the active file
-  when it crosses the cap. Rotated files are named
+  before the next trace would make a non-empty active file meet or exceed the
+  cap. A single record larger than the cap remains intact and rotates before
+  the following append. Rotated files are named
   `<auditPath>.1`, `<auditPath>.2`, ... `tg verify` reads the
   rotation set in order. Rotation durably flushes the rename and replacement
   active-file metadata before completing. If that barrier fails after the

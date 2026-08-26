@@ -97,7 +97,10 @@ type proxy struct {
 	auditCurrentBytes int64
 	// auditDirectorySync overrides the platform rotation-metadata barrier in
 	// tests. Production leaves it nil and uses syncAuditDirectory.
-	auditDirectorySync   func(string) error
+	auditDirectorySync func(string) error
+	// auditRename overrides only the rename syscall in fault-injection tests.
+	// Production leaves it nil and calls renameAuditFile directly.
+	auditRename          func(string, string) error
 	rateLimit            *rateLimiter // nil if disabled
 	rateLimitKeyBy       string
 	velocity             *velocityTracker // nil if disabled

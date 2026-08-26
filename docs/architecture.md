@@ -179,11 +179,13 @@ match (tamper-on-disk detection).
 
 Rotation is opt-in via `-audit-rotate-bytes`. Three fsync modes:
 `every` (default, strongest durability), `interval` (per N appends),
-`none` (OS-managed). Rotation flushes the rename and replacement-file
-metadata before completing. Any barrier failure after rotation changes the
-on-disk topology poisons the writer, fails readiness, and blocks later appends;
-a forced-durable escalation resolution in that transition is marked
-indeterminate. `tg verify` walks the rotation set in order.
+`none` (OS-managed). For a non-empty active file, size-triggered rotation runs
+before writing the trace that would meet or exceed the configured boundary, so
+a rotation failure cannot commit an action that the response later changes.
+Rotation flushes the rename and replacement-file metadata before completing.
+Any uncertain rotation poisons the writer, fails readiness, and blocks later
+appends; the current trace has not been written and no terminal escalation
+state is published. `tg verify` walks the rotation set in order.
 
 ## The escalation flow
 

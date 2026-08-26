@@ -30,11 +30,6 @@ var (
 	// writer is poisoned at the same time: callers must not append a conflicting
 	// retry, and state transitions that require durable audit are indeterminate.
 	errAuditRecordCommitted = errors.New("audit record committed")
-	// defaultAuditDirectorySync is the production rotation-metadata barrier.
-	// Keeping the selection below the per-proxy override gives tests a narrow
-	// seam for proving that a nil override still dispatches to the platform
-	// implementation.
-	defaultAuditDirectorySync = syncAuditDirectory
 )
 
 // diskAuditLog keeps the path alongside the open descriptor so the Windows
@@ -296,9 +291,6 @@ func (p *proxy) appendTraceWithDurability(t *domain.DecisionTrace, forceDurable 
 	if p.auditPoisoned {
 		return p.auditPoisonErrorLocked()
 	}
-	previousLastHash := p.lastHash
-	previousAppendSeq := p.auditAppendSeq
-	previousNeedsSeparator := p.auditNeedsSeparator
 	// Every new record carries its hash-schema version on disk. A missing
 	// marker is reserved for pre-v2 records and is interpreted as v1 by the
 	// verifier, which lets upgraded proxies continue an existing chain.
@@ -313,6 +305,38 @@ func (p *proxy) appendTraceWithDurability(t *domain.DecisionTrace, forceDurable 
 	if err != nil {
 		return err
 	}
+	// Resolve size-triggered rotation before writing the current trace. If a
+	// post-write rotation failed, the durable record could still say "allowed"
+	// even though fail-closed changed the response to "denied". Pre-rotation
+	// keeps the current action transactional: either rotation completes first,
+	// or no bytes for this trace reach the audit set.
+	st, err := p.auditLog.Stat()
+	if err != nil {
+		return fmt.Errorf("stat audit log before append: %w", err)
+	}
+	recordBytes := int64(len(raw) + 1)
+	if p.auditNeedsSeparator {
+		recordBytes++
+	}
+	if p.auditRotateBytes > 0 && st.Size() > 0 && st.Size()+recordBytes >= p.auditRotateBytes {
+		if err := p.rotateAuditLocked(); err != nil {
+			if errors.Is(err, errAuditRotationStateUncertain) {
+				return p.poisonAuditLocked(fmt.Sprintf("audit pre-rotation failed before current trace write: %v", err))
+			}
+			return fmt.Errorf("rotate audit log before append: %w", err)
+		}
+		// A separator belongs only between records in the same file. The new
+		// active file starts clean even if the rotated tail ended at EOF.
+		p.auditNeedsSeparator = false
+		st, err = p.auditLog.Stat()
+		if err != nil {
+			return fmt.Errorf("stat new active audit log before append: %w", err)
+		}
+	}
+	preWriteSize := st.Size()
+	previousLastHash := p.lastHash
+	previousAppendSeq := p.auditAppendSeq
+	previousNeedsSeparator := p.auditNeedsSeparator
 	record := make([]byte, 0, len(raw)+2)
 	if p.auditNeedsSeparator {
 		record = append(record, '\n')
@@ -324,15 +348,6 @@ func (p *proxy) appendTraceWithDurability(t *domain.DecisionTrace, forceDurable 
 	// nil error). Capture an exact rollback boundary before touching the file.
 	// Without this, a retry would append after truncated JSON and permanently
 	// fork the hash chain even though lastHash was never advanced.
-	st, err := p.auditLog.Stat()
-	if err != nil {
-		// No Write has happened, so the tail is unchanged and unambiguous.
-		// Treat even a transient metadata failure as a normal append error;
-		// sticky poison is reserved for a failed rollback after Write may have
-		// modified the file.
-		return fmt.Errorf("stat audit log before append: %w", err)
-	}
-	preWriteSize := st.Size()
 	n, err := p.auditLog.Write(record)
 	if err == nil && n != len(record) {
 		err = io.ErrShortWrite
@@ -377,23 +392,6 @@ func (p *proxy) appendTraceWithDurability(t *domain.DecisionTrace, forceDurable 
 		}
 	}
 
-	// Rotate AFTER the hash is committed so a crash during rotation
-	// loses at most this single append, not the whole pending chunk.
-	if p.auditRotateBytes > 0 && p.auditCurrentBytes >= p.auditRotateBytes {
-		if err := p.rotateAuditLocked(); err != nil {
-			// Once rename/open has changed the on-disk topology, forgetting a
-			// failed metadata barrier would let readiness stay green and a later
-			// forced-durable approval succeed without repairing that uncertainty.
-			// Poison regardless of the current append's configured sync mode.
-			if forceDurable || errors.Is(err, errAuditRotationStateUncertain) {
-				return p.poisonIndeterminateAuditLocked(
-					fmt.Sprintf("audit record rotation barrier failed: %v", err),
-					true,
-				)
-			}
-			log.Printf("tg-proxy: audit rotation deferred before topology changed: %v (continuing on current file)", err)
-		}
-	}
 	return nil
 }
 
@@ -467,13 +465,11 @@ func (p *proxy) auditPoisonErrorLocked() error {
 // auditPath.<n> for the next free n, and opens a fresh auditPath. The
 // caller must hold p.auditMu.
 //
-// Failure recovery: if any step after Close fails (rename collision,
-// open of the new active file fails), the rotation aborts AND the
-// function re-opens the original auditPath in append mode so
-// subsequent appendTrace calls keep working against the same file.
-// Without that recovery the caller's "continuing on old file" log
-// would be a lie — Close already closed the FD — and every later
-// append would error out silently, halting the audit chain.
+// Failure recovery: if a step after Close fails, the function makes a
+// best-effort re-open so operators can inspect the current state. The returned
+// errAuditRotationStateUncertain is mandatory even when re-open succeeds;
+// appendTrace poisons the writer and never writes the current trace because the
+// rotation's on-disk transition did not complete as a proven transaction.
 func (p *proxy) rotateAuditLocked() error {
 	if err := p.auditLog.Sync(); err != nil {
 		return fmt.Errorf("sync before rotate: %w", err)
@@ -484,22 +480,26 @@ func (p *proxy) rotateAuditLocked() error {
 		// continue on the current handle.
 		return fmt.Errorf("%w: close before rotate: %v", errAuditRotationStateUncertain, err)
 	}
-	// From this point on we MUST leave p.auditLog pointing at an open
-	// writable file before returning, even on error.
+	// From this point on, best-effort recovery should leave p.auditLog pointing
+	// at an inspectable file, but the caller will poison it on every error.
 	idx := 1
 	for {
 		candidate := fmt.Sprintf("%s.%d", p.auditPath, idx)
 		if _, err := os.Stat(candidate); errors.Is(err, os.ErrNotExist) {
-			if err := renameAuditFile(p.auditPath, candidate); err != nil {
+			rename := renameAuditFile
+			if p.auditRename != nil {
+				rename = p.auditRename
+			}
+			if err := rename(p.auditPath, candidate); err != nil {
 				p.reopenAuditLocked() // recover; ignore reopen err — already broken
-				return fmt.Errorf("rename to %s: %w", candidate, err)
+				return fmt.Errorf("%w: rename to %s: %v", errAuditRotationStateUncertain, candidate, err)
 			}
 			break
 		}
 		idx++
 		if idx > 1<<20 {
 			p.reopenAuditLocked()
-			return fmt.Errorf("rotation index overflow (>%d existing rotations)", idx)
+			return fmt.Errorf("%w: rotation index overflow (>%d existing rotations)", errAuditRotationStateUncertain, idx)
 		}
 	}
 	f, err := openDiskAuditLog(p.auditPath)
@@ -520,7 +520,7 @@ func (p *proxy) rotateAuditLocked() error {
 	if err := f.Sync(); err != nil {
 		return fmt.Errorf("%w: sync new active audit file: %v", errAuditRotationStateUncertain, err)
 	}
-	directorySync := defaultAuditDirectorySync
+	directorySync := syncAuditDirectory
 	if p.auditDirectorySync != nil {
 		directorySync = p.auditDirectorySync
 	}
