@@ -108,6 +108,21 @@ func (p *proxy) stampTraceProvenance(trace *domain.DecisionTrace, policySetHash 
 	return audit.StampProvenance(trace, engineVersion, policySetHash)
 }
 
+// receiptForAppendedTrace derives optional response metadata after appendTrace
+// has returned successfully. Failure is intentionally local: a receipt is
+// never an input to authorization and must not weaken or delay the decision.
+func receiptForAppendedTrace(trace *domain.DecisionTrace) *audit.DecisionReceipt {
+	receipt := audit.NewDecisionReceipt(trace)
+	if receipt == nil {
+		traceID := ""
+		if trace != nil {
+			traceID = trace.TraceID
+		}
+		log.Printf("tg-proxy: could not construct receipt for appended trace %q", traceID)
+	}
+	return receipt
+}
+
 // emitBoundaryDeny writes an audit trace for a deny that happens
 // BEFORE the engine evaluates (rate-limit overflow, fail-closed
 // no-policies). These decisions are real enforcement events and must
@@ -118,8 +133,10 @@ func (p *proxy) stampTraceProvenance(trace *domain.DecisionTrace, policySetHash 
 // The trace carries the boundary reason as DecisionReason; no rule
 // results since no rule fired. Errors are logged but never propagate
 // to the caller — the deny response must still go out even if audit
-// append failed; that's a separate failure surfaced via metrics.
-func (p *proxy) emitBoundaryDeny(env *domain.ActionEnvelope, reason string, mode domain.PolicyMode, policySetHash string) {
+// append failed; that's a separate failure surfaced via metrics. A non-nil
+// return is safe to attach to the boundary response because appendTrace
+// completed successfully.
+func (p *proxy) emitBoundaryDeny(env *domain.ActionEnvelope, reason string, mode domain.PolicyMode, policySetHash string) *audit.DecisionReceipt {
 	amount, amountStatus := evaluatedAmountFromEnvelope(env)
 	trace := domain.DecisionTrace{
 		TraceID:           fmt.Sprintf("trc-%d", time.Now().UnixNano()),
@@ -142,12 +159,14 @@ func (p *proxy) emitBoundaryDeny(env *domain.ActionEnvelope, reason string, mode
 	if err := p.stampTraceProvenance(&trace, policySetHash); err != nil {
 		log.Printf("tg-proxy: emitBoundaryDeny provenance: %v", err)
 		p.auditFailureCount.Add(1)
-		return
+		return nil
 	}
 	if err := p.appendTrace(&trace); err != nil {
 		log.Printf("tg-proxy: emitBoundaryDeny audit: %v", err)
 		p.auditFailureCount.Add(1)
+		return nil
 	}
+	return receiptForAppendedTrace(&trace)
 }
 
 // emitEscalationResolution writes an audit trace for the human
@@ -158,7 +177,7 @@ func (p *proxy) emitBoundaryDeny(env *domain.ActionEnvelope, reason string, mode
 // AgentID/SessionID/OrgID/Tool* are copied from the original envelope
 // so the trace is queryable on the same identity axes as the rest of
 // the chain.
-func (p *proxy) emitEscalationResolution(e *Escalation, approved bool) error {
+func (p *proxy) emitEscalationResolution(e *Escalation, approved bool) (*domain.DecisionTrace, error) {
 	var (
 		decision    domain.Decision
 		actionTaken domain.ActionTaken
@@ -194,14 +213,14 @@ func (p *proxy) emitEscalationResolution(e *Escalation, approved bool) error {
 	if err := p.stampTraceProvenance(&trace, ""); err != nil {
 		log.Printf("tg-proxy: emitEscalationResolution provenance: %v", err)
 		p.auditFailureCount.Add(1)
-		return err
+		return nil, err
 	}
 	if err := p.appendTraceDurable(&trace); err != nil {
 		log.Printf("tg-proxy: emitEscalationResolution audit: %v", err)
 		p.auditFailureCount.Add(1)
-		return err
+		return nil, err
 	}
-	return nil
+	return &trace, nil
 }
 
 // emitEscalationExpiry durably records the deny-by-timeout transition before

@@ -16,7 +16,9 @@ from toolguard.types import (
     AgentVelocityContext,
     Citation,
     Decision,
+    DecisionReceipt,
     EnvelopeContext,
+    Escalation,
     EvaluationResult,
     Framework,
     IntegrationType,
@@ -433,3 +435,103 @@ class TestCitation:
         restored = Citation.from_dict(original.to_dict())
         assert restored.document_id == "d1"
         assert restored.excerpt == "cap rule"
+
+
+# ---------------------------------------------------------------------------
+# DecisionReceipt and receipt-bearing proxy responses
+# ---------------------------------------------------------------------------
+
+_WIRE_RECEIPT = {
+    "receipt_version": "1",
+    "trace_id": "trc-001",
+    "trace_hash": "sha256:" + "ab" * 32,
+    "hash_algorithm": "sha256",
+    "canonical_trace_version": "v2",
+    "integrity_model": "hash-chain",
+    "decision": "denied",
+    "action_taken": "denied",
+    "timestamp": "2026-08-25T00:00:00Z",
+    "issuer": "proxy-instance-7",
+    "receipt_uri": "urn:tool-guard:trace:v2:sha256:" + "ab" * 32,
+}
+
+
+class TestDecisionReceipt:
+    def test_wire_fields_round_trip(self):
+        receipt = DecisionReceipt.from_dict(_WIRE_RECEIPT)
+        assert receipt.to_dict() == _WIRE_RECEIPT
+
+    def test_optional_issuer_is_omitted(self):
+        wire = dict(_WIRE_RECEIPT)
+        wire.pop("issuer")
+        receipt = DecisionReceipt.from_dict(wire)
+        assert receipt.issuer == ""
+        assert "issuer" not in receipt.to_dict()
+
+    def test_unknown_future_fields_are_ignored(self):
+        receipt = DecisionReceipt.from_dict(
+            dict(_WIRE_RECEIPT, future_metadata={"new": True})
+        )
+        assert receipt.receipt_uri == _WIRE_RECEIPT["receipt_uri"]
+
+
+class TestEvaluationResultReceipt:
+    def test_absent_receipt_stays_absent(self):
+        result = EvaluationResult.from_dict(
+            {"decision": "allowed", "action_taken": "allowed"}
+        )
+        assert result.decision_receipt is None
+        assert "decision_receipt" not in result.to_dict()
+
+    def test_nested_receipt_round_trip(self):
+        result = EvaluationResult.from_dict(
+            {
+                "decision": "denied",
+                "action_taken": "denied",
+                "decision_receipt": _WIRE_RECEIPT,
+            }
+        )
+        assert result.decision_receipt is not None
+        assert result.decision_receipt.trace_hash == _WIRE_RECEIPT["trace_hash"]
+        assert result.to_dict()["decision_receipt"] == _WIRE_RECEIPT
+
+    def test_non_object_receipt_is_ignored_without_changing_decision(self):
+        result = EvaluationResult.from_dict(
+            {
+                "decision": "allowed",
+                "action_taken": "allowed",
+                "decision_receipt": "malformed",
+            }
+        )
+        assert result.decision == "allowed"
+        assert result.decision_receipt is None
+
+
+class TestEscalationReceipt:
+    def test_resolution_receipt_round_trip(self):
+        wire = {
+            "id": "esc-1",
+            "state": "approved",
+            "created_at": "2026-08-25T00:00:00Z",
+            "expires_at": "2026-08-25T00:15:00Z",
+            "resolved_at": "2026-08-25T00:01:00Z",
+            "approver": "operator",
+            "envelope": {},
+            "decision": {"decision": "escalated", "action_taken": "escalated"},
+            "resolution_receipt": _WIRE_RECEIPT,
+        }
+        escalation = Escalation.from_dict(wire)
+        assert escalation.resolution_receipt is not None
+        assert escalation.resolution_receipt.receipt_uri == _WIRE_RECEIPT["receipt_uri"]
+        assert escalation.to_dict()["resolution_receipt"] == _WIRE_RECEIPT
+
+    def test_pending_resolution_receipt_is_absent(self):
+        escalation = Escalation.from_dict(
+            {
+                "id": "esc-pending",
+                "state": "pending",
+                "envelope": {},
+                "decision": {"decision": "escalated", "action_taken": "escalated"},
+            }
+        )
+        assert escalation.resolution_receipt is None

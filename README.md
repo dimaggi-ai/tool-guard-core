@@ -579,7 +579,9 @@ policy loading.
 - **`tg-proxy` HTTP service:** `POST /evaluate` with hash-chained JSONL
   audit, SIGHUP policy reload, fail-closed by default, per-agent rate
   limiting, audit log rotation, integration tests assert the HTTP
-  contract over a real socket.
+  contract over a real socket. Successfully appended decisions carry an
+  optional, hash-keyed `decision_receipt`; escalation approvals/denials carry
+  a separate `resolution_receipt` ([contract and limits](docs/integration.md#7-decision-receipts)).
 - **SQL / path / shell / write / HTTP semantic classifiers:** four-dialect
   SQL classifier (`postgres`, `mysql`, `sqlite`, `mssql`) with pure-Go
   default tokenizer + opt-in strict variants via build tags. Closes CTE,
@@ -691,6 +693,9 @@ Features absent from this repo today:
   certification or compliance guarantee.
 - **No managed hosting.** You run the proxy. You run Ollama. You own
   the operations. There is no hosted version.
+- **No receipt resolver.** Decision receipt URNs are deliberately opaque and
+  non-resolvable. Building a lookup endpoint requires authentication,
+  field-level disclosure policy, retention/rotation search, and rate limiting.
 - **No gRPC variant.** REST `POST /evaluate` only.
 - **No Node client SDK.** A Python SDK ships at
   [`sdk/python/`](sdk/python/README.md) (PyPI distribution

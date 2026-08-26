@@ -231,8 +231,35 @@ The SDK mirrors the Go `pkg/domain` JSON contract exactly.  Key field names:
 `action_taken`, `decision_reason`, `effective_mode`, `policies_matched`,
 `rules_evaluated`, `rules_triggered`, `rule_results`, `applied_rule_results`,
 `primary_citation`, `applied_primary_citation`, `is_near_miss`,
-`suggested_response`. The applied provenance fields explain `action_taken`;
+`suggested_response`, and the proxy-only optional `decision_receipt`. The
+applied provenance fields explain `action_taken`;
 the aggregate fields can point to stricter shadow-only telemetry.
+
+**DecisionReceipt** (after a successful proxy audit append):
+`receipt_version`, `trace_id`, `trace_hash`, `hash_algorithm`,
+`canonical_trace_version`, `integrity_model`, `decision`, `action_taken`,
+`timestamp`, optional `issuer`, and the opaque `receipt_uri`.
+
+**Escalation** (poll/approve/deny responses): `id`, `state`, timestamps,
+approver fields, `envelope`, `decision`, and an optional
+`resolution_receipt` after the terminal resolution was audited.
+
+## Decision-receipt helper
+
+```python
+from toolguard.adapters.memory import with_receipt_reference
+
+result = guard.evaluate_raw("issue_refund", {"amount": 100})
+event = with_receipt_reference(
+    {"tool": "issue_refund", "outcome": result.action_taken}, result
+)
+```
+
+The helper adds `tool_guard_receipt_uri` only when the proxy supplied a real
+receipt. It performs no storage or network operation and never fabricates a
+fallback identifier. Absence is never authorization. The URN is a
+tamper-evident hash-chain reference, not a signature or fetchable URL; see the
+[full contract](../../docs/integration.md#7-decision-receipts).
 
 ---
 

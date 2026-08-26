@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dimaggi-ai/tool-guard-core/pkg/audit"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 )
 
@@ -26,15 +27,16 @@ var errEscalationPastDue = errors.New("escalation is past due")
 
 // Escalation is one human-review decision and its lifecycle state.
 type Escalation struct {
-	ID             string                  `json:"id"` // envelope_id, reused
-	State          EscalationState         `json:"state"`
-	CreatedAt      time.Time               `json:"created_at"`
-	ExpiresAt      time.Time               `json:"expires_at"`
-	ResolvedAt     *time.Time              `json:"resolved_at,omitempty"`
-	Approver       string                  `json:"approver,omitempty"` // identity of who approved/denied
-	ApproverReason string                  `json:"approver_reason,omitempty"`
-	Envelope       domain.ActionEnvelope   `json:"envelope"`
-	Decision       domain.EvaluationResult `json:"decision"`
+	ID                string                  `json:"id"` // envelope_id, reused
+	State             EscalationState         `json:"state"`
+	CreatedAt         time.Time               `json:"created_at"`
+	ExpiresAt         time.Time               `json:"expires_at"`
+	ResolvedAt        *time.Time              `json:"resolved_at,omitempty"`
+	Approver          string                  `json:"approver,omitempty"` // identity of who approved/denied
+	ApproverReason    string                  `json:"approver_reason,omitempty"`
+	Envelope          domain.ActionEnvelope   `json:"envelope"`
+	Decision          domain.EvaluationResult `json:"decision"`
+	ResolutionReceipt *audit.DecisionReceipt  `json:"resolution_receipt,omitempty"`
 }
 
 // escalationStore is the proxy-level pending-escalation registry.
@@ -258,6 +260,24 @@ func (s *escalationStore) reapExpiredAudited(
 		}
 	}
 	return out, failures
+}
+
+// attachResolutionReceipt publishes receipt metadata only if the entry is
+// still the exact terminal transition that produced it. The state/timestamp
+// guard prevents a stale asynchronous attachment after eviction and ID reuse.
+func (s *escalationStore) attachResolutionReceipt(id string, expectedState EscalationState, expectedResolvedAt time.Time, receipt *audit.DecisionReceipt) *Escalation {
+	if receipt == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.entries[id]
+	if !ok || e.State != expectedState || e.ResolvedAt == nil || !e.ResolvedAt.Equal(expectedResolvedAt) {
+		return nil
+	}
+	e.ResolutionReceipt = receipt
+	copy := *e
+	return &copy
 }
 
 // reapExpired preserves the store-only helper used by unit tests and callers

@@ -612,6 +612,81 @@ curl -X POST http://localhost:9090/evaluate \
 
 ---
 
+## 7. Decision receipts
+
+After an audit append returns successfully, `tg-proxy` adds an optional
+`decision_receipt` to the `/evaluate` response. This includes ordinary 200
+responses, a 202 escalation response, and a pre-engine boundary deny when its
+deny trace was appended. The pure engine result and the non-durable
+`tg evaluate` CLI output do not contain receipts.
+
+An approved or denied escalation carries a separate `resolution_receipt` for
+the terminal audit record. The pending escalation has no resolution receipt;
+after a successful resolution append, the receipt is returned by the mutating
+endpoint and retained on later `GET /escalations/{id}` responses.
+
+```json
+{
+  "receipt_version": "1",
+  "trace_id": "trc-1770000000000000000",
+  "trace_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "hash_algorithm": "sha256",
+  "canonical_trace_version": "v2",
+  "integrity_model": "hash-chain",
+  "decision": "denied",
+  "action_taken": "denied",
+  "timestamp": "2026-08-25T00:00:00Z",
+  "issuer": "proxy-instance-7",
+  "receipt_uri": "urn:tool-guard:trace:v2:sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+}
+```
+
+`issuer` is omitted when the underlying trace has no `signed_by` instance
+identity. Its presence does not turn the receipt into a signature.
+`receipt_uri` is an opaque, non-resolvable URN keyed by the trace hash:
+
+```text
+urn:tool-guard:trace:<canonical-version>:<trace-hash>
+```
+
+There is deliberately no HTTP resolver. Correlate the URI or `trace_hash`
+with the retained audit record and run `tg verify` over the complete chain.
+External consumers should compare the record's `trace_id`, `trace_hash`,
+`decision`, `action_taken`, and `timestamp` before storing the correlation.
+
+### Safety boundaries (verbatim)
+
+- This is a **tamper-evident hash-chain reference, not a signed or independently authentic receipt**.
+- Absence of a receipt is never authorization.
+- Receipt creation failure never weakens or delays the underlying decision.
+- Durability follows `audit-sync-mode`; the receipt proves an append was accepted, not that it is fsync-durable beyond that mode's guarantee.
+- No canonical-trace change, no schema version bump.
+
+In shadow mode, `decision` is what the policy would have decided while
+`action_taken` is what the proxy actually enforced (`allowed_shadow`). Durable
+downstream consumers must key execution state on `action_taken`.
+
+The Python SDK exposes `DecisionReceipt` and `Escalation` types. Its neutral,
+dependency-free memory adapter attaches only the opaque URI to a dict-shaped
+record:
+
+```python
+from toolguard.adapters.memory import with_receipt_reference
+
+result = guard.evaluate_raw("issue_refund", {"amount": 100})
+event = with_receipt_reference(
+    {"tool": "issue_refund", "outcome": result.action_taken},
+    result,
+)
+# event has tool_guard_receipt_uri only when the proxy supplied a receipt.
+```
+
+This helper writes no external data and defines no inbound policy field. Store
+delivery, retention, disclosure, authentication, and any future resolver are
+separate product/security decisions.
+
+---
+
 ## Minimal Dockerfile
 
 ```dockerfile

@@ -81,7 +81,11 @@ func (p *proxy) escalationByID(w http.ResponseWriter, r *http.Request) {
 			body.Reason,
 			approved,
 			func(candidate *Escalation) error {
-				return p.emitEscalationResolution(candidate, approved)
+				trace, err := p.emitEscalationResolution(candidate, approved)
+				if err == nil {
+					candidate.ResolutionReceipt = receiptForAppendedTrace(trace)
+				}
+				return err
 			},
 		)
 		if e == nil {
@@ -123,7 +127,7 @@ func (p *proxy) escalationByID(w http.ResponseWriter, r *http.Request) {
 		}
 		// resolveAudited appended the state-transition record before it
 		// published this terminal state. A 200 therefore never exposes an
-		// approval that is missing from the audit chain.
+		// approval or receipt that is missing from the durable audit chain.
 		writeJSON(w, http.StatusOK, e)
 		return
 	}

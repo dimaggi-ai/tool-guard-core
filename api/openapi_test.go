@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dimaggi-ai/tool-guard-core/pkg/audit"
 	"gopkg.in/yaml.v3"
 )
 
@@ -209,6 +210,94 @@ func TestEscalationSchemaIncludesIndeterminateAuditState(t *testing.T) {
 	want := []string{"approved", "denied", "expired", "indeterminate", "pending"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("Escalation.state enum = %v, want exactly %v", got, want)
+	}
+}
+
+func TestDecisionReceiptSchemaMatchesWireContract(t *testing.T) {
+	doc := loadContract(t)
+	components := asMap(t, doc["components"], "components")
+	schemas := asMap(t, components["schemas"], "components.schemas")
+	receipt := asMap(t, schemas["DecisionReceipt"], "components.schemas.DecisionReceipt")
+	if receipt["additionalProperties"] != false {
+		t.Fatal("DecisionReceipt must set additionalProperties:false")
+	}
+
+	requiredRaw, ok := receipt["required"].([]any)
+	if !ok {
+		t.Fatal("DecisionReceipt.required must be an array")
+	}
+	required := map[string]bool{}
+	for _, value := range requiredRaw {
+		name, _ := value.(string)
+		required[name] = true
+	}
+	wantRequired := []string{
+		"receipt_version", "trace_id", "trace_hash", "hash_algorithm",
+		"canonical_trace_version", "integrity_model", "decision",
+		"action_taken", "timestamp", "receipt_uri",
+	}
+	for _, name := range wantRequired {
+		if !required[name] {
+			t.Errorf("DecisionReceipt.required missing %q", name)
+		}
+	}
+	if required["issuer"] {
+		t.Error("issuer must remain optional")
+	}
+
+	properties := asMap(t, receipt["properties"], "DecisionReceipt.properties")
+	for _, name := range append(wantRequired, "issuer") {
+		if _, exists := properties[name]; !exists {
+			t.Errorf("DecisionReceipt.properties missing %q", name)
+		}
+	}
+	pins := map[string]string{
+		"receipt_version":         audit.ReceiptVersion,
+		"hash_algorithm":          audit.HashAlgorithmSHA256,
+		"canonical_trace_version": audit.CanonicalTraceVersion,
+		"integrity_model":         audit.IntegrityModelHashChain,
+	}
+	for field, want := range pins {
+		schema := asMap(t, properties[field], "DecisionReceipt.properties."+field)
+		if schema["const"] != want {
+			t.Errorf("DecisionReceipt.%s const=%v, want %q", field, schema["const"], want)
+		}
+	}
+	if ref := asMap(t, properties["decision"], "DecisionReceipt.decision")["$ref"]; ref != "#/components/schemas/Decision" {
+		t.Errorf("DecisionReceipt.decision ref=%v", ref)
+	}
+	if ref := asMap(t, properties["action_taken"], "DecisionReceipt.action_taken")["$ref"]; ref != "#/components/schemas/ActionTaken" {
+		t.Errorf("DecisionReceipt.action_taken ref=%v", ref)
+	}
+}
+
+func TestProxyResponseSchemasExposeOptionalReceipts(t *testing.T) {
+	doc := loadContract(t)
+	components := asMap(t, doc["components"], "components")
+	schemas := asMap(t, components["schemas"], "components.schemas")
+
+	fields := asMap(t, schemas["EvaluationResultFields"], "EvaluationResultFields")
+	fieldProperties := asMap(t, fields["properties"], "EvaluationResultFields.properties")
+	decisionReceipt := asMap(t, fieldProperties["decision_receipt"], "EvaluationResultFields.decision_receipt")
+	if decisionReceipt["$ref"] != "#/components/schemas/DecisionReceipt" {
+		t.Errorf("decision_receipt ref=%v", decisionReceipt["$ref"])
+	}
+	for _, required := range fields["required"].([]any) {
+		if required == "decision_receipt" {
+			t.Error("decision_receipt must be optional when append/receipt creation fails")
+		}
+	}
+
+	escalation := asMap(t, schemas["Escalation"], "Escalation")
+	escalationProperties := asMap(t, escalation["properties"], "Escalation.properties")
+	resolutionReceipt := asMap(t, escalationProperties["resolution_receipt"], "Escalation.resolution_receipt")
+	if resolutionReceipt["$ref"] != "#/components/schemas/DecisionReceipt" {
+		t.Errorf("resolution_receipt ref=%v", resolutionReceipt["$ref"])
+	}
+	for _, required := range escalation["required"].([]any) {
+		if required == "resolution_receipt" {
+			t.Error("resolution_receipt must be optional until resolution append succeeds")
+		}
 	}
 }
 
