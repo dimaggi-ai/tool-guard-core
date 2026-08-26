@@ -1,19 +1,19 @@
 # Conformance corpus
 
-Each `*.json` file in this directory is one case: a shipped policy from
-`policies/`, a real envelope, and the exact decision the engine must
-produce. Run with:
+Each top-level `*.json` file in this directory is one executable case: one or
+more policies, a real action envelope, and the exact result the engine must
+produce. Policy-only test inputs live under `fixtures/` and do not count as
+cases. Run the same gate CI uses with:
 
 ```bash
-go test ./cmd/tg/ -run TestConformance -v
+make conformance
 ```
 
 Wired into `.github/workflows/ci.yml`'s existing 3-OS matrix
 (ubuntu/macos/windows) — this corpus is the "green on every release and
 platform" claim from the public 1.0 roadmap, made real rather than
-aspirational. It's a starting set, not exhaustive — add a case whenever a
-policy's documented behavior changes or a new shipped policy lands, so the
-corpus grows with the product instead of drifting from it.
+aspirational. The v0.8.0 floor is 60 cases; add a focused case whenever a
+policy, operator, mode, or documented boundary changes.
 
 ## Schema
 
@@ -32,25 +32,54 @@ corpus grows with the product instead of drifting from it.
 }
 ```
 
-When `expect.matched_rule_ids` is present, the harness compares the exact
-sorted multiset of matched rule IDs. Use it for deny/escalate cases so a case
-cannot stay green merely because a different rule happened to produce the same
-top-level decision.
+Use `policy_files` instead of `policy_file` when a composition property needs
+multiple policies:
 
-`mode` is the proxy-level default passed to the engine (see
-`pkg/engine/evaluator.go`'s effective-mode resolution — a policy's own
-`mode: enforcement` always escalates regardless of this value; a policy
-can never be forced into shadow by this field alone if the policy itself
-says enforcement). Every case here uses policies that hardcode
-`mode: enforcement`, so this field is `"enforcement"` throughout — add a
-shadow-mode case here if a shadow-mode example policy ever ships.
+```json
+"policy_files": ["../../policies/irreversibility_floor.yaml", "fixtures/allow_all.yaml"]
+```
+
+Exactly one selector is required. Paths must be relative to the case file and
+cannot repeat.
+
+If a case relies on policy content first introduced after older frozen
+snapshots, declare the earliest compatible release explicitly:
+
+```json
+"policy_compat_since": "v0.5.0"
+```
+
+This only limits replay by `TestPolicyCompat`; it never skips current
+conformance. Leave it absent when every snapshot containing that policy should
+produce the same result.
+
+The loader rejects unknown fields, trailing JSON, missing required values,
+invalid modes/results, non-object `parameters`, duplicate policy paths, and
+duplicate case IDs (`name`). Every non-allow result must declare
+`expect.matched_rule_ids`; the harness compares the exact sorted set so a case
+cannot stay green merely because a different rule produced the same top-level
+decision.
+
+`mode` is the call-site default passed to the engine. The corpus includes both
+`enforcement` and `shadow`: an enforcement policy cannot be downgraded by a
+shadow call site, while a matched shadow deny records `decision: denied` and
+`action_taken: allowed_shadow`.
 
 ## Completeness rule
 
-`TestConformanceCompleteness` (`cmd/tg/conformance_test.go`) fails when
-any `policies/*.yaml` has zero cases here, when two cases share a name,
-or when a case's `name` doesn't match its filename. A new shipped
-policy therefore cannot land without at least one pinned
-decision — the corpus can't silently drift from the policy set the way
-it did between 0.5.0 and 0.6.0. One case is the floor, not the goal:
-cover each outcome class the policy can actually produce.
+`TestConformanceCompleteness` (`cmd/tg/conformance_test.go`) fails when any of
+these contracts drifts:
+
+- fewer than 60 top-level cases;
+- a duplicate case name or a name that differs from its filename;
+- any reachable outcome class missing for a shipped `policies/*.yaml` file
+  (default allow plus each enabled rule effect);
+- any generic condition operator or AND/OR/NOT branch missing from matched
+  cases;
+- either call-site mode missing;
+- any reversibility tier missing from irreversibility-floor cases; or
+- no multi-policy case proving an irreversible escalation outranks a matched
+  permissive allow.
+
+Deleting a shipped policy's only outcome case therefore turns CI red and names
+the missing policy and outcome.

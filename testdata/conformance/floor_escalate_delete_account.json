@@ -1,0 +1,19 @@
+{
+  "name": "floor_escalate_delete_account",
+  "description": "Whole-account deletion is classified irreversible and routed to human review.",
+  "policy_file": "../../policies/irreversibility_floor.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "delete_account",
+    "parameters": {
+      "account_id": "acct-1"
+    }
+  },
+  "expect": {
+    "decision": "escalated",
+    "action_taken": "escalated",
+    "matched_rule_ids": [
+      "rule-irreversible-escalate"
+    ]
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "name": "llm_spend_escalate_hourly_and_flag_tokens",
+  "description": "Hourly spend escalation outranks a simultaneous token-volume flag while preserving both matched rules.",
+  "policy_file": "../../policies/llm_token_spend_guard.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "llm_call",
+    "tool_group": "llm_usage",
+    "parameters": {
+      "prompt": "summarize"
+    },
+    "context": {
+      "verified": {
+        "agent_velocity": {
+          "llm_cost_usd_1h": 51,
+          "llm_cost_usd_24h": 100,
+          "token_count_24h": 10000001
+        }
+      }
+    }
+  },
+  "expect": {
+    "decision": "escalated",
+    "action_taken": "escalated",
+    "matched_rule_ids": [
+      "rule-llm-cost-hourly",
+      "rule-llm-tokens-daily"
+    ]
+  }
+}

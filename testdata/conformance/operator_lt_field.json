@@ -1,0 +1,21 @@
+{
+  "name": "operator_lt_field",
+  "description": "The operator lt field condition is evaluated through a loaded YAML policy and matches its dedicated rule.",
+  "policy_file": "fixtures/operator_matrix.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "operator_probe",
+    "parameters": {
+      "case": "op_lt_field",
+      "left": 9,
+      "right": 10
+    }
+  },
+  "expect": {
+    "decision": "denied",
+    "action_taken": "denied",
+    "matched_rule_ids": [
+      "op-lt-field"
+    ]
+  }
+}

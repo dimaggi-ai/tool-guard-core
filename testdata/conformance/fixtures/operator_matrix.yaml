@@ -1,0 +1,203 @@
+schema_version: 1
+policy_id: conformance-operator-matrix
+name: conformance-operator-matrix
+description: Exercises every generic leaf operator and logical branch through the public policy loader.
+version: 1
+status: approved
+mode: enforcement
+
+scope:
+  tool_names: [operator_probe]
+
+rules:
+  - rule_id: op-eq
+    name: eq operator
+    rule_type: conformance
+    conditions:
+      and:
+        - {field: parameters.case, operator: eq, value: op_eq}
+        - {field: parameters.value, operator: eq, value: alpha}
+    effect: deny
+    citation: &citation
+      document_id: CONFORMANCE-OPERATORS
+      section: "1"
+      excerpt: "Each supported condition operator has an executable corpus case."
+
+  - rule_id: op-neq
+    name: neq operator
+    rule_type: conformance
+    conditions:
+      and:
+        - {field: parameters.case, operator: eq, value: op_neq}
+        - {field: parameters.value, operator: neq, value: alpha}
+    effect: deny
+    citation: *citation
+
+  - rule_id: op-gt
+    name: gt operator
+    rule_type: conformance
+    conditions:
+      and:
+        - {field: parameters.case, operator: eq, value: op_gt}
+        - {field: parameters.value, operator: gt, value: 10}
+    effect: deny
+    citation: *citation
+
+  - rule_id: op-gte
+    name: gte operator
+    rule_type: conformance
+    conditions:
+      and:
+        - {field: parameters.case, operator: eq, value: op_gte}
+        - {field: parameters.value, operator: gte, value: 10}
+    effect: deny
+    citation: *citation
+
+  - rule_id: op-lt
+    name: lt operator
+    rule_type: conformance
+    conditions:
+      and:
+        - {field: parameters.case, operator: eq, value: op_lt}
+        - {field: parameters.value, operator: lt, value: 10}
+    effect: deny
+    citation: *citation
+
+  - rule_id: op-lte
+    name: lte operator
+    rule_type: conformance
+    conditions:
+      and:
+        - {field: parameters.case, operator: eq, value: op_lte}
+        - {field: parameters.value, operator: lte, value: 10}
+    effect: deny
+    citation: *citation
+
+  - rule_id: op-in
+    name: in operator
+    rule_type: conformance
+    conditions:
+      and:
+        - {field: parameters.case, operator: eq, value: op_in}
+        - field: parameters.value
+          operator: in
+          value: [alpha, beta]
+    effect: deny
+    citation: *citation
+
+  - rule_id: op-contains
+    name: contains operator
+    rule_type: conformance
+    conditions:
+      and:
+        - {field: parameters.case, operator: eq, value: op_contains}
+        - {field: parameters.value, operator: contains, value: needle}
+    effect: deny
+    citation: *citation
+
+  - rule_id: op-regex
+    name: regex operator
+    rule_type: conformance
+    conditions:
+      and:
+        - {field: parameters.case, operator: eq, value: op_regex}
+        - {field: parameters.value, operator: regex, value: '^safe-[0-9]+$'}
+    effect: deny
+    citation: *citation
+
+  - rule_id: op-gt-field
+    name: gt_field operator
+    rule_type: conformance
+    conditions:
+      and:
+        - {field: parameters.case, operator: eq, value: op_gt_field}
+        - {field: parameters.left, operator: gt_field, value: parameters.right}
+    effect: deny
+    citation: *citation
+
+  - rule_id: op-lt-field
+    name: lt_field operator
+    rule_type: conformance
+    conditions:
+      and:
+        - {field: parameters.case, operator: eq, value: op_lt_field}
+        - {field: parameters.left, operator: lt_field, value: parameters.right}
+    effect: deny
+    citation: *citation
+
+  - rule_id: op-not-in
+    name: not_in operator
+    rule_type: conformance
+    conditions:
+      and:
+        - {field: parameters.case, operator: eq, value: op_not_in}
+        - field: parameters.value
+          operator: not_in
+          value: [alpha, beta]
+    effect: deny
+    citation: *citation
+
+  - rule_id: op-not-contains
+    name: not_contains operator
+    rule_type: conformance
+    conditions:
+      and:
+        - {field: parameters.case, operator: eq, value: op_not_contains}
+        - {field: parameters.value, operator: not_contains, value: needle}
+    effect: deny
+    citation: *citation
+
+  - rule_id: op-starts-with
+    name: starts_with operator
+    rule_type: conformance
+    conditions:
+      and:
+        - {field: parameters.case, operator: eq, value: op_starts_with}
+        - {field: parameters.value, operator: starts_with, value: prefix-}
+    effect: deny
+    citation: *citation
+
+  - rule_id: op-ends-with
+    name: ends_with operator
+    rule_type: conformance
+    conditions:
+      and:
+        - {field: parameters.case, operator: eq, value: op_ends_with}
+        - {field: parameters.value, operator: ends_with, value: -suffix}
+    effect: deny
+    citation: *citation
+
+  - rule_id: op-exists
+    name: exists operator
+    rule_type: conformance
+    conditions:
+      and:
+        - {field: parameters.case, operator: eq, value: op_exists}
+        - {field: parameters.value, operator: exists, value: true}
+    effect: deny
+    citation: *citation
+
+  - rule_id: logical-or
+    name: or branch
+    rule_type: conformance
+    conditions:
+      and:
+        - {field: parameters.case, operator: eq, value: logical_or}
+        - or:
+            - {field: parameters.value, operator: eq, value: alpha}
+            - {field: parameters.value, operator: eq, value: beta}
+    effect: deny
+    citation: *citation
+
+  - rule_id: logical-not
+    name: not branch
+    rule_type: conformance
+    conditions:
+      and:
+        - {field: parameters.case, operator: eq, value: logical_not}
+        - not:
+            field: parameters.value
+            operator: eq
+            value: blocked
+    effect: deny
+    citation: *citation
