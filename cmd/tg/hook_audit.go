@@ -68,9 +68,8 @@ func appendHookAudit(path string, env *domain.ActionEnvelope, result *domain.Eva
 	}
 
 	// Serialize concurrent hook processes: two appends that both read the same
-	// tail hash would fork the chain. A portable advisory lock (with a
-	// staleness steal so a crashed holder can't wedge future appends) covers
-	// read-tail → hash → append → sync.
+	// tail hash would fork the chain. A bounded OS advisory lock, released by
+	// the kernel if its holder exits, covers verify → hash → append → sync.
 	unlock, err := acquireAuditLock(path)
 	if err != nil {
 		return err

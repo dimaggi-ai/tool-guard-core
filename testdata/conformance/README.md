@@ -1,7 +1,8 @@
 # Conformance corpus
 
 Each `*.json` file in this directory is one case: a shipped policy from
-`policies/`, a real envelope, and the exact decision the engine must
+`policies/` or an explicitly documented derived fixture from `fixtures/`, a
+real envelope, and the exact decision and applied action the engine must
 produce. Run with:
 
 ```bash
@@ -12,8 +13,9 @@ Wired into `.github/workflows/ci.yml`'s existing 3-OS matrix
 (ubuntu/macos/windows) — this corpus is the "green on every release and
 platform" claim from the public 1.0 roadmap, made real rather than
 aspirational. It's a starting set, not exhaustive — add a case whenever a
-policy's documented behavior changes or a new shipped policy lands, so the
-corpus grows with the product instead of drifting from it.
+policy's documented behavior changes, a new shipped policy lands, or a
+derived fixture pins an engine contract that shipped policies do not isolate.
+This keeps the corpus growing with the product instead of drifting from it.
 
 ## Schema
 
@@ -21,7 +23,7 @@ corpus grows with the product instead of drifting from it.
 {
   "name": "unique-kebab-case-id",
   "description": "one sentence: what this case proves and why",
-  "policy_file": "../../policies/<file>.yaml",
+  "policy_file": "../../policies/<file>.yaml or fixtures/<file>.yaml",
   "mode": "enforcement",
   "envelope": { "tool_name": "...", "tool_group": "...", "parameters": {...}, "context": {...} },
   "expect": { "decision": "allowed|denied|escalated|flagged", "action_taken": "allowed|denied|escalated|flagged|allowed_shadow" }
