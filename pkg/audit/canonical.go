@@ -208,6 +208,12 @@ type canonicalTraceV2 struct {
 
 	EvaluationDurationMicros int64                `json:"evaluation_duration_micros"`
 	DeepEval                 *canonicalDeepEvalV2 `json:"deep_eval"`
+
+	// Record provenance is appended to the v2 projection and therefore covered
+	// by the trace hash together with decision and applied-action provenance.
+	EngineVersion string `json:"engine_version"`
+	PolicySetHash string `json:"policy_set_hash"`
+	SchemaVersion string `json:"schema_version"`
 }
 
 type canonicalRuleResultV2 struct {
@@ -283,11 +289,18 @@ func CanonicalTraceBytes(t *domain.DecisionTrace) ([]byte, error) {
 	version := effectiveCanonicalTraceVersion(t)
 	switch version {
 	case canonicalTraceVersionV1:
-		if len(t.AppliedRuleResults) > 0 || t.AppliedPrimaryCitation != nil || t.AmountParseStatus != "" {
+		if len(t.AppliedRuleResults) > 0 || t.AppliedPrimaryCitation != nil || t.AmountParseStatus != "" ||
+			t.EngineVersion != "" || t.PolicySetHash != "" || t.SchemaVersion != "" {
 			return nil, fmt.Errorf("v1 trace contains v2-only provenance fields")
 		}
 		return canonicalTraceBytesV1(t)
 	case canonicalTraceVersionV2:
+		if t.SchemaVersion != canonicalTraceVersionV2 {
+			return nil, fmt.Errorf("canonical v2 trace requires schema_version %q", canonicalTraceVersionV2)
+		}
+		if err := validateTraceProvenance(t); err != nil {
+			return nil, err
+		}
 		return canonicalTraceBytesV2(t)
 	default:
 		return nil, fmt.Errorf("unsupported canonical trace version %q", version)
@@ -414,6 +427,10 @@ func canonicalTraceBytesV2(t *domain.DecisionTrace) ([]byte, error) {
 		SignedBy:          t.SignedBy,
 
 		EvaluationDurationMicros: int64(t.EvaluationDurationMs*1000 + 0.5),
+
+		EngineVersion: t.EngineVersion,
+		PolicySetHash: t.PolicySetHash,
+		SchemaVersion: t.SchemaVersion,
 	}
 
 	c.RuleResults = canonicalRuleResultsV2(t.RuleResults)

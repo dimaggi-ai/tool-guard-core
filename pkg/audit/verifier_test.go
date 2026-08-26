@@ -3,6 +3,7 @@ package audit
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -173,7 +174,9 @@ func TestChainVerifier_RejectsCanonicalVersionDowngrade(t *testing.T) {
 	base := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
 	v2 := makeTrace("v2", "env-v2", "", base)
 	v2.SessionID = "downgrade"
-	v2.CanonicalVersion = CanonicalTraceVersion
+	if err := StampProvenance(&v2, "v0.8.0-test", "sha256:"+strings.Repeat("a", 64)); err != nil {
+		t.Fatal(err)
+	}
 	v2Hash, err := ComputeCanonicalTraceHash(&v2)
 	if err != nil {
 		t.Fatal(err)

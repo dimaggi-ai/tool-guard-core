@@ -23,6 +23,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/dimaggi-ai/tool-guard-core/pkg/audit"
+	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
+	"github.com/dimaggi-ai/tool-guard-core/pkg/policyload"
 )
 
 var (
@@ -257,6 +261,68 @@ func TestProxy_PoliciesEndpoint(t *testing.T) {
 	}
 	if !ids["pol-int-proxy"] || !ids["pol-int-escalate"] {
 		t.Errorf("policies = %v, want pol-int-proxy and pol-int-escalate", ids)
+	}
+}
+
+func TestProxy_AuditRecordCarriesVerifiableProvenance(t *testing.T) {
+	envelopeID := fmt.Sprintf("env-provenance-%d", time.Now().UnixNano())
+	code, body := postJSON(t, "/evaluate", map[string]any{
+		"envelope_id": envelopeID,
+		"timestamp":   time.Now().UTC().Format(time.RFC3339Nano),
+		"agent_id":    "agent-provenance",
+		"session_id":  "session-provenance",
+		"org_id":      "org-provenance",
+		"tool_name":   "issue_refund",
+		"tool_group":  "monetary_outflow",
+		"parameters":  map[string]any{"amount": 25},
+	})
+	if code != http.StatusOK {
+		t.Fatalf("evaluate status %d: %s", code, body)
+	}
+
+	raw, err := os.ReadFile(auditLogPath)
+	if err != nil {
+		t.Fatalf("read audit log: %v", err)
+	}
+	var found *domain.DecisionTrace
+	for _, line := range bytes.Split(raw, []byte{'\n'}) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var trace domain.DecisionTrace
+		if err := json.Unmarshal(line, &trace); err != nil {
+			t.Fatalf("decode audit line: %v", err)
+		}
+		if trace.EnvelopeID == envelopeID {
+			found = &trace
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("audit record for %q not found", envelopeID)
+	}
+
+	loaded := make([]domain.Policy, 0, 2)
+	for _, name := range []string{"escalation.yaml", "refund.yaml"} {
+		policy, err := policyload.Load(filepath.Join(policyDir, name))
+		if err != nil {
+			t.Fatalf("load %s: %v", name, err)
+		}
+		loaded = append(loaded, policy)
+	}
+	wantPolicyHash, err := policyload.PolicySetHash(loaded)
+	if err != nil {
+		t.Fatalf("PolicySetHash: %v", err)
+	}
+	if found.EngineVersion == "" || found.PolicySetHash != wantPolicyHash || found.SchemaVersion != audit.CanonicalTraceVersion {
+		t.Fatalf("incomplete/wrong audit provenance: %+v", *found)
+	}
+	ok, err := audit.VerifyCanonicalTraceHash(found)
+	if err != nil {
+		t.Fatalf("VerifyCanonicalTraceHash: %v", err)
+	}
+	if !ok {
+		t.Fatal("fresh proxy audit record did not verify")
 	}
 }
 

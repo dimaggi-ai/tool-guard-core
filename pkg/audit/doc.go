@@ -18,6 +18,8 @@
 //
 // Canonicalisation is versioned (see [CanonicalTraceVersion]). Records
 // without an on-record version marker use the immutable v1 encoder; current
-// writers stamp v2. Any hash-bearing schema change MUST add a new encoder so
-// evidence packs produced under every older version remain verifiable.
+// writers stamp v2 with decision, applied-action, engine, policy-set, and
+// schema provenance inside the integrity commitment.
+// Any future canonical field addition MUST add a new encoder version; existing
+// versioned shapes are immutable.
 package audit

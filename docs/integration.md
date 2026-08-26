@@ -224,6 +224,7 @@ import (
     "github.com/dimaggi-ai/tool-guard-core/pkg/audit"
     "github.com/dimaggi-ai/tool-guard-core/pkg/domain"
     "github.com/dimaggi-ai/tool-guard-core/pkg/engine"
+    "github.com/dimaggi-ai/tool-guard-core/pkg/policyload"
 )
 
 // Guard wraps the engine and an append-only audit log writer.
@@ -237,12 +238,18 @@ type Guard struct {
     auditErr  error
     lastHash  string
     auditNeedsSeparator bool
+	engineVersion string
+	policySetHash string
 }
 
-func NewGuard(policies []domain.Policy, logPath string) (*Guard, error) {
+func NewGuard(policies []domain.Policy, logPath, engineVersion string) (*Guard, error) {
     if err := engine.ValidatePolicySet(policies); err != nil {
         return nil, fmt.Errorf("validate policy set: %w", err)
     }
+	policySetHash, err := policyload.PolicySetHash(policies)
+	if err != nil {
+		return nil, fmt.Errorf("hash policy set: %w", err)
+	}
     f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0o600)
     if err != nil {
         return nil, err
@@ -268,6 +275,8 @@ func NewGuard(policies []domain.Policy, logPath string) (*Guard, error) {
         auditFile: f,
         lastHash: report.Tail,
         auditNeedsSeparator: needsSeparator,
+        engineVersion: engineVersion,
+        policySetHash: policySetHash,
     }, nil
 }
 
@@ -313,6 +322,9 @@ func (g *Guard) Check(ctx context.Context, env *domain.ActionEnvelope) (bool, *d
         IsNearMiss:             result.IsNearMiss,
         ParametersRedacted:     append([]byte(nil), env.ParametersRedacted...),
     }
+	if err := audit.StampProvenance(&trace, g.engineVersion, g.policySetHash); err != nil {
+		return false, result, fmt.Errorf("stamp audit provenance: %w", err)
+	}
 
     // Serialize link -> hash -> append -> durability -> tail update. Once any
     // audit operation fails, poison this Guard instance: continuing after a

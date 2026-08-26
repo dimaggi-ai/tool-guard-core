@@ -139,7 +139,9 @@ func TestVerifyChainFromReader_MixedV1V2UpgradeChain(t *testing.T) {
 	base := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
 	v1 := makeTrace("v1", "env-v1", "", base)
 	v2 := makeTrace("v2", "env-v2", v1.TraceHash, base.Add(time.Second))
-	v2.CanonicalVersion = CanonicalTraceVersion
+	if err := StampProvenance(&v2, "v0.8.0", "sha256:"+strings.Repeat("d", 64)); err != nil {
+		t.Fatal(err)
+	}
 	v2.AppliedRuleResults = []domain.RuleResult{{
 		RuleID:   "r2",
 		PolicyID: "p2",

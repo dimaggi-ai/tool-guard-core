@@ -375,7 +375,11 @@ hashed and chained correctly), not fail-recoverable.
 Tool Guard follows semver and is still pre-1.0. Version 0.8.0 contains one
 explicitly documented breaking audit-format migration: new writers stamp
 `CanonicalTraceVersion = v2` so the raw decision and applied-action provenance
-are both bound by the canonical hash. Canonical v1 remains byte-identical;
+are both bound by the canonical hash. V2 also binds `engine_version`, a
+deterministic `policy_set_hash`, and `schema_version`. The policy digest is
+computed from strictly decoded, defaulted policy objects; YAML comments,
+whitespace, filenames, and file order do not change it. Canonical v1 remains
+byte-identical;
 records written before the on-record `_canonical_v` marker are interpreted by
 the v1 encoder, and the 0.8 verifier accepts mixed v1/v2 chains.
 
@@ -425,6 +429,11 @@ To upgrade:
    0.6.0 becomes an allow. Fix every lint error first.
 3. Stop the old proxy.
 4. Start the new proxy. It resumes the chain from the same tail.
+
+After the first post-upgrade decision, inspect that record in isolation: its
+`engine_version` identifies the binary, `policy_set_hash` identifies the
+normalized set used for evaluation, and `schema_version` is `v2`. Removing or
+changing any of these values makes `tg verify` fail at that record.
 
 Migration steps for 0.6.0 → 0.7.0: remove any `deep_evaluation` block
 (move semantic checks to a rule with an `llm_classify` condition), split

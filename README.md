@@ -170,7 +170,7 @@ not depend on it.
 
 - Deterministic policy evaluation (thresholds, regex, scope, condition trees)
 - Shadow (observe-only) and enforcement modes — stage a policy against live traffic, then promote it to returning real deny/escalate decisions for your tool layer to act on, without redeploying agents
-- SHA-256 hash-chained audit log — a portable JSONL file you download, verify offline with `tg verify`, and use as source evidence in an audit workflow
+- SHA-256 hash-chained audit log — a portable JSONL file you download, verify offline with `tg verify`, and use as source evidence in an audit workflow; current records identify their engine version, canonical schema, and normalized policy set by hash
 - Policy lint warnings (`tg lint`)
 - `tg-proxy` HTTP service with policy reload, rate limit, escalation
 - Four-dialect SQL classifier (postgres / mysql / sqlite / mssql)
@@ -495,7 +495,8 @@ pkg/llmguard/    Local-LLM content classifier. Pure HTTP client against
                  semantics: timeout / network / model-refusal → deny.
 
 pkg/audit/       SHA-256 hash-chained traces, offline replay verifier,
-                 canonical JSON for stable hashing.
+                 versioned canonical JSON, and per-record engine/policy-set
+                 provenance for stable hashing.
 
 cmd/tg/          The one-shot CLI. evaluate / verify / lint / benchmark.
 

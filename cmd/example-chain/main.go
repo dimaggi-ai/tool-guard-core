@@ -20,19 +20,23 @@ import (
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/audit"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
+	"github.com/dimaggi-ai/tool-guard-core/pkg/policyload"
 )
+
+const exampleEngineVersion = "example-chain-fixture/v1"
 
 func main() {
 	// Fixed timestamp so the chain is reproducible. UTC because the
 	// canonical hasher normalises before hashing anyway.
 	base := time.Date(2026, time.January, 15, 9, 30, 0, 0, time.UTC)
+	policySetHash := examplePolicySetHash()
 
 	traces := []domain.DecisionTrace{
-		mkTrace("trc-0001", "env-0001", "", base.Add(0*time.Second), 50,
+		mkTrace("trc-0001", "env-0001", "", base.Add(0*time.Second), 50, policySetHash,
 			domain.DecisionAllowed, domain.ActionAllowed),
-		mkTrace("trc-0002", "env-0002", "", base.Add(12*time.Second), 1000,
+		mkTrace("trc-0002", "env-0002", "", base.Add(12*time.Second), 1000, policySetHash,
 			domain.DecisionDenied, domain.ActionDenied),
-		mkTrace("trc-0003", "env-0003", "", base.Add(47*time.Second), 200,
+		mkTrace("trc-0003", "env-0003", "", base.Add(47*time.Second), 200, policySetHash,
 			domain.DecisionAllowed, domain.ActionAllowed),
 	}
 	chain(traces)
@@ -46,8 +50,8 @@ func main() {
 	}
 }
 
-func mkTrace(traceID, envelopeID, prev string, ts time.Time, amount float64, d domain.Decision, a domain.ActionTaken) domain.DecisionTrace {
-	return domain.DecisionTrace{
+func mkTrace(traceID, envelopeID, prev string, ts time.Time, amount float64, policySetHash string, d domain.Decision, a domain.ActionTaken) domain.DecisionTrace {
+	trace := domain.DecisionTrace{
 		TraceID:           traceID,
 		EnvelopeID:        envelopeID,
 		Timestamp:         ts,
@@ -57,6 +61,29 @@ func mkTrace(traceID, envelopeID, prev string, ts time.Time, amount float64, d d
 		ActionTaken:       a,
 		PreviousTraceHash: prev,
 	}
+	if err := audit.StampProvenance(&trace, exampleEngineVersion, policySetHash); err != nil {
+		panic("stamp example trace: " + err.Error())
+	}
+	return trace
+}
+
+func examplePolicySetHash() string {
+	// The example chain models this fixed logical policy. Keeping the fixture
+	// in code makes regeneration independent of the caller's working directory
+	// while still giving every record a truthful, reproducible set digest.
+	policies := []domain.Policy{{
+		SchemaVersion: 1,
+		PolicyID:      "example-refund-cap",
+		Name:          "Example refund cap",
+		Version:       1,
+		Status:        domain.PolicyStatusApproved,
+		Mode:          domain.PolicyModeEnforcement,
+	}}
+	h, err := policyload.PolicySetHash(policies)
+	if err != nil {
+		panic("hash example policy set: " + err.Error())
+	}
+	return h
 }
 
 // chain walks the slice in order, filling in each PreviousTraceHash

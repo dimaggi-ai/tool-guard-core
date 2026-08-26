@@ -32,9 +32,9 @@ Requires **Go 1.25+**. No external services. No database.
 
 ## What we don't accept
 
-- Changes that loosen `pkg/audit/canonical.go` without bumping
-  `CanonicalTraceVersion`. Doing so silently breaks every evidence pack
-  produced under the old version.
+- Changes that edit an existing `canonicalTraceV<N>` shape or add canonical
+  fields without a new version and `CanonicalTraceVersion` bump. Doing so
+  silently breaks every evidence pack produced under the old version.
 - Refactors that drop existing tests. If a test is wrong, change the
   expectation and explain why in the commit message. Don't delete.
 - New operators in `pkg/domain/policy.go` without updating

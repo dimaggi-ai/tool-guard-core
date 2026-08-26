@@ -12,7 +12,7 @@ import (
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 )
 
-// canonical_test locks the v1 byte shape. If Go's encoding/json behaviour
+// canonical_test locks every supported byte shape. If Go's encoding/json behaviour
 // ever changes (escape rules, integer width, etc.) THESE tests break loud
 // before any evidence pack ships with a drifted shape.
 //
@@ -90,6 +90,9 @@ func goldenTraceV2() *domain.DecisionTrace {
 	// Keep historical fixtures pinned to their schema. A later writer-version
 	// bump must not silently move this fixture to v3 and stop covering v2.
 	tr.CanonicalVersion = canonicalTraceVersionV2
+	tr.EngineVersion = "v0.8.0-test"
+	tr.PolicySetHash = "sha256:" + strings.Repeat("a", 64)
+	tr.SchemaVersion = canonicalTraceVersionV2
 	tr.AmountParseStatus = "ok"
 	tr.RuleResults[0].Citation = domain.Citation{
 		DocumentID: "policy-handbook",
@@ -188,7 +191,7 @@ func TestCanonicalTraceBytes_V2Golden(t *testing.T) {
 		t.Fatalf("CanonicalTraceBytes v2: %v", err)
 	}
 	sum := fmt.Sprintf("%x", sha256.Sum256(got))
-	const wantSHA256 = "d07017f2a7ed6c6e64e4471b1b9033a77a4c2005b138338cd3a00d26d990093f"
+	const wantSHA256 = "2ffea428c3f9d3323a111707b6b95bda394ca9786732236931dcadc79244925e"
 	if sum != wantSHA256 {
 		t.Fatalf("canonical v2 bytes drifted: sha256=%s, want %s\nbytes=%s", sum, wantSHA256, got)
 	}
@@ -229,6 +232,9 @@ func TestCanonicalTraceV2AppliedProvenanceTamperFailsVerification(t *testing.T) 
 		{"deep temperature", func(tr *domain.DecisionTrace) { tr.DeepEvalResult.Temperature = 0.25 }},
 		{"sub-cent amount", func(tr *domain.DecisionTrace) { tr.Amount += 0.001 }},
 		{"amount parse status", func(tr *domain.DecisionTrace) { tr.AmountParseStatus = "invalid_fail_closed" }},
+		{"engine version", func(tr *domain.DecisionTrace) { tr.EngineVersion = "v9.9.9" }},
+		{"policy set hash", func(tr *domain.DecisionTrace) { tr.PolicySetHash = "sha256:" + strings.Repeat("c", 64) }},
+		{"schema version", func(tr *domain.DecisionTrace) { tr.SchemaVersion = "" }},
 		{"version downgrade", func(tr *domain.DecisionTrace) { tr.CanonicalVersion = "" }},
 	}
 	for _, tt := range tests {
@@ -314,5 +320,18 @@ func TestCanonicalTraceVersionSelection(t *testing.T) {
 	unknown.CanonicalVersion = "v99"
 	if _, err := CanonicalTraceBytes(unknown); err == nil {
 		t.Fatal("unknown canonical version must be rejected")
+	}
+
+	incomplete := goldenTrace()
+	incomplete.CanonicalVersion = CanonicalTraceVersion
+	incomplete.SchemaVersion = CanonicalTraceVersion
+	if _, err := CanonicalTraceBytes(incomplete); err == nil || !strings.Contains(err.Error(), "engine_version") {
+		t.Fatalf("incomplete v2 error = %v, want engine_version", err)
+	}
+
+	legacyWithProvenance := goldenTrace()
+	legacyWithProvenance.EngineVersion = "v0.8.0"
+	if _, err := CanonicalTraceBytes(legacyWithProvenance); err == nil || !strings.Contains(err.Error(), "v2-only provenance") {
+		t.Fatalf("legacy provenance error = %v, want v2-only provenance", err)
 	}
 }

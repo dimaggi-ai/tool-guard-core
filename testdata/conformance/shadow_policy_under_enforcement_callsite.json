@@ -8,5 +8,9 @@
     "tool_group": "monetary_outflow",
     "parameters": {"amount": 750}
   },
-  "expect": {"decision": "denied", "action_taken": "allowed_shadow"}
+  "expect": {
+    "decision": "denied",
+    "action_taken": "allowed_shadow",
+    "matched_rule_ids": ["rule-amount-cap"]
+  }
 }

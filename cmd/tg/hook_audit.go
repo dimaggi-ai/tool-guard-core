@@ -9,6 +9,7 @@ import (
 	"github.com/dimaggi-ai/tool-guard-core/pkg/audit"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/engine"
+	"github.com/dimaggi-ai/tool-guard-core/pkg/policyload"
 )
 
 // appendHookAudit writes the hook's decision to a SHA-256 hash-chained JSONL
@@ -20,11 +21,18 @@ import (
 // Before resuming, the complete existing chain is verified under the append
 // lock. This is O(n) in the log size, but prevents the hook from extending a
 // chain that its own offline verifier already considers invalid.
-func appendHookAudit(path string, env *domain.ActionEnvelope, result *domain.EvaluationResult, decision, reason string) error {
+func appendHookAudit(path string, env *domain.ActionEnvelope, result *domain.EvaluationResult, decision, reason string, policySetHashes ...string) error {
 	amount, amountStatus := engine.EvaluatedAmount(env)
 	timestamp := env.Timestamp
 	if timestamp.IsZero() {
 		timestamp = time.Now().UTC()
+	}
+	policySetHash, err := policyload.PolicySetHash(nil)
+	if err != nil {
+		return err
+	}
+	if len(policySetHashes) > 0 && policySetHashes[0] != "" {
+		policySetHash = policySetHashes[0]
 	}
 	trace := domain.DecisionTrace{
 		CanonicalVersion:   audit.CanonicalTraceVersion,
@@ -65,6 +73,9 @@ func appendHookAudit(path string, env *domain.ActionEnvelope, result *domain.Eva
 		trace.AppliedPrimaryCitation = result.AppliedPrimaryCitation
 		trace.SuggestedResponse = result.SuggestedResponse
 		trace.IsNearMiss = result.IsNearMiss
+	}
+	if err := audit.StampProvenance(&trace, resolvedEngineVersion(), policySetHash); err != nil {
+		return err
 	}
 
 	// Serialize concurrent hook processes: two appends that both read the same
@@ -115,8 +126,8 @@ func appendHookAudit(path string, env *domain.ActionEnvelope, result *domain.Eva
 // appendHookAuditBestEffort preserves the hook decision when audit persistence
 // fails, but reports the lost record so operators do not mistake a silent gap
 // for a complete audit trail.
-func appendHookAuditBestEffort(stderr io.Writer, path string, env *domain.ActionEnvelope, result *domain.EvaluationResult, decision, reason string) {
-	if err := appendHookAudit(path, env, result, decision, reason); err != nil {
+func appendHookAuditBestEffort(stderr io.Writer, path string, env *domain.ActionEnvelope, result *domain.EvaluationResult, decision, reason string, policySetHashes ...string) {
+	if err := appendHookAudit(path, env, result, decision, reason, policySetHashes...); err != nil {
 		fmt.Fprintf(stderr, "tg hook: audit append failed — decision unchanged, record not written: %v\n", err)
 	}
 }

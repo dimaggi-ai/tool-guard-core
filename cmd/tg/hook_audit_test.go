@@ -14,6 +14,7 @@ import (
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/audit"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
+	"github.com/dimaggi-ai/tool-guard-core/pkg/policyload"
 )
 
 func auditEnv(id string) *domain.ActionEnvelope {
@@ -37,7 +38,6 @@ func hookAuditTraceOfSize(t *testing.T, target int) *domain.DecisionTrace {
 func hookAuditTraceOfSizeWithPrevious(t *testing.T, target int, previousHash string) *domain.DecisionTrace {
 	t.Helper()
 	tr := &domain.DecisionTrace{
-		CanonicalVersion:  audit.CanonicalTraceVersion,
 		TraceID:           "trc-size-boundary",
 		Timestamp:         time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC),
 		EnvelopeID:        "env-size-boundary",
@@ -46,6 +46,9 @@ func hookAuditTraceOfSizeWithPrevious(t *testing.T, target int, previousHash str
 		ActionTaken:       domain.ActionAllowed,
 		DecisionReason:    "x",
 		PreviousTraceHash: previousHash,
+	}
+	if err := audit.StampProvenance(tr, "v0.8.0-test", "sha256:"+strings.Repeat("a", 64)); err != nil {
+		t.Fatal(err)
 	}
 
 	marshalRehashed := func() []byte {
@@ -128,6 +131,35 @@ func TestAppendHookAudit_ChainLinks(t *testing.T) {
 		if chain[i][0] != chain[i-1][1] {
 			t.Errorf("record %d prev %q != record %d hash %q — chain forked", i, chain[i][0], i-1, chain[i-1][1])
 		}
+	}
+}
+
+func TestAppendHookAudit_StampsVerifiableProvenance(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	if err := appendHookAudit(path, auditEnv("env-provenance"), nil, "deny", "blocked"); err != nil {
+		t.Fatalf("appendHookAudit: %v", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read audit: %v", err)
+	}
+	var trace domain.DecisionTrace
+	if err := json.Unmarshal(bytes.TrimSpace(raw), &trace); err != nil {
+		t.Fatalf("decode audit record: %v", err)
+	}
+	wantPolicyHash, err := policyload.PolicySetHash(nil)
+	if err != nil {
+		t.Fatalf("hash empty policy set: %v", err)
+	}
+	if trace.EngineVersion == "" || trace.PolicySetHash != wantPolicyHash || trace.SchemaVersion != audit.CanonicalTraceVersion {
+		t.Fatalf("incomplete provenance: %+v", trace)
+	}
+	ok, err := audit.VerifyCanonicalTraceHash(&trace)
+	if err != nil {
+		t.Fatalf("VerifyCanonicalTraceHash: %v", err)
+	}
+	if !ok {
+		t.Fatal("fresh hook audit record did not verify")
 	}
 }
 

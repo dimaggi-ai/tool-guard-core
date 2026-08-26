@@ -13,6 +13,7 @@ import (
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/engine"
+	"github.com/dimaggi-ai/tool-guard-core/pkg/policyload"
 )
 
 // cmdHook is a first-class PreToolUse guard for coding agents (Claude Code,
@@ -137,6 +138,7 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	}
 
 	env := hookEnvelope(tool, in, *agentID)
+	auditPolicyHash, _ := policyload.PolicySetHash(nil)
 
 	// emitAudited emits the decision and, when -audit-log is set, appends it
 	// to the hash chain (best-effort — an audit failure never changes the
@@ -144,7 +146,7 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	emitAudited := func(dec, reason string, result *domain.EvaluationResult) {
 		emitHookDecisionTo(stdout, dec, reason)
 		if *auditLog != "" {
-			appendHookAuditBestEffort(os.Stderr, *auditLog, env, result, dec, reason)
+			appendHookAuditBestEffort(os.Stderr, *auditLog, env, result, dec, reason, auditPolicyHash)
 		}
 	}
 
@@ -172,7 +174,7 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 		mode = domain.PolicyModeShadow
 	}
 
-	dec, reason, result := evalHook(*policyDir, *policyFile, env, mode, failDecide, *unknownToolsDeny)
+	dec, reason, result, auditPolicyHash := evalHook(*policyDir, *policyFile, env, mode, failDecide, *unknownToolsDeny)
 	emitAudited(dec, reason, result)
 	return 0
 }
@@ -180,7 +182,8 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 // evalHook loads the policy set and evaluates env, recovering from any panic
 // so the hook can never crash the agent. On load failure or panic it returns
 // the fail-open/closed decision for env.ToolName.
-func evalHook(policyDir, policyFile string, env *domain.ActionEnvelope, mode domain.PolicyMode, failDecide func(string) (string, string), unknownToolsDeny bool) (dec string, reason string, result *domain.EvaluationResult) {
+func evalHook(policyDir, policyFile string, env *domain.ActionEnvelope, mode domain.PolicyMode, failDecide func(string) (string, string), unknownToolsDeny bool) (dec string, reason string, result *domain.EvaluationResult, policySetHash string) {
+	policySetHash, _ = policyload.PolicySetHash(nil)
 	defer func() {
 		if r := recover(); r != nil {
 			dec, reason = failDecide(env.ToolName)
@@ -205,7 +208,13 @@ func evalHook(policyDir, policyFile string, env *domain.ActionEnvelope, mode dom
 			fmt.Fprintln(os.Stderr, "tg hook: no policies loaded — no policy enforced for this call")
 		}
 		dec, reason = failDecide(env.ToolName)
-		return dec, reason, nil
+		return dec, reason, nil, policySetHash
+	}
+	policySetHash, err = policyload.PolicySetHash(policies)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "tg hook: policy-set hash failed — no policy enforced for this call: %v\n", err)
+		dec, reason = failDecide(env.ToolName)
+		return dec, reason, nil, policySetHash
 	}
 
 	// Tool-name spoof guard, evaluated BEFORE the engine call so a denied
@@ -215,7 +224,7 @@ func evalHook(policyDir, policyFile string, env *domain.ActionEnvelope, mode dom
 	// count). Closes the coverage gap where tg-proxy had this gate and tg
 	// hook — the actual coding-agent enforcement point — did not.
 	if unknownToolsDeny && !engine.ToolNameKnown(env.ToolName, policies) {
-		return "deny", fmt.Sprintf("tool_name %q is not declared in scope.tool_names of any loaded ENFORCEMENT policy (-unknown-tools-deny)", env.ToolName), nil
+		return "deny", fmt.Sprintf("tool_name %q is not declared in scope.tool_names of any loaded ENFORCEMENT policy (-unknown-tools-deny)", env.ToolName), nil, policySetHash
 	}
 
 	result = engine.NewEvaluator().Evaluate(env, policies, mode)
@@ -231,11 +240,11 @@ func evalHook(policyDir, policyFile string, env *domain.ActionEnvelope, mode dom
 	// looking for it after the SDK fixes landed.
 	switch result.ActionTaken {
 	case domain.ActionDenied:
-		return "deny", hookReason(result), result
+		return "deny", hookReason(result), result, policySetHash
 	case domain.ActionEscalated:
-		return "ask", hookReason(result), result
+		return "ask", hookReason(result), result, policySetHash
 	default:
-		return "allow", "", result
+		return "allow", "", result, policySetHash
 	}
 }
 

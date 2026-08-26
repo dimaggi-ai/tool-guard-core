@@ -286,6 +286,14 @@ func (p *proxy) appendTraceDurable(t *domain.DecisionTrace) error {
 }
 
 func (p *proxy) appendTraceWithDurability(t *domain.DecisionTrace, forceDurable bool) error {
+	// Defence in depth for synthetic/internal writers. The evaluated request
+	// path stamps the exact policy snapshot before entering appendTrace; any
+	// other new record still must not escape without current provenance.
+	if t.SchemaVersion == "" && t.EngineVersion == "" && t.PolicySetHash == "" {
+		if err := p.stampTraceProvenance(t, ""); err != nil {
+			return err
+		}
+	}
 	p.auditMu.Lock()
 	defer p.auditMu.Unlock()
 	if p.auditPoisoned {

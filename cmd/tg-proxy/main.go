@@ -85,8 +85,10 @@ func platformAuditRotationOps() auditRotationOps {
 // audit state is guarded by auditMu so reloads and concurrent evaluations do
 // not race or interleave hash-chain links.
 type proxy struct {
-	mu       sync.RWMutex
-	policies []domain.Policy
+	mu            sync.RWMutex
+	policies      []domain.Policy
+	policySetHash string
+	engineVersion string
 
 	auditMu  sync.Mutex
 	auditLog auditLogFile
@@ -150,6 +152,18 @@ var (
 	Commit    string
 	BuildDate string
 )
+
+func resolvedEngineVersion() string {
+	if Version != "" {
+		return Version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		if v := info.Main.Version; v != "" && v != "(devel)" {
+			return v
+		}
+	}
+	return "(devel)"
+}
 
 func main() {
 	var (
@@ -306,6 +320,7 @@ func main() {
 		escalationDefaultMin: *escalationTimeout,
 		policyDir:            *policyDir,
 		auditPath:            *auditPath,
+		engineVersion:        resolvedEngineVersion(),
 		startedAt:            time.Now().UTC(),
 		auditRotation:        platformAuditRotationOps(),
 	}

@@ -60,7 +60,8 @@ pkg/audit/       SHA-256 hash-chained traces, offline replay verifier,
                  it - identity, tool, amount, decision/action/reason,
                  mode, raw and applied rule results (including citations
                  and diagnostics), primary citations, suggested response,
-                 escalation target, chain links, and signer - so tampering
+                 escalation target, engine version, normalized policy-set
+                 hash, schema version, chain links, and signer - so tampering
                  with a hashed field is detected. Escalation-resolution
                  fields, redacted parameters, context snapshot, and
                  token/cost counters are recorded but not hashed; the exact
@@ -158,7 +159,8 @@ fields that explain both the raw decision and applied action:
 `decision_reason`, raw and applied rule results (including their citations
 and diagnostics), primary citations, suggested response, agent identity,
 exact evaluated amount (as IEEE-754 bits) and its parse status, chain links,
-and signer. Mutating any of those fields breaks
+signer, engine version, normalized policy-set hash, and schema version.
+Mutating any of those fields breaks
 `tg verify`. Escalation-resolution fields, `parameters_redacted`,
 `context_snapshot`, and the top-level agent token/cost counters are recorded
 but are not part of the canonical hash. Deep-evaluation `tokens_in` and

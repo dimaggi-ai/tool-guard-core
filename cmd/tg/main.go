@@ -62,6 +62,18 @@ var (
 	BuildDate string
 )
 
+func resolvedEngineVersion() string {
+	if Version != "" {
+		return Version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		if v := info.Main.Version; v != "" && v != "(devel)" {
+			return v
+		}
+	}
+	return "(devel)"
+}
+
 // printVersion writes the release version (ldflags-injected) or the
 // module version embedded in the binary, plus the Go toolchain version.
 func printVersion() {
