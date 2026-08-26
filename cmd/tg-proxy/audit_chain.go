@@ -22,13 +22,19 @@ import (
 // fsync modes. tg verify walks the rotation set across files.
 
 var (
-	errAuditWriterPoisoned     = errors.New("audit writer poisoned")
-	errAuditStateIndeterminate = errors.New("audit state indeterminate")
+	errAuditWriterPoisoned         = errors.New("audit writer poisoned")
+	errAuditStateIndeterminate     = errors.New("audit state indeterminate")
+	errAuditRotationStateUncertain = errors.New("audit rotation state uncertain")
 	// errAuditRecordCommitted marks an uncertain durability-barrier error after
 	// the full record reached the file and the in-memory chain advanced. The
 	// writer is poisoned at the same time: callers must not append a conflicting
 	// retry, and state transitions that require durable audit are indeterminate.
 	errAuditRecordCommitted = errors.New("audit record committed")
+	// defaultAuditDirectorySync is the production rotation-metadata barrier.
+	// Keeping the selection below the per-proxy override gives tests a narrow
+	// seam for proving that a nil override still dispatches to the platform
+	// implementation.
+	defaultAuditDirectorySync = syncAuditDirectory
 )
 
 // diskAuditLog keeps the path alongside the open descriptor so the Windows
@@ -375,13 +381,17 @@ func (p *proxy) appendTraceWithDurability(t *domain.DecisionTrace, forceDurable 
 	// loses at most this single append, not the whole pending chunk.
 	if p.auditRotateBytes > 0 && p.auditCurrentBytes >= p.auditRotateBytes {
 		if err := p.rotateAuditLocked(); err != nil {
-			if forceDurable {
+			// Once rename/open has changed the on-disk topology, forgetting a
+			// failed metadata barrier would let readiness stay green and a later
+			// forced-durable approval succeed without repairing that uncertainty.
+			// Poison regardless of the current append's configured sync mode.
+			if forceDurable || errors.Is(err, errAuditRotationStateUncertain) {
 				return p.poisonIndeterminateAuditLocked(
-					fmt.Sprintf("durable audit record rotation barrier failed: %v", err),
+					fmt.Sprintf("audit record rotation barrier failed: %v", err),
 					true,
 				)
 			}
-			log.Printf("tg-proxy: audit rotation: %v (continuing on old file)", err)
+			log.Printf("tg-proxy: audit rotation deferred before topology changed: %v (continuing on current file)", err)
 		}
 	}
 	return nil
@@ -469,7 +479,10 @@ func (p *proxy) rotateAuditLocked() error {
 		return fmt.Errorf("sync before rotate: %w", err)
 	}
 	if err := p.auditLog.Close(); err != nil {
-		return fmt.Errorf("close before rotate: %w", err)
+		// Close may have released the descriptor despite returning an error.
+		// Treat its usability as uncertain instead of claiming that appends can
+		// continue on the current handle.
+		return fmt.Errorf("%w: close before rotate: %v", errAuditRotationStateUncertain, err)
 	}
 	// From this point on we MUST leave p.auditLog pointing at an open
 	// writable file before returning, even on error.
@@ -495,19 +508,24 @@ func (p *proxy) rotateAuditLocked() error {
 		// rotated tail so we don't break the chain — appends will
 		// continue into the previous file rather than vanish.
 		p.reopenRotatedLocked(idx)
-		return fmt.Errorf("open new active: %w", err)
+		return fmt.Errorf("%w: open new active: %v", errAuditRotationStateUncertain, err)
 	}
 	p.auditLog = f
 	p.auditCurrentBytes = 0
+	// The replacement is intentionally empty. If the process crashes before
+	// the barriers below complete, startup can recover the chain tail from the
+	// newest rotated sibling and recreate a missing active path. Once both
+	// barriers succeed, the empty file and both directory-entry changes are
+	// durable before this function reports success.
 	if err := f.Sync(); err != nil {
-		return fmt.Errorf("sync new active audit file: %w", err)
+		return fmt.Errorf("%w: sync new active audit file: %v", errAuditRotationStateUncertain, err)
 	}
-	directorySync := syncAuditDirectory
+	directorySync := defaultAuditDirectorySync
 	if p.auditDirectorySync != nil {
 		directorySync = p.auditDirectorySync
 	}
 	if err := directorySync(filepath.Dir(p.auditPath)); err != nil {
-		return fmt.Errorf("sync audit rotation directory: %w", err)
+		return fmt.Errorf("%w: sync audit rotation directory: %v", errAuditRotationStateUncertain, err)
 	}
 	log.Printf("tg-proxy: rotated audit log → %s.%d", p.auditPath, idx)
 	return nil

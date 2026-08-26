@@ -4,8 +4,9 @@ package main
 
 import "golang.org/x/sys/windows"
 
-// MoveFileEx with WRITE_THROUGH does not return until the rename metadata is
-// flushed. rotateAuditLocked separately Syncs the newly created active file.
+// MoveFileEx with WRITE_THROUGH requests that the move reach disk before the
+// call returns. rotateAuditLocked separately Syncs the new active file.
+// Contract: https://learn.microsoft.com/windows/win32/api/winbase/nf-winbase-movefileexw
 func renameAuditFile(from, to string) error {
 	fromPtr, err := windows.UTF16PtrFromString(from)
 	if err != nil {

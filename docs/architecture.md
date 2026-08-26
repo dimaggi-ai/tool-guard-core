@@ -180,9 +180,10 @@ match (tamper-on-disk detection).
 Rotation is opt-in via `-audit-rotate-bytes`. Three fsync modes:
 `every` (default, strongest durability), `interval` (per N appends),
 `none` (OS-managed). Rotation flushes the rename and replacement-file
-metadata before completing; a forced-durable escalation resolution treats a
-failed rotation barrier as indeterminate. `tg verify` walks the rotation set
-in order.
+metadata before completing. Any barrier failure after rotation changes the
+on-disk topology poisons the writer, fails readiness, and blocks later appends;
+a forced-durable escalation resolution in that transition is marked
+indeterminate. `tg verify` walks the rotation set in order.
 
 ## The escalation flow
 

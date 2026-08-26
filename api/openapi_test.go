@@ -137,7 +137,7 @@ func TestEscalationSchemaIncludesIndeterminateAuditState(t *testing.T) {
 	for _, value := range values {
 		state, ok := value.(string)
 		if !ok {
-			t.Fatalf("Escalation.state enum contains %T, want strings", value)
+			t.Fatalf("Escalation.state enum value has type %T, want string", value)
 		}
 		got = append(got, state)
 	}

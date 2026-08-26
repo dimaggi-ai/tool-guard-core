@@ -338,10 +338,12 @@ append-only ledger:
   when it crosses the cap. Rotated files are named
   `<auditPath>.1`, `<auditPath>.2`, ... `tg verify` reads the
   rotation set in order. Rotation durably flushes the rename and replacement
-  active-file metadata before completing. Retain the complete set: its oldest
-  record must be the genesis record with an empty `previous_trace_hash`. A detached suffix
-  is rejected unless a future trusted-anchor protocol explicitly validates
-  its predecessor.
+  active-file metadata before completing. If that barrier fails after the
+  on-disk topology changes, the writer is poisoned and `/readyz` remains 503
+  until an operator preserves, repairs, and verifies the complete set before
+  restarting. Retain the complete set: its oldest record must be the genesis
+  record with an empty `previous_trace_hash`. A detached suffix is rejected
+  unless a future trusted-anchor protocol explicitly validates its predecessor.
 - **Off-host backup** - `cron` an rsync to a separate host every
   hour. The hash chain links across rotations, so `tg verify` on
   the backup is the same operation as on the live host.
@@ -436,7 +438,7 @@ load.
 | Symptom | Likely cause | Action |
 |---|---|---|
 | Proxy refuses to start, "audit-log tail integrity check failed" | Audit log was tampered or corrupted | Run `tg verify` to locate the failure line; restore from backup; start with `-audit-log` pointing at the restored file |
-| `/readyz` returns 503 and reports a poisoned audit writer | An audit append failed and the proxy could not durably prove rollback to the pre-write boundary | Stop the proxy; preserve the log for incident review; truncate or restore the incomplete tail; run `tg verify`; restart only after verification succeeds |
+| `/readyz` returns 503 and reports a poisoned audit writer | An audit append failed and the proxy could not durably prove rollback to the pre-write boundary, or rotation changed the on-disk topology without completing its metadata barrier | Stop the proxy; preserve the log and complete rotation set for incident review; repair or restore the uncertain state; run `tg verify`; restart only after verification succeeds |
 | Proxy returns 503 on every `/evaluate` | `-fail-closed=true` and no policies loaded | Check `-policy-dir` exists and contains a valid `*.yaml` |
 | Every `llm_classify` rule times out | Ollama unreachable; check `-ollama_url` in policy or that Ollama is running on the configured endpoint | `curl http://localhost:11434/api/tags` |
 | Latency suddenly 10x worse | Cold-start of a freshly-pulled Ollama model | First call after model swap is ~5-20s; subsequent calls are ~600ms |

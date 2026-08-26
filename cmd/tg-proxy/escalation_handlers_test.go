@@ -254,9 +254,14 @@ func TestEscalationApproval_DurableRotationBarrierPrecedesApproval(t *testing.T)
 		t.Fatal("seed escalation failed")
 	}
 	directorySyncCalls := 0
-	p.auditDirectorySync = func(path string) error {
+	originalDirectorySync := defaultAuditDirectorySync
+	defaultAuditDirectorySync = func(path string) error {
 		directorySyncCalls++
 		return syncAuditDirectory(path)
+	}
+	t.Cleanup(func() { defaultAuditDirectorySync = originalDirectorySync })
+	if p.auditDirectorySync != nil {
+		t.Fatal("test requires nil per-proxy override to exercise production default dispatch")
 	}
 
 	rec := resolveEscalationRequest(t, p, id, "approve")
@@ -274,6 +279,73 @@ func TestEscalationApproval_DurableRotationBarrierPrecedesApproval(t *testing.T)
 	}
 	if got := p.escalations.get(id); got == nil || got.State != EscApproved {
 		t.Fatalf("rotating approval state = %#v, want approved", got)
+	}
+}
+
+func TestOrdinaryRotationBarrierFailurePoisonsBeforeLaterApproval(t *testing.T) {
+	p := newOperationalTestProxy(t, []domain.Policy{
+		operationalPolicy("ordinary-rotation", domain.PolicyModeEnforcement, domain.EffectFlag, "amount", 0),
+	}, false)
+	p.auditSyncMode = "none"
+	p.auditRotateBytes = 1
+	directorySyncCalls := 0
+	p.auditDirectorySync = func(string) error {
+		directorySyncCalls++
+		return errors.New("forced prior directory sync failure")
+	}
+
+	status, result := evaluateOperational(t, p, "ordinary-before-approval", 100)
+	if status != http.StatusOK || result.ActionTaken != domain.ActionDenied {
+		t.Fatalf("ordinary evaluation = %d/%s, want 200/denied fail-closed", status, result.ActionTaken)
+	}
+	if directorySyncCalls != 1 || !p.auditPoisoned || p.auditFailureCount.Load() != 1 {
+		t.Fatalf(
+			"ordinary barrier state: calls=%d poisoned=%v failures=%d, want 1/true/1",
+			directorySyncCalls, p.auditPoisoned, p.auditFailureCount.Load(),
+		)
+	}
+	readyRec := httptest.NewRecorder()
+	p.readyz(readyRec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if readyRec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("readiness after uncertain rotation = %d, want 503", readyRec.Code)
+	}
+
+	// A later approval must not repair or bypass the forgotten barrier merely
+	// because its own append would stay below the next rotation threshold.
+	p.auditRotateBytes = 1 << 30
+	p.approverToken = "secret"
+	id := "approval-after-prior-rotation-failure"
+	if e := p.escalations.add(envFor(id), decisionFor(domain.DecisionEscalated), 15); e == nil {
+		t.Fatal("seed escalation failed")
+	}
+	rec := resolveEscalationRequest(t, p, id, "approve")
+	if rec.Code != http.StatusServiceUnavailable || strings.Contains(rec.Body.String(), `"state":"approved"`) {
+		t.Fatalf("approval after uncertain rotation = %d %s, want 503 and no approval", rec.Code, rec.Body.String())
+	}
+	if directorySyncCalls != 1 {
+		t.Fatalf("poisoned approval retried file operations: directory sync calls=%d, want 1", directorySyncCalls)
+	}
+}
+
+func TestOrdinaryRotationCloseFailurePoisonsUncertainWriter(t *testing.T) {
+	p := newOperationalTestProxy(t, nil, false)
+	p.auditRotateBytes = 1
+	fault := &faultInjectAuditFile{
+		auditLogFile:           p.auditLog,
+		closeFailuresRemaining: 1,
+	}
+	p.auditLog = fault
+
+	err := p.appendTrace(&domain.DecisionTrace{
+		TraceID:     "ordinary-close-failure",
+		Decision:    domain.DecisionDenied,
+		ActionTaken: domain.ActionDenied,
+	})
+	if !errors.Is(err, errAuditStateIndeterminate) || !errors.Is(err, errAuditWriterPoisoned) {
+		t.Fatalf("rotation close failure = %v, want indeterminate poisoned writer", err)
+	}
+	if !p.auditPoisoned {
+		t.Fatal("rotation close failure did not poison writer")
 	}
 }
 

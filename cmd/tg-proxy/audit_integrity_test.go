@@ -24,10 +24,19 @@ type faultInjectAuditFile struct {
 	fullWriteErrorsRemaining int
 	statFailuresRemaining    int
 	syncFailuresRemaining    int
+	closeFailuresRemaining   int
 	failTruncate             bool
 	writeCalls               int
 	statCalls                int
 	syncCalls                int
+}
+
+func (f *faultInjectAuditFile) Close() error {
+	if f.closeFailuresRemaining > 0 {
+		f.closeFailuresRemaining--
+		return errors.New("forced close failure")
+	}
+	return f.auditLogFile.Close()
 }
 
 func (f *faultInjectAuditFile) Sync() error {
