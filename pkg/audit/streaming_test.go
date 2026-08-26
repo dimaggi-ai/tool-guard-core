@@ -201,6 +201,17 @@ func TestVerifyChainFromReader_EmptyStream(t *testing.T) {
 
 func TestVerifyChainFromReader_RecordSizeBoundary(t *testing.T) {
 	exact := traceJSONOfSize(t, MaxTraceRecordBytes)
+	var exactTrace domain.DecisionTrace
+	if err := json.Unmarshal(exact, &exactTrace); err != nil {
+		t.Fatalf("decode exact-max trace: %v", err)
+	}
+	encoded, err := MarshalTraceRecord(&exactTrace)
+	if err != nil {
+		t.Fatalf("MarshalTraceRecord exact max: %v", err)
+	}
+	if len(encoded) != MaxTraceRecordBytes {
+		t.Fatalf("MarshalTraceRecord length = %d, want %d", len(encoded), MaxTraceRecordBytes)
+	}
 	for _, tc := range []struct {
 		name      string
 		delimiter string
@@ -222,6 +233,14 @@ func TestVerifyChainFromReader_RecordSizeBoundary(t *testing.T) {
 	}
 
 	tooLarge := traceJSONOfSize(t, MaxTraceRecordBytes+1)
+	var tooLargeTrace domain.DecisionTrace
+	if err := json.Unmarshal(tooLarge, &tooLargeTrace); err != nil {
+		t.Fatalf("decode max+1 trace: %v", err)
+	}
+	if _, err := MarshalTraceRecord(&tooLargeTrace); err == nil || !strings.Contains(err.Error(), "maximum") {
+		t.Fatalf("MarshalTraceRecord max+1 error = %v, want maximum-size error", err)
+	}
+
 	rep, err := VerifyChainFromReader(bytes.NewReader(append(tooLarge, '\n')))
 	if err != nil {
 		t.Fatalf("VerifyChainFromReader: %v", err)

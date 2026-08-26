@@ -14,10 +14,9 @@ import (
 // same bound so they never append after a record the verifier cannot replay.
 const MaxTraceRecordBytes = 4 * 1024 * 1024
 
-// A scanner must be able to buffer the record plus its line delimiter. Two
-// bytes cover both the LF emitted by Tool Guard and CRLF input produced by
-// Windows tooling; the explicit record-length check below still enforces the
-// public MaxTraceRecordBytes contract.
+// MaxTraceRecordScanBytes includes delimiter headroom for scanners. Two bytes
+// cover both the LF emitted by Tool Guard and CRLF input produced by Windows
+// tooling; callers still enforce MaxTraceRecordBytes on the logical record.
 const MaxTraceRecordScanBytes = MaxTraceRecordBytes + 2
 
 // MarshalTraceRecord serializes one JSONL record and enforces the same logical
