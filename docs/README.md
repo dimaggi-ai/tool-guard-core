@@ -24,6 +24,8 @@ authoring policies for, and operating Tool Guard Core.
 
 - [**Operating tg-proxy in production**](operating.md) - systemd unit, Kubernetes manifest, flag reference, metrics,
   policy lifecycle, backup, disaster recovery.
+- [**Exporting audit records**](audit-export.md) - integrity-checked JSONL,
+  time/policy/action filters, schema version stamps, and log forwarding.
 - [**Integration guide**](integration.md) - wiring the proxy into
   MCP servers, LangChain callbacks, AutoGen executors, native
   Anthropic / OpenAI tool-use loops.

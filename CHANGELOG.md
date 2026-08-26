@@ -124,6 +124,15 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   records without `schema_version` continue to verify with the frozen v1
   encoder, including chains that transition from v1 to v2 after an upgrade.
 
+### Audit export
+
+- `tg export -file <audit-path> --format jsonl` streams a verified audit
+  snapshot as one JSON object per line, walking rotated files oldest-first.
+  Inclusive `--since`, exclusive `--until`, and repeatable/comma-separated
+  `--policy` and `--action` selectors make the stream usable by standard log
+  pipelines without a new runtime dependency. A damaged chain is rejected
+  before stdout receives any record.
+
 ## [0.7.0] — 2026-08-20
 
 Release focus: **policy-loading hardening** and **release-integrity

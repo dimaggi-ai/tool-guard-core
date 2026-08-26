@@ -353,6 +353,10 @@ append-only ledger:
   it returns `intact: false` with `exit 5`, you have an
   on-disk-tamper or a corrupted write. Stop the proxy (`tg-proxy`
   refuses to start with a tampered tail anyway) and triage.
+- **External pipelines** - use `tg export -file <audit-path> --format
+  jsonl` to stream an integrity-checked snapshot, including rotated
+  siblings, into a standard JSONL consumer. Time, policy, and action
+  filters are documented in [Exporting audit records](audit-export.md).
 
 ### Disaster recovery
 
