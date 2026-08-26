@@ -26,14 +26,14 @@ import (
 // it has records, otherwise the highest-indexed rotated sibling. This
 // keeps the hash chain continuous when a restart happens right after a
 // size rotation left the active file empty.
-func (p *proxy) recoverAuditTail() (domain.DecisionTrace, bool, error) {
+func (p *proxy) recoverAuditTail() (domain.DecisionTrace, bool, bool, error) {
 	for _, path := range p.auditCandidatesNewestFirst() {
 		f, err := os.Open(path)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
-			return domain.DecisionTrace{}, false, err
+			return domain.DecisionTrace{}, false, false, err
 		}
 		sc := bufio.NewScanner(f)
 		sc.Buffer(make([]byte, 0, 1<<20), audit.MaxTraceRecordScanBytes)
@@ -43,7 +43,7 @@ func (p *proxy) recoverAuditTail() (domain.DecisionTrace, bool, error) {
 			line := sc.Bytes()
 			if len(line) > audit.MaxTraceRecordBytes {
 				_ = f.Close()
-				return domain.DecisionTrace{}, false, fmt.Errorf("audit log %q contains a record exceeding %d bytes — repair or rotate it before restarting", path, audit.MaxTraceRecordBytes)
+				return domain.DecisionTrace{}, false, false, fmt.Errorf("audit log %q contains a record exceeding %d bytes — repair or rotate it before restarting", path, audit.MaxTraceRecordBytes)
 			}
 			if len(line) == 0 {
 				continue
@@ -55,21 +55,27 @@ func (p *proxy) recoverAuditTail() (domain.DecisionTrace, bool, error) {
 				// and leave a chain that fails `tg verify` forever. Make the
 				// operator repair or rotate the file instead.
 				_ = f.Close()
-				return domain.DecisionTrace{}, false, fmt.Errorf("audit log %q contains an unparseable line — repair or rotate it before restarting: %w", path, err)
+				return domain.DecisionTrace{}, false, false, fmt.Errorf("audit log %q contains an unparseable line — repair or rotate it before restarting: %w", path, err)
 			}
 			last = t
 			sawAny = true
 		}
 		scanErr := sc.Err()
-		_ = f.Close()
 		if scanErr != nil && !errors.Is(scanErr, io.EOF) {
-			return domain.DecisionTrace{}, false, fmt.Errorf("scan audit log %q: %w", path, scanErr)
+			_ = f.Close()
+			return domain.DecisionTrace{}, false, false, fmt.Errorf("scan audit log %q: %w", path, scanErr)
 		}
 		if sawAny {
-			return last, true, nil
+			needsSeparator, sepErr := audit.NeedsRecordSeparator(f)
+			_ = f.Close()
+			if sepErr != nil {
+				return domain.DecisionTrace{}, false, false, fmt.Errorf("inspect audit log %q tail delimiter: %w", path, sepErr)
+			}
+			return last, true, needsSeparator, nil
 		}
+		_ = f.Close()
 	}
-	return domain.DecisionTrace{}, false, nil
+	return domain.DecisionTrace{}, false, false, nil
 }
 
 // auditCandidatesNewestFirst lists the rotation set newest-first: the
@@ -116,6 +122,7 @@ func (p *proxy) openAuditLog() error {
 	// Do not carry a prior recovery attempt's tail through a failed reopen.
 	// The value is republished only after the complete rotation set verifies.
 	p.lastHash = ""
+	p.auditNeedsSeparator = false
 	dir := filepath.Dir(p.auditPath)
 	if dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -134,7 +141,7 @@ func (p *proxy) openAuditLog() error {
 	// leaves the active file empty while the real tail sits in the
 	// most recent rotated sibling. Scanning only the active file there
 	// would reset lastHash to "" and fork the chain.
-	last, sawAny, err := p.recoverAuditTail()
+	last, sawAny, needsSeparator, err := p.recoverAuditTail()
 	if err != nil {
 		return err
 	}
@@ -167,6 +174,7 @@ func (p *proxy) openAuditLog() error {
 		// passed verification. A failed open must not leave reusable proxy state
 		// pointing at an untrusted suffix.
 		p.lastHash = last.TraceHash
+		p.auditNeedsSeparator = needsSeparator
 	}
 	f, err := os.OpenFile(p.auditPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -255,12 +263,22 @@ func (p *proxy) appendTrace(t *domain.DecisionTrace) error {
 	if err != nil {
 		return err
 	}
-	raw = append(raw, '\n')
-	if _, err := p.auditLog.Write(raw); err != nil {
+	record := make([]byte, 0, len(raw)+2)
+	if p.auditNeedsSeparator {
+		record = append(record, '\n')
+	}
+	record = append(record, raw...)
+	record = append(record, '\n')
+	n, err := p.auditLog.Write(record)
+	if err == nil && n != len(record) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
 		return err
 	}
-	p.auditCurrentBytes += int64(len(raw))
+	p.auditCurrentBytes += int64(len(record))
 	p.auditAppendSeq++
+	p.auditNeedsSeparator = false
 
 	// Advance lastHash NOW, before the durability barrier. The write
 	// has reached the OS buffer cache; subsequent appends must chain

@@ -95,12 +95,26 @@ func appendHookAudit(path string, env *domain.ActionEnvelope, result *domain.Eva
 	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	if _, err := f.Write(append(line, '\n')); err != nil {
+	needsSeparator, err := audit.NeedsRecordSeparator(f)
+	if err != nil {
+		return err
+	}
+	record := make([]byte, 0, len(line)+2)
+	if needsSeparator {
+		record = append(record, '\n')
+	}
+	record = append(record, line...)
+	record = append(record, '\n')
+	n, err := f.Write(record)
+	if err == nil && n != len(record) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
 		return err
 	}
 	return f.Sync()

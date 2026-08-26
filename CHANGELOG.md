@@ -63,6 +63,10 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   serialization. Markerless v1 records now reject the v2-only
   `amount_parse_status` field instead of displaying provenance that v1 does
   not hash.
+- Hook, proxy, and documented in-process writers now preserve a valid JSONL
+  chain whose final record is terminated by EOF rather than LF. The first
+  resumed append prefixes the missing delimiter in the same write, including
+  when the tail is in a rotated file and the active file is empty.
 - This intentionally supersedes the 0.7 documentation that described a future
   v2 writer as opt-in. Keeping v1 as the default would leave the new
   applied-action attribution outside the integrity commitment. Because Tool

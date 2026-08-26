@@ -67,6 +67,10 @@ type proxy struct {
 	auditMu  sync.Mutex
 	auditLog *os.File
 	lastHash string
+	// auditNeedsSeparator is set on restart when the newest non-empty record
+	// is valid but EOF-terminated. The first append prefixes LF so JSONL
+	// records cannot be concatenated across a file or rotation boundary.
+	auditNeedsSeparator bool
 
 	defaultMode          domain.PolicyMode
 	failClosed           bool

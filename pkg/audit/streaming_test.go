@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -42,6 +43,39 @@ func writeJSONL(t *testing.T, traces []domain.DecisionTrace) []byte {
 		buf.WriteByte('\n')
 	}
 	return buf.Bytes()
+}
+
+func TestNeedsRecordSeparator(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		contents string
+		want     bool
+	}{
+		{name: "empty", contents: "", want: false},
+		{name: "lf terminated", contents: "{}\n", want: false},
+		{name: "crlf terminated", contents: "{}\r\n", want: false},
+		{name: "eof terminated", contents: "{}", want: true},
+		{name: "bare cr becomes crlf", contents: "{}\r", want: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "audit.jsonl")
+			if err := os.WriteFile(path, []byte(tt.contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			f, err := os.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer f.Close()
+			got, err := NeedsRecordSeparator(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.want {
+				t.Fatalf("NeedsRecordSeparator() = %v, want %v", got, tt.want)
+			}
+		})
+	}
 }
 
 // traceJSONOfSize builds a valid trace whose encoded JSON is exactly target

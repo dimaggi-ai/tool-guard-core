@@ -230,6 +230,7 @@ type Guard struct {
     auditMu   sync.Mutex
     auditErr  error
     lastHash  string
+    auditNeedsSeparator bool
 }
 
 func NewGuard(policies []domain.Policy, logPath string) (*Guard, error) {
@@ -250,11 +251,17 @@ func NewGuard(policies []domain.Policy, logPath string) (*Guard, error) {
         return nil, fmt.Errorf("existing audit chain failed at line %d: %s",
             report.FirstFailureAt, report.FailureReason)
     }
+    needsSeparator, err := audit.NeedsRecordSeparator(f)
+    if err != nil {
+        _ = f.Close()
+        return nil, fmt.Errorf("inspect existing audit delimiter: %w", err)
+    }
     return &Guard{
         eval:     engine.NewEvaluator(),
         policies: policies,
         auditFile: f,
         lastHash: report.Tail,
+        auditNeedsSeparator: needsSeparator,
     }, nil
 }
 
@@ -321,9 +328,14 @@ func (g *Guard) Check(ctx context.Context, env *domain.ActionEnvelope) (bool, *d
         g.auditErr = fmt.Errorf("marshal audit trace: %w", err)
         return false, result, g.auditErr
     }
-    line = append(line, '\n')
-    n, err := g.auditFile.Write(line)
-    if err == nil && n != len(line) {
+    record := make([]byte, 0, len(line)+2)
+    if g.auditNeedsSeparator {
+        record = append(record, '\n')
+    }
+    record = append(record, line...)
+    record = append(record, '\n')
+    n, err := g.auditFile.Write(record)
+    if err == nil && n != len(record) {
         err = io.ErrShortWrite
     }
     if err != nil {
@@ -335,6 +347,7 @@ func (g *Guard) Check(ctx context.Context, env *domain.ActionEnvelope) (bool, *d
         return false, result, g.auditErr
     }
     g.lastHash = trace.TraceHash
+    g.auditNeedsSeparator = false
 
     // A `flag` effect is a recorded near-miss - the call still proceeds.
     return result.ActionTaken == domain.ActionAllowed ||

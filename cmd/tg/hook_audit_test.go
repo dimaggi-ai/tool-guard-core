@@ -253,6 +253,38 @@ func TestHookAudit_RecordSizeBoundary(t *testing.T) {
 	}
 }
 
+func TestAppendHookAudit_ExtendsEOFTerminatedRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	first := hookAuditTraceOfSize(t, 1024)
+	line, err := audit.MarshalTraceRecord(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// EOF is a valid terminator for the verifier. The resumed writer must add
+	// the missing JSONL delimiter before its next object.
+	if err := os.WriteFile(path, line, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := appendHookAudit(path, auditEnv("next"), nil, "allow", "ok"); err != nil {
+		t.Fatalf("append after EOF-terminated record: %v", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(raw, []byte("}\n{")) {
+		t.Fatalf("resumed audit has no record delimiter: %q", raw)
+	}
+	report, err := audit.VerifyChainFromReader(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Intact || report.Records != 2 {
+		t.Fatalf("EOF-resumed hook chain = %#v, want intact with 2 records", report)
+	}
+}
+
 func TestAppendHookAudit_ExtendsExactMaxRecord(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.jsonl")
 	first := hookAuditTraceOfSize(t, audit.MaxTraceRecordBytes)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 )
@@ -18,6 +19,25 @@ const MaxTraceRecordBytes = 4 * 1024 * 1024
 // cover both the LF emitted by Tool Guard and CRLF input produced by Windows
 // tooling; callers still enforce MaxTraceRecordBytes on the logical record.
 const MaxTraceRecordScanBytes = MaxTraceRecordBytes + 2
+
+// NeedsRecordSeparator reports whether a JSONL writer must prefix its next
+// record with LF. VerifyChainFromReader accepts a final record terminated by
+// EOF, so a writer that resumes such a valid chain must add the missing
+// delimiter before appending another object. ReadAt preserves the file offset.
+func NeedsRecordSeparator(f *os.File) (bool, error) {
+	st, err := f.Stat()
+	if err != nil {
+		return false, err
+	}
+	if st.Size() == 0 {
+		return false, nil
+	}
+	var last [1]byte
+	if _, err := f.ReadAt(last[:], st.Size()-1); err != nil {
+		return false, err
+	}
+	return last[0] != '\n', nil
+}
 
 // MarshalTraceRecord serializes one JSONL record and enforces the same logical
 // record ceiling as VerifyChainFromReader. All audit writers use this helper so

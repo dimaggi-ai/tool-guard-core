@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -216,6 +217,101 @@ func TestOpenAuditLog_NoExistingFile_Starts(t *testing.T) {
 	}
 	if p.auditLog != nil {
 		_ = p.auditLog.Close()
+	}
+}
+
+func TestAppendTrace_ContinuesEOFTerminatedTail(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		useRotated bool
+	}{
+		{name: "active file"},
+		{name: "rotated tail with empty active", useRotated: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			active := filepath.Join(dir, "decisions.jsonl")
+			first := makeValidTrace("eof-tail", "", time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC))
+			firstLine, err := json.Marshal(first)
+			if err != nil {
+				t.Fatal(err)
+			}
+			seedPath := active
+			if tt.useRotated {
+				seedPath = active + ".1"
+				if err := os.WriteFile(active, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// The verifier accepts EOF as the final record terminator.
+			if err := os.WriteFile(seedPath, firstLine, 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			p := &proxy{auditPath: active, auditSyncMode: "none"}
+			if err := p.openAuditLog(); err != nil {
+				t.Fatalf("restart from EOF-terminated tail: %v", err)
+			}
+			if !p.auditNeedsSeparator {
+				t.Fatal("recovered EOF-terminated tail did not request a separator")
+			}
+			second := domain.DecisionTrace{
+				TraceID:     "after-restart",
+				EnvelopeID:  "env-after-restart",
+				Timestamp:   time.Date(2026, 8, 25, 12, 0, 1, 0, time.UTC),
+				Decision:    domain.DecisionAllowed,
+				ActionTaken: domain.ActionAllowed,
+			}
+			if err := p.appendTrace(&second); err != nil {
+				t.Fatalf("append after EOF-terminated tail: %v", err)
+			}
+			if p.auditNeedsSeparator {
+				t.Fatal("successful append did not clear separator state")
+			}
+			if err := p.auditLog.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			activeRaw, err := os.ReadFile(active)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p.auditCurrentBytes != int64(len(activeRaw)) {
+				t.Fatalf("audit byte accounting = %d, want active file size %d", p.auditCurrentBytes, len(activeRaw))
+			}
+			if tt.useRotated {
+				if len(activeRaw) == 0 || activeRaw[0] != '\n' {
+					t.Fatalf("active file does not begin with cross-rotation delimiter: %q", activeRaw)
+				}
+			} else if !bytes.Contains(activeRaw, []byte("}\n{")) {
+				t.Fatalf("active file has concatenated records: %q", activeRaw)
+			}
+
+			files, err := audit.RotationSetOldestFirst(active)
+			if err != nil {
+				t.Fatal(err)
+			}
+			readers := make([]io.Reader, 0, len(files))
+			var opened []*os.File
+			for _, path := range files {
+				f, err := os.Open(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				opened = append(opened, f)
+				readers = append(readers, f)
+			}
+			report, err := audit.VerifyChainFromReader(io.MultiReader(readers...))
+			for _, f := range opened {
+				_ = f.Close()
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !report.Intact || report.Records != 2 {
+				t.Fatalf("EOF-resumed proxy chain = %#v, want intact with 2 records", report)
+			}
+		})
 	}
 }
 
