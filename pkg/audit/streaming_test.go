@@ -43,6 +43,39 @@ func writeJSONL(t *testing.T, traces []domain.DecisionTrace) []byte {
 	return buf.Bytes()
 }
 
+// traceJSONOfSize builds a valid trace whose encoded JSON is exactly target
+// bytes. A single-byte padding alphabet keeps the size adjustment linear.
+func traceJSONOfSize(t *testing.T, target int) []byte {
+	t.Helper()
+	tr := makeTrace("size-boundary", "env-size-boundary", "", time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC))
+	tr.DecisionReason = "x"
+
+	marshalRehashed := func() []byte {
+		tr.TraceHash = ""
+		h, err := ComputeCanonicalTraceHash(&tr)
+		if err != nil {
+			t.Fatalf("canonical hash: %v", err)
+		}
+		tr.TraceHash = h
+		b, err := json.Marshal(tr)
+		if err != nil {
+			t.Fatalf("marshal trace: %v", err)
+		}
+		return b
+	}
+
+	base := marshalRehashed()
+	if target < len(base) {
+		t.Fatalf("target %d is smaller than base trace %d", target, len(base))
+	}
+	tr.DecisionReason += strings.Repeat("x", target-len(base))
+	got := marshalRehashed()
+	if len(got) != target {
+		t.Fatalf("sized trace length = %d, want %d", len(got), target)
+	}
+	return got
+}
+
 func TestVerifyChainFromReader_IntactChain(t *testing.T) {
 	ts := time.Now().Truncate(time.Microsecond)
 	t1 := makeTrace("t1", "env-1", "", ts)
@@ -163,5 +196,37 @@ func TestVerifyChainFromReader_EmptyStream(t *testing.T) {
 	}
 	if rep.Records != 0 {
 		t.Errorf("Records = %d, want 0", rep.Records)
+	}
+}
+
+func TestVerifyChainFromReader_RecordSizeBoundary(t *testing.T) {
+	exact := traceJSONOfSize(t, MaxTraceRecordBytes)
+	for _, tc := range []struct {
+		name      string
+		delimiter string
+	}{
+		{name: "LF", delimiter: "\n"},
+		{name: "CRLF", delimiter: "\r\n"},
+		{name: "EOF", delimiter: ""},
+	} {
+		t.Run("accept exact max with "+tc.name, func(t *testing.T) {
+			input := append(append([]byte(nil), exact...), tc.delimiter...)
+			rep, err := VerifyChainFromReader(bytes.NewReader(input))
+			if err != nil {
+				t.Fatalf("VerifyChainFromReader: %v", err)
+			}
+			if !rep.Intact || rep.Records != 1 {
+				t.Fatalf("exact-max report = %#v, want intact one-record chain", rep)
+			}
+		})
+	}
+
+	tooLarge := traceJSONOfSize(t, MaxTraceRecordBytes+1)
+	rep, err := VerifyChainFromReader(bytes.NewReader(append(tooLarge, '\n')))
+	if err != nil {
+		t.Fatalf("VerifyChainFromReader: %v", err)
+	}
+	if rep.Intact || rep.FirstFailureAt != 1 || !strings.Contains(rep.FailureReason, "record exceeds") {
+		t.Fatalf("max+1 report = %#v, want a record-size failure at line 1", rep)
 	}
 }

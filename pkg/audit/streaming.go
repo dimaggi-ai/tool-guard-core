@@ -14,6 +14,12 @@ import (
 // same bound so they never append after a record the verifier cannot replay.
 const MaxTraceRecordBytes = 4 * 1024 * 1024
 
+// A scanner must be able to buffer the record plus its line delimiter. Two
+// bytes cover both the LF emitted by Tool Guard and CRLF input produced by
+// Windows tooling; the explicit record-length check below still enforces the
+// public MaxTraceRecordBytes contract.
+const traceRecordDelimiterHeadroom = 2
+
 // StreamReport is the result of a streaming chain verification.
 //
 // Intact is true only if every line parses, hashes match the canonical
@@ -51,7 +57,7 @@ func VerifyChainFromReader(r io.Reader) (*StreamReport, error) {
 	// the scanner's per-line ceiling so big-but-valid records are not
 	// silently truncated. 4 MiB is comfortably above a realistic trace.
 	buf := make([]byte, 0, 1<<20)
-	sc.Buffer(buf, MaxTraceRecordBytes)
+	sc.Buffer(buf, MaxTraceRecordBytes+traceRecordDelimiterHeadroom)
 
 	rep := &StreamReport{Intact: true}
 	var prevHash string
@@ -59,6 +65,9 @@ func VerifyChainFromReader(r io.Reader) (*StreamReport, error) {
 	for sc.Scan() {
 		line++
 		raw := sc.Bytes()
+		if len(raw) > MaxTraceRecordBytes {
+			return failAt(rep, line, fmt.Sprintf("record exceeds %d bytes", MaxTraceRecordBytes)), nil
+		}
 		if len(raw) == 0 {
 			continue
 		}

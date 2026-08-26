@@ -2,12 +2,14 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/audit"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
@@ -22,6 +24,47 @@ func auditEnv(id string) *domain.ActionEnvelope {
 		ToolName:   "bash",
 		ToolGroup:  "shell",
 	}
+}
+
+// hookAuditTraceOfSize builds a valid v2 record whose JSON representation is
+// exactly target bytes. It lets the writer and verifier share one executable
+// boundary contract instead of relying on approximate large-record fixtures.
+func hookAuditTraceOfSize(t *testing.T, target int) *domain.DecisionTrace {
+	t.Helper()
+	tr := &domain.DecisionTrace{
+		CanonicalVersion: audit.CanonicalTraceVersion,
+		TraceID:          "trc-size-boundary",
+		Timestamp:        time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC),
+		EnvelopeID:       "env-size-boundary",
+		ToolName:         "bash",
+		Decision:         domain.DecisionAllowed,
+		ActionTaken:      domain.ActionAllowed,
+		DecisionReason:   "x",
+	}
+
+	marshalRehashed := func() []byte {
+		tr.TraceHash = ""
+		h, err := audit.ComputeCanonicalTraceHash(tr)
+		if err != nil {
+			t.Fatalf("canonical hash: %v", err)
+		}
+		tr.TraceHash = h
+		b, err := json.Marshal(tr)
+		if err != nil {
+			t.Fatalf("marshal trace: %v", err)
+		}
+		return b
+	}
+
+	base := marshalRehashed()
+	if target < len(base) {
+		t.Fatalf("target %d is smaller than base trace %d", target, len(base))
+	}
+	tr.DecisionReason += strings.Repeat("x", target-len(base))
+	if got := len(marshalRehashed()); got != target {
+		t.Fatalf("sized trace length = %d, want %d", got, target)
+	}
+	return tr
 }
 
 // readChain returns each record's (prev, hash) in file order.
@@ -186,5 +229,68 @@ func TestAppendHookAudit_LargeRecordKeepsNextLink(t *testing.T) {
 	}
 	if !report.Intact || report.Records != 2 {
 		t.Fatalf("large-record chain verification = %#v, want intact with 2 records", report)
+	}
+}
+
+func TestMarshalHookAuditTrace_RecordSizeBoundary(t *testing.T) {
+	exact := hookAuditTraceOfSize(t, audit.MaxTraceRecordBytes)
+	line, err := marshalHookAuditTrace(exact)
+	if err != nil {
+		t.Fatalf("marshal exact-max record: %v", err)
+	}
+	if len(line) != audit.MaxTraceRecordBytes {
+		t.Fatalf("exact record length = %d, want %d", len(line), audit.MaxTraceRecordBytes)
+	}
+
+	tooLarge := hookAuditTraceOfSize(t, audit.MaxTraceRecordBytes+1)
+	if _, err := marshalHookAuditTrace(tooLarge); err == nil || !strings.Contains(err.Error(), "maximum") {
+		t.Fatalf("marshal max+1 error = %v, want maximum-size error", err)
+	}
+}
+
+func TestAppendHookAudit_ExtendsExactMaxRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	first := hookAuditTraceOfSize(t, audit.MaxTraceRecordBytes)
+	line, err := marshalHookAuditTrace(first)
+	if err != nil {
+		t.Fatalf("marshal exact-max record: %v", err)
+	}
+	if err := os.WriteFile(path, append(line, '\n'), 0o600); err != nil {
+		t.Fatalf("write exact-max record: %v", err)
+	}
+	if err := appendHookAudit(path, auditEnv("next"), nil, "allow", "ok"); err != nil {
+		t.Fatalf("append after exact-max record: %v", err)
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	report, err := audit.VerifyChainFromReader(f)
+	if err != nil {
+		t.Fatalf("verify exact-max chain: %v", err)
+	}
+	if !report.Intact || report.Records != 2 {
+		t.Fatalf("exact-max chain verification = %#v, want intact with 2 records", report)
+	}
+}
+
+func TestAppendHookAuditBestEffort_ReportsOversizedRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	result := &domain.EvaluationResult{
+		Decision:          domain.DecisionDenied,
+		ActionTaken:       domain.ActionDenied,
+		EffectiveMode:     domain.PolicyModeEnforcement,
+		SuggestedResponse: strings.Repeat("x", audit.MaxTraceRecordBytes),
+	}
+	var stderr bytes.Buffer
+	appendHookAuditBestEffort(&stderr, path, auditEnv("oversized"), result, "deny", "unused")
+
+	if got := stderr.String(); !strings.Contains(got, "audit append failed") || !strings.Contains(got, "record not written") {
+		t.Fatalf("stderr = %q, want surfaced audit-loss warning", got)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("oversized record created audit file; stat error = %v", err)
 	}
 }

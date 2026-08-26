@@ -147,6 +147,37 @@ func TestSimulate_FailOnDenyRejectsMalformedCorpus(t *testing.T) {
 	}
 }
 
+func TestSimulate_FailOnDenyRejectsEmptyCorpus(t *testing.T) {
+	pol := writeTemp(t, "pol.yaml", simPolicy)
+	for _, tt := range []struct {
+		name  string
+		calls string
+	}{
+		{name: "empty", calls: ""},
+		{name: "whitespace only", calls: " \n\t\r\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			calls := writeTemp(t, "calls.jsonl", tt.calls)
+			code, out := captureSimulateOutput(t, func() int {
+				return cmdSimulate([]string{"-policy", pol, "-calls", calls, "-json", "-fail-on-deny"})
+			})
+			if code != 1 {
+				t.Fatalf("empty gated simulation exit = %d, want 1; output=%s", code, out)
+			}
+			var summary struct {
+				Total     int `json:"total"`
+				Malformed int `json:"malformed"`
+			}
+			if err := json.Unmarshal(out, &summary); err != nil {
+				t.Fatalf("decode simulation JSON: %v; output=%s", err, out)
+			}
+			if summary.Total != 0 || summary.Malformed != 0 {
+				t.Fatalf("empty summary = %#v, want total=0 and malformed=0", summary)
+			}
+		})
+	}
+}
+
 func TestSimulate_TableReportsAppliedActions(t *testing.T) {
 	shadowPolicy := strings.Replace(simPolicy, "mode: enforcement", "mode: shadow", 1)
 	pol := writeTemp(t, "shadow.yaml", shadowPolicy)

@@ -144,7 +144,7 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	emitAudited := func(dec, reason string, result *domain.EvaluationResult) {
 		emitHookDecisionTo(stdout, dec, reason)
 		if *auditLog != "" {
-			_ = appendHookAudit(*auditLog, env, result, dec, reason)
+			appendHookAuditBestEffort(os.Stderr, *auditLog, env, result, dec, reason)
 		}
 	}
 
