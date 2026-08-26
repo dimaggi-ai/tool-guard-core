@@ -29,6 +29,8 @@ checks = {
     "preflight rejects tags unsupported by signature verification": "Release tags must be stable semver (vN.N.N)" in workflow,
     "release refuses to mutate an already-public release": "refusing to rebuild or push release artifacts" in release_job,
     "PyPI retries are idempotent": "          skip-existing: true" in workflow,
+    "Python release builds pin source timestamps": "SOURCE_DATE_EPOCH" in workflow,
+    "Python archives are clean-rebuild reproducible": "bash scripts/verify-python-reproducible.sh" in workflow,
     "finalizer waits for artifacts and PyPI": "    needs: [release, publish-python]" in workflow,
     "checkout-free finalizer has repository context": "      GH_REPO: ${{ github.repository }}" in workflow,
     "first finalizer attempt rejects unexpected public state": "was already public on the first finalizer attempt" in workflow,

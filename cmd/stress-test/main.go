@@ -33,7 +33,7 @@
 //	./bin/stress-test -target http://localhost:9090 -tg-bin ./bin/tg -audit-log /tmp/stress.jsonl
 //
 // Output
-//   - One results line per concurrency level (successful 2xx req/s, latency
+//   - One results line per concurrency level (contract-valid req/s, latency
 //     percentiles, error breakdown by cause).
 //   - One line for the overload phase, classified as PASS (failed closed:
 //     rejected, errored, or denied — never auto-allowed an over-cap refund) or
@@ -75,15 +75,19 @@ type envelope struct {
 }
 
 type evalResult struct {
-	Decision string `json:"decision"`
+	Decision     string `json:"decision"`
+	ActionTaken  string `json:"action_taken"`
+	EscalationID string `json:"escalation_id"`
+	PollURL      string `json:"poll_url"`
 }
 
 type reqOutcome struct {
-	latency      time.Duration
-	statusCode   int
-	err          error
-	decision     string
-	mustNotAllow bool
+	latency       time.Duration
+	statusCode    int
+	err           error
+	actionTaken   string
+	contractValid bool
+	mustNotAllow  bool
 }
 
 func main() {
@@ -132,8 +136,10 @@ func main() {
 
 	overallFailClosed := true
 	floorMet := true
+	var expectedAuditRecords int64
 	for _, c := range levels {
 		res := runLevel(*target, c, *duration, 0)
+		expectedAuditRecords += int64(len(res.latencies))
 		printLevel(c, *duration, res)
 
 		if *floorConcurrency != 0 && c == *floorConcurrency {
@@ -170,6 +176,7 @@ func main() {
 	if *baselineTarget != "" {
 		fmt.Printf("\n--- relative regression phase: concurrency=%d per target for %s ---\n", *compareConcurrency, *compareDuration)
 		candidate, baseline := runTargetComparison(*target, *baselineTarget, *compareConcurrency, *compareDuration)
+		expectedAuditRecords += int64(len(candidate.latencies))
 		fmt.Println("candidate:")
 		printLevel(*compareConcurrency, *compareDuration, candidate)
 		fmt.Println("baseline:")
@@ -202,6 +209,7 @@ func main() {
 	if *overload > 0 {
 		fmt.Printf("\n--- overload phase: concurrency=%d for %s (timeout=%s) ---\n", *overload, *overloadFor, *overloadTimeout)
 		res := runLevel(*target, *overload, *overloadFor, *overloadTimeout)
+		expectedAuditRecords += int64(len(res.latencies))
 		printLevel(*overload, *overloadFor, res)
 		ok, reason := judgeOverload(res)
 		overallFailClosed = ok
@@ -214,7 +222,7 @@ func main() {
 
 	chainOK := true
 	if *auditLog != "" {
-		chainOK = verifyAuditChain(*tgBin, *auditLog)
+		chainOK = verifyAuditChain(*tgBin, *auditLog, expectedAuditRecords)
 	} else {
 		fmt.Println("\n(no -audit-log given — skipping chain-integrity check)")
 	}
@@ -237,8 +245,8 @@ type levelResult struct {
 	byStatus   map[int]int64
 	timeouts   int64
 	connErrors int64
-	wrongDec   int64           // 200 OK but decision didn't match what the amount should have produced
-	latencies  []time.Duration // completed 2xx responses only
+	wrongDec   int64           // malformed/unsupported 2xx or unsafe over-cap action
+	latencies  []time.Duration // contract-valid 200/202 responses only
 	worstHang  time.Duration
 }
 
@@ -314,17 +322,14 @@ func runLevel(target string, concurrency int, duration time.Duration, perReqTime
 				}
 				localStatus[out.statusCode]++
 				local = appendSuccessfulLatency(local, out)
-				if out.statusCode == http.StatusOK {
-					// Fail-open = an over-cap refund that came back 200 without
-					// being denied (auto-allowed, or a corrupt/empty decision).
-					// A denial is fail-CLOSED and safe — including the
-					// escalate→deny downgrade the proxy performs when the
-					// pending-escalation store saturates under overload. Under-cap
-					// outcomes vary with the loaded policy set (allow vs escalate),
-					// so they are deliberately not asserted here.
-					if out.mustNotAllow && out.decision != "denied" {
-						localWrong++
-					}
+				if out.statusCode >= 200 && out.statusCode < 300 && !out.contractValid {
+					localWrong++
+				} else if out.mustNotAllow && out.actionTaken != "denied" && out.actionTaken != "escalated" {
+					// Over-cap refunds may be denied directly or remain pending
+					// escalation, but they must never proceed. The action, not the
+					// raw decision, is authoritative in shadow mode and after the
+					// proxy's escalate→deny overload downgrade.
+					localWrong++
 				}
 			}
 		}(w)
@@ -353,12 +358,12 @@ func runTargetComparison(candidateTarget, baselineTarget string, concurrency int
 	return candidate, baseline
 }
 
-// appendSuccessfulLatency records every completed 2xx response. HTTP 202 is a
-// successful escalation outcome from tg-proxy, so excluding it makes the
-// throughput metric depend on the random policy-decision mix rather than the
-// number of requests the server handled.
+// appendSuccessfulLatency records only contract-valid evaluation responses.
+// tg-proxy uses 200 for terminal outcomes and 202 for a pending escalation;
+// another 2xx status or a malformed body is a correctness failure, not useful
+// throughput.
 func appendSuccessfulLatency(dst []time.Duration, out reqOutcome) []time.Duration {
-	if out.statusCode >= 200 && out.statusCode < 300 {
+	if out.contractValid && (out.statusCode == http.StatusOK || out.statusCode == http.StatusAccepted) {
 		return append(dst, out.latency)
 	}
 	return dst
@@ -390,8 +395,9 @@ func relativeThroughputGate(candidateRPS, baselineRPS, maxRegressionPct float64)
 // functioning proxy. Comparing only successful RPS can otherwise make a
 // candidate look faster than a baseline that spent most of the phase returning
 // errors. The relative gate is intentionally strict: either side producing a
-// transport error, timeout, non-2xx response, or wrong decision invalidates the
-// sample instead of turning correctness failures into a performance number.
+// transport error, timeout, non-contract status/body, or wrong decision
+// invalidates the sample instead of turning correctness failures into a
+// performance number.
 func comparisonResultHealthy(result levelResult) (bool, string) {
 	if result.total <= 0 {
 		return false, "no requests completed"
@@ -403,7 +409,7 @@ func comparisonResultHealthy(result levelResult) (bool, string) {
 		return false, fmt.Sprintf("wrong decisions=%d", result.wrongDec)
 	}
 	for status, count := range result.byStatus {
-		if count > 0 && (status < 200 || status >= 300) {
+		if count > 0 && status != http.StatusOK && status != http.StatusAccepted {
 			return false, fmt.Sprintf("HTTP %d responses=%d", status, count)
 		}
 	}
@@ -470,13 +476,30 @@ func fire(client *http.Client, target string, env envelope, mustNotAllow bool, t
 	defer resp.Body.Close()
 
 	out := reqOutcome{latency: elapsed, statusCode: resp.StatusCode, mustNotAllow: mustNotAllow}
-	if resp.StatusCode == http.StatusOK {
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusAccepted {
 		var r evalResult
 		if err := json.NewDecoder(resp.Body).Decode(&r); err == nil {
-			out.decision = r.Decision
+			out.actionTaken = r.ActionTaken
+			out.contractValid = validEvaluationResponse(resp.StatusCode, r)
 		}
 	}
 	return out
+}
+
+func validEvaluationResponse(status int, result evalResult) bool {
+	validDecision := result.Decision == "allowed" || result.Decision == "flagged" || result.Decision == "escalated" || result.Decision == "denied"
+	validAction := result.ActionTaken == "allowed" || result.ActionTaken == "flagged" || result.ActionTaken == "escalated" || result.ActionTaken == "denied" || result.ActionTaken == "allowed_shadow"
+	if !validDecision || !validAction {
+		return false
+	}
+	switch status {
+	case http.StatusOK:
+		return result.ActionTaken != "escalated"
+	case http.StatusAccepted:
+		return result.Decision == "escalated" && result.ActionTaken == "escalated" && result.EscalationID != "" && result.PollURL != ""
+	default:
+		return false
+	}
 }
 
 func isTimeout(err error) bool {
@@ -552,7 +575,7 @@ func printLevel(concurrency int, duration time.Duration, r levelResult) {
 	sort.Strings(statusStr)
 
 	fmt.Printf(
-		"concurrency=%-5d total=%-8d success_2xx=%-8d req/s=%-8.1f p50=%-8s p95=%-8s p99=%-8s max=%-8s conn_err=%-5d timeouts=%-5d wrong_decision=%-4d status=[%s]\n",
+		"concurrency=%-5d total=%-8d success_contract=%-8d req/s=%-8.1f p50=%-8s p95=%-8s p99=%-8s max=%-8s conn_err=%-5d timeouts=%-5d wrong_decision=%-4d status=[%s]\n",
 		concurrency, r.total, successful, rps,
 		percentile(r.latencies, 0.50), percentile(r.latencies, 0.95), percentile(r.latencies, 0.99),
 		percentile(r.latencies, 1.0),
@@ -560,7 +583,7 @@ func printLevel(concurrency int, duration time.Duration, r levelResult) {
 		strings.Join(statusStr, ","),
 	)
 	if r.wrongDec > 0 {
-		fmt.Printf("  ⚠ %d over-cap refunds returned 200 OK without being denied — a genuine fail-open, not a load issue\n", r.wrongDec)
+		fmt.Printf("  ⚠ %d responses violated the evaluation contract or let an over-cap refund proceed\n", r.wrongDec)
 	}
 }
 
@@ -575,7 +598,7 @@ func printLevel(concurrency int, duration time.Duration, r levelResult) {
 // likely get treated as fail-open by whatever's calling tg-proxy).
 func judgeOverload(r levelResult) (bool, string) {
 	if r.wrongDec > 0 {
-		return false, fmt.Sprintf("%d over-cap refunds returned 200 without a deny under overload — silent fail-open", r.wrongDec)
+		return false, fmt.Sprintf("%d responses violated the evaluation contract or let an over-cap refund proceed under overload", r.wrongDec)
 	}
 	if r.worstHang > 0 {
 		return false, fmt.Sprintf("at least one request hung past the overload timeout (worst observed: %s) instead of erroring", r.worstHang)
@@ -596,7 +619,12 @@ func judgeOverload(r levelResult) (bool, string) {
 	return true, fmt.Sprintf("%d/%d requests were cleanly rejected (connection error, timeout, or 5xx) instead of corrupting a decision", rejected, r.total)
 }
 
-func verifyAuditChain(tgBin, auditLog string) bool {
+type auditVerifyReport struct {
+	Intact  bool `json:"intact"`
+	Records int  `json:"records"`
+}
+
+func verifyAuditChain(tgBin, auditLog string, expectedRecords int64) bool {
 	cmd := exec.Command(tgBin, "verify", "-file", auditLog)
 	out, err := cmd.CombinedOutput()
 	fmt.Printf("\n--- tg verify -file %s ---\n%s\n", auditLog, strings.TrimSpace(string(out)))
@@ -604,15 +632,29 @@ func verifyAuditChain(tgBin, auditLog string) bool {
 		fmt.Println("audit chain verdict: FAIL (tg verify exited non-zero:", err, ")")
 		return false
 	}
-	// tg verify prints a JSON report; treat any "ok": false or "valid":
-	// false as a failure even though the exit code was 0, in case the
-	// command's exit-code contract ever changes underneath us.
-	if bytes.Contains(out, []byte(`"valid": false`)) || bytes.Contains(out, []byte(`"ok": false`)) {
-		fmt.Println("audit chain verdict: FAIL (report reports invalid, despite exit 0)")
+	if err := validateAuditReport(out, expectedRecords); err != nil {
+		fmt.Println("audit chain verdict: FAIL (", err, ")")
 		return false
 	}
 	fmt.Println("audit chain verdict: PASS")
 	return true
+}
+
+func validateAuditReport(out []byte, expectedRecords int64) error {
+	if expectedRecords <= 0 {
+		return fmt.Errorf("no contract-valid candidate responses were recorded")
+	}
+	var report auditVerifyReport
+	if err := json.Unmarshal(out, &report); err != nil {
+		return fmt.Errorf("decode tg verify report: %w", err)
+	}
+	if !report.Intact {
+		return fmt.Errorf("report marks the audit chain non-intact")
+	}
+	if int64(report.Records) < expectedRecords {
+		return fmt.Errorf("report contains %d records, want at least %d candidate responses", report.Records, expectedRecords)
+	}
+	return nil
 }
 
 func parseConcurrency(s string) ([]int, error) {

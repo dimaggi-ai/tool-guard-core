@@ -3,24 +3,60 @@ package main
 import (
 	"math"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
 
-func TestAppendSuccessfulLatencyCountsEvery2xxResponse(t *testing.T) {
+func TestAppendSuccessfulLatencyCountsOnlyContractValidResponses(t *testing.T) {
 	var latencies []time.Duration
 	for _, outcome := range []reqOutcome{
-		{statusCode: http.StatusOK, latency: time.Millisecond},
-		{statusCode: http.StatusAccepted, latency: 2 * time.Millisecond},
+		{statusCode: http.StatusOK, latency: time.Millisecond, contractValid: true},
+		{statusCode: http.StatusAccepted, latency: 2 * time.Millisecond, contractValid: true},
 		{statusCode: http.StatusNoContent, latency: 3 * time.Millisecond},
+		{statusCode: http.StatusOK, latency: 4 * time.Millisecond},
 		{statusCode: http.StatusFound, latency: 4 * time.Millisecond},
 		{statusCode: http.StatusInternalServerError, latency: 5 * time.Millisecond},
 	} {
 		latencies = appendSuccessfulLatency(latencies, outcome)
 	}
 
-	if got, want := len(latencies), 3; got != want {
-		t.Fatalf("successful latency count = %d, want %d (200, 202, and 204 only)", got, want)
+	if got, want := len(latencies), 2; got != want {
+		t.Fatalf("successful latency count = %d, want %d (valid 200 and 202 only)", got, want)
+	}
+}
+
+func TestFireRejectsEmpty204AndMalformedDecisionBodies(t *testing.T) {
+	tests := []struct {
+		name       string
+		status     int
+		body       string
+		wantValid  bool
+		wantAction string
+	}{
+		{name: "empty 204", status: http.StatusNoContent},
+		{name: "empty 200", status: http.StatusOK},
+		{name: "valid deny", status: http.StatusOK, body: `{"decision":"denied","action_taken":"denied"}`, wantValid: true, wantAction: "denied"},
+		{name: "valid escalation", status: http.StatusAccepted, body: `{"decision":"escalated","action_taken":"escalated","escalation_id":"esc-1","poll_url":"/escalations/esc-1"}`, wantValid: true, wantAction: "escalated"},
+		{name: "202 missing poll metadata", status: http.StatusAccepted, body: `{"decision":"escalated","action_taken":"escalated"}`, wantAction: "escalated"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer server.Close()
+
+			out := fire(server.Client(), server.URL, envelope{}, true, time.Second)
+			if out.contractValid != tt.wantValid || out.actionTaken != tt.wantAction {
+				t.Fatalf("fire() valid/action = %v/%q, want %v/%q", out.contractValid, out.actionTaken, tt.wantValid, tt.wantAction)
+			}
+			if got := len(appendSuccessfulLatency(nil, out)); got != boolInt(tt.wantValid) {
+				t.Fatalf("successful latency count = %d, want %d", got, boolInt(tt.wantValid))
+			}
+		})
 	}
 }
 
@@ -106,6 +142,7 @@ func TestComparisonResultHealthyRejectsCorrectnessAndAvailabilityFailures(t *tes
 		{name: "empty", result: levelResult{byStatus: map[int]int64{}}},
 		{name: "server errors", result: levelResult{total: 2, byStatus: map[int]int64{200: 1, 500: 1}, latencies: []time.Duration{time.Millisecond}}},
 		{name: "client errors", result: levelResult{total: 2, byStatus: map[int]int64{200: 1, 429: 1}, latencies: []time.Duration{time.Millisecond}}},
+		{name: "unsupported 2xx", result: levelResult{total: 1, byStatus: map[int]int64{204: 1}}},
 		{name: "connection errors", result: levelResult{total: 2, byStatus: map[int]int64{200: 1}, connErrors: 1, latencies: []time.Duration{time.Millisecond}}},
 		{name: "timeouts", result: levelResult{total: 2, byStatus: map[int]int64{200: 1}, timeouts: 1, latencies: []time.Duration{time.Millisecond}}},
 		{name: "wrong decisions", result: levelResult{total: 1, byStatus: map[int]int64{200: 1}, wrongDec: 1, latencies: []time.Duration{time.Millisecond}}},
@@ -119,4 +156,36 @@ func TestComparisonResultHealthyRejectsCorrectnessAndAvailabilityFailures(t *tes
 			}
 		})
 	}
+}
+
+func TestValidateAuditReportRequiresIntactExpectedRecords(t *testing.T) {
+	tests := []struct {
+		name     string
+		report   string
+		expected int64
+		wantErr  bool
+	}{
+		{name: "valid", report: `{"intact":true,"records":3}`, expected: 3},
+		{name: "allows preexisting records", report: `{"intact":true,"records":5}`, expected: 3},
+		{name: "empty expected", report: `{"intact":true,"records":0}`, wantErr: true},
+		{name: "empty report", report: `{"intact":true,"records":0}`, expected: 1, wantErr: true},
+		{name: "too few records", report: `{"intact":true,"records":2}`, expected: 3, wantErr: true},
+		{name: "not intact", report: `{"intact":false,"records":3}`, expected: 3, wantErr: true},
+		{name: "malformed", report: `{`, expected: 1, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateAuditReport([]byte(tt.report), tt.expected)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("validateAuditReport() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }

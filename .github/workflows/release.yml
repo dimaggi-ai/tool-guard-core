@@ -63,8 +63,9 @@ jobs:
           python-version: "3.12"
       - name: Build and validate distributions
         run: |
+          export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
           python -m pip install --disable-pip-version-check build twine
-          python -m build --outdir dist/python sdk/python
+          bash scripts/verify-python-reproducible.sh dist/python
           python -m twine check dist/python/*
           python scripts/verify-python-dist.py dist/python --expected-version "${GITHUB_REF_NAME#v}"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

@@ -250,9 +250,12 @@ passes have real precedent instead of a starting from scratch.
   failed. A second pass found that GoReleaser did not reuse its staged draft,
   prerelease-shaped tags could enter a workflow whose signature identity only
   accepted stable semver, and the changelog still described 0.8 as planned.
-  The workflow now checks these state transitions explicitly, and mutation
-  probes plus exact-artifact tests guard their order and failure behavior. →
-  pillars 2, 4, and 6.
+  The final adversarial pass also proved that HTTP 204 responses with no
+  decision body and an empty audit report could pass the nightly stress gate.
+  The workflow now checks release state transitions explicitly, clean rebuilds
+  must produce identical Python artifacts, and the stress harness accepts only
+  contract-valid 200/202 bodies while requiring the audit report to contain at
+  least the corresponding candidate records. → pillars 2, 4, and 6.
 
 ## Where this fits in the release checklist
 

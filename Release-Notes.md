@@ -106,7 +106,9 @@ If a step fails before promotion, the GitHub Release remains a draft; inspect
 the failed workflow, preserve the same tag and artifacts, and rerun the
 publish path only after correcting the release infrastructure. GoReleaser
 reuses that draft and replaces its uploaded assets with bytes rebuilt from the
-same immutable tag. A
+same immutable tag. Python distribution timestamps and gzip metadata are
+normalized from that tag's commit time so a full workflow rerun produces the
+same wheel and source-archive digests. A
 runner can lose its response after promotion succeeds; on that retry, the
 finalizer rechecks the registries, recognizes the already-public release, and
 verifies its final state instead of attempting to republish artifacts.
