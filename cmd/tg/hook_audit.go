@@ -1,9 +1,6 @@
 package main
 
 import (
-	"bufio"
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -20,9 +17,9 @@ import (
 // the decision (that was already made); the record is what's at risk, not the
 // enforcement. Returns an error only for the caller to optionally log.
 //
-// The tail hash is read from a verifier-sized window at the END of the file
-// (not by scanning the whole thing), so appending stays O(1) per call even as
-// the log grows across a long agent session.
+// Before resuming, the complete existing chain is verified under the append
+// lock. This is O(n) in the log size, but prevents the hook from extending a
+// chain that its own offline verifier already considers invalid.
 func appendHookAudit(path string, env *domain.ActionEnvelope, result *domain.EvaluationResult, decision, reason string) error {
 	amount, amountStatus := engine.EvaluatedAmount(env)
 	timestamp := env.Timestamp
@@ -80,7 +77,7 @@ func appendHookAudit(path string, env *domain.ActionEnvelope, result *domain.Eva
 	}
 	defer unlock()
 
-	prev, err := lastTraceHash(path)
+	prev, needsSeparator, err := verifyHookAuditChain(path)
 	if err != nil {
 		return err
 	}
@@ -100,10 +97,6 @@ func appendHookAudit(path string, env *domain.ActionEnvelope, result *domain.Eva
 		return err
 	}
 	defer f.Close()
-	needsSeparator, err := audit.NeedsRecordSeparator(f)
-	if err != nil {
-		return err
-	}
 	record := make([]byte, 0, len(line)+2)
 	if needsSeparator {
 		record = append(record, '\n')
@@ -161,155 +154,29 @@ func hookDecisionToDomain(decision string) (domain.Decision, domain.ActionTaken)
 	}
 }
 
-// lastTraceHash returns the trace_hash of the last record in the chain, or
-// "" if the file is empty/absent. It reads at most one verifier-sized record
-// from the tail; an oversized record fails instead of silently starting a new
-// chain.
-func lastTraceHash(path string) (string, error) {
+// verifyHookAuditChain replays the complete existing log before any append and
+// returns its verified tail plus the physical JSONL delimiter state. A missing
+// file is a new chain. The caller holds the hook append lock throughout.
+func verifyHookAuditChain(path string) (string, bool, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return "", nil
+			return "", false, nil
 		}
-		return "", err
+		return "", false, err
 	}
 	defer f.Close()
 
-	fi, err := f.Stat()
+	report, err := audit.VerifyChainFromReader(f)
 	if err != nil {
-		return "", err
+		return "", false, fmt.Errorf("verify existing audit chain: %w", err)
 	}
-	if fi.Size() == 0 {
-		return "", nil
+	if !report.Intact {
+		return "", false, fmt.Errorf("existing audit chain failed at line %d: %s", report.FirstFailureAt, report.FailureReason)
 	}
-	if err := validateAuditGenesis(f, fi.Size()); err != nil {
-		return "", err
-	}
-
-	// The streaming verifier permits empty LF and CRLF records. Seek backward
-	// past that complete suffix before applying the bounded-record window so
-	// any number of blank lines cannot consume delimiter headroom and make a
-	// valid exact-max tail look oversized. A bare CR is record content under
-	// bufio.ScanLines, so only skip one when it immediately precedes an LF.
-	logicalEnd := fi.Size()
-	chunk := make([]byte, 4096)
-	afterLF := false
-
-scanBlankSuffix:
-	for logicalEnd > 0 {
-		chunkStart := logicalEnd - int64(len(chunk))
-		if chunkStart < 0 {
-			chunkStart = 0
-		}
-		n, readErr := f.ReadAt(chunk[:logicalEnd-chunkStart], chunkStart)
-		if readErr != nil && readErr != io.EOF {
-			return "", readErr
-		}
-		i := n - 1
-		for i >= 0 {
-			switch {
-			case chunk[i] == '\n':
-				afterLF = true
-				i--
-			case chunk[i] == '\r' && afterLF:
-				afterLF = false
-				i--
-			default:
-				logicalEnd = chunkStart + int64(i+1)
-				break scanBlankSuffix
-			}
-		}
-		logicalEnd = chunkStart
-	}
-	if logicalEnd == 0 {
-		return "", nil
-	}
-
-	// Include one preceding delimiter. That distinguishes a complete
-	// max-sized final record from a window beginning inside an oversized one.
-	tailWindow := int64(audit.MaxTraceRecordBytes + 1)
-	start := logicalEnd - tailWindow
-	if start < 0 {
-		start = 0
-	}
-	if _, err := f.Seek(start, io.SeekStart); err != nil {
-		return "", err
-	}
-	data := make([]byte, logicalEnd-start)
-	if _, err := io.ReadFull(f, data); err != nil {
-		return "", err
-	}
-
-	// Use the final remaining delimiter as the start boundary of the last
-	// record. If the bounded window starts mid-file and contains no delimiter,
-	// the final record is too large for the verifier as well.
-	var lastLine []byte
-	if i := bytes.LastIndexByte(data, '\n'); i >= 0 {
-		lastLine = data[i+1:]
-	} else {
-		if start > 0 {
-			return "", fmt.Errorf("audit tail: last record exceeds %d bytes", audit.MaxTraceRecordBytes)
-		}
-		lastLine = data
-	}
-	if len(lastLine) > audit.MaxTraceRecordBytes {
-		return "", fmt.Errorf("audit tail: last record exceeds %d bytes", audit.MaxTraceRecordBytes)
-	}
-	if len(lastLine) == 0 {
-		return "", nil
-	}
-	if len(bytes.TrimSpace(lastLine)) == 0 {
-		return "", fmt.Errorf("audit tail: whitespace-only trailing record")
-	}
-	var rec domain.DecisionTrace
-	if err := json.Unmarshal(lastLine, &rec); err != nil {
-		return "", fmt.Errorf("parse audit tail: %w", err)
-	}
-	ok, err := audit.VerifyCanonicalTraceHash(&rec)
+	needsSeparator, err := audit.NeedsRecordSeparator(f)
 	if err != nil {
-		return "", fmt.Errorf("verify audit tail: %w", err)
+		return "", false, fmt.Errorf("inspect existing audit delimiter: %w", err)
 	}
-	if !ok {
-		return "", fmt.Errorf("verify audit tail: trace %q hash mismatch", rec.TraceID)
-	}
-	return rec.TraceHash, nil
-}
-
-// validateAuditGenesis rejects a detached prefix before the bounded tail read.
-// Reading stops after the first non-empty record, so normal appends do not
-// replay the whole log; operators still use `tg verify` for complete-chain
-// validation. io.NewSectionReader keeps this check independent of f's offset.
-func validateAuditGenesis(f *os.File, size int64) error {
-	sc := bufio.NewScanner(io.NewSectionReader(f, 0, size))
-	sc.Buffer(make([]byte, 0, 64*1024), audit.MaxTraceRecordScanBytes)
-	line := 0
-	for sc.Scan() {
-		line++
-		raw := sc.Bytes()
-		if len(raw) > audit.MaxTraceRecordBytes {
-			return fmt.Errorf("audit genesis: record exceeds %d bytes", audit.MaxTraceRecordBytes)
-		}
-		if len(raw) == 0 {
-			continue
-		}
-		var genesis domain.DecisionTrace
-		if err := json.Unmarshal(raw, &genesis); err != nil {
-			return fmt.Errorf("audit genesis line %d: parse JSON: %w", line, err)
-		}
-		if genesis.PreviousTraceHash != "" {
-			return fmt.Errorf("audit genesis line %d: previous_trace_hash must be empty, got %q", line, genesis.PreviousTraceHash)
-		}
-		ok, err := audit.VerifyCanonicalTraceHash(&genesis)
-		if err != nil {
-			return fmt.Errorf("audit genesis line %d: canonical hash: %w", line, err)
-		}
-		if !ok {
-			return fmt.Errorf("audit genesis line %d: trace %q hash mismatch", line, genesis.TraceID)
-		}
-		return nil
-	}
-	if err := sc.Err(); err != nil {
-		return fmt.Errorf("audit genesis: scan: %w", err)
-	}
-	return nil
+	return report.Tail, needsSeparator, nil
 }

@@ -176,31 +176,6 @@ func TestAppendHookAudit_ConcurrentNoFork(t *testing.T) {
 	}
 }
 
-// TestLastTraceHash_TailReadDropsPartialLine is the A2 regression: when the
-// last record starts before the 64KB tail window, lastTraceHash must skip the
-// leading partial line and still return the correct final hash (never a
-// garbage partial).
-func TestLastTraceHash_TailReadDropsPartialLine(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "audit.jsonl")
-	// Write enough records that the earliest ones fall outside the 64KB tail.
-	const n = 400
-	for i := 0; i < n; i++ {
-		if err := appendHookAudit(path, auditEnv("env"), nil, "allow", strings.Repeat("x", 300)); err != nil {
-			t.Fatalf("append %d: %v", i, err)
-		}
-	}
-	chain := readChain(t, path)
-	want := chain[len(chain)-1][1]
-
-	got, err := lastTraceHash(path)
-	if err != nil {
-		t.Fatalf("lastTraceHash: %v", err)
-	}
-	if got != want {
-		t.Errorf("lastTraceHash returned %q, want last record hash %q", got, want)
-	}
-}
-
 func TestAppendHookAudit_LargeRecordKeepsNextLink(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.jsonl")
 	large := &domain.EvaluationResult{
@@ -377,7 +352,7 @@ func TestAppendHookAudit_ExtendsExactMaxRecordAfterBlankLines(t *testing.T) {
 	}
 }
 
-func TestAppendHookAudit_RejectsBareCRBeyondExactMaxRecord(t *testing.T) {
+func TestAppendHookAudit_ExtendsExactMaxRecordEndingBareCR(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.jsonl")
 	first := hookAuditTraceOfSize(t, audit.MaxTraceRecordBytes)
 	line, err := audit.MarshalTraceRecord(first)
@@ -389,9 +364,23 @@ func TestAppendHookAudit_RejectsBareCRBeyondExactMaxRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = appendHookAudit(path, auditEnv("next"), nil, "allow", "ok")
-	if err == nil || !strings.Contains(err.Error(), "record exceeds") {
-		t.Fatalf("append error = %v, want verifier-size rejection", err)
+	before, err := audit.VerifyChainFromReader(bytes.NewReader(contents))
+	if err != nil || !before.Intact || before.Records != 1 {
+		t.Fatalf("bare-CR seed verification = %#v, err=%v", before, err)
+	}
+	if err := appendHookAudit(path, auditEnv("next"), nil, "allow", "ok"); err != nil {
+		t.Fatalf("append after exact-max bare-CR record: %v", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(raw, []byte("\r\n{")) {
+		t.Fatalf("bare CR was not completed as a CRLF delimiter")
+	}
+	report, err := audit.VerifyChainFromReader(bytes.NewReader(raw))
+	if err != nil || !report.Intact || report.Records != 2 {
+		t.Fatalf("bare-CR resumed chain = %#v, err=%v", report, err)
 	}
 }
 
@@ -423,6 +412,30 @@ func TestAppendHookAudit_RejectsDetachedSuffix(t *testing.T) {
 	}
 }
 
+func TestAppendHookAuditBestEffort_RejectsCanonicalVersionDowngrade(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "pkg", "audit", "testdata", "v2-then-v070-hook.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, fixture, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stderr bytes.Buffer
+	appendHookAuditBestEffort(&stderr, path, auditEnv("next"), nil, "allow", "ok")
+	if got := stderr.String(); !strings.Contains(got, "audit append failed") || !strings.Contains(got, "canonical version downgrade") {
+		t.Fatalf("stderr = %q, want surfaced canonical-downgrade warning", got)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, fixture) {
+		t.Fatal("rejected canonical-downgrade append changed the audit file")
+	}
+}
+
 func TestAppendHookAudit_RejectsTamperedTailHash(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.jsonl")
 	if err := appendHookAudit(path, auditEnv("first"), nil, "allow", "ok"); err != nil {
@@ -447,7 +460,7 @@ func TestAppendHookAudit_RejectsTamperedTailHash(t *testing.T) {
 	}
 
 	err = appendHookAudit(path, auditEnv("next"), nil, "allow", "ok")
-	if err == nil || !strings.Contains(err.Error(), "hash mismatch") {
+	if err == nil || !strings.Contains(err.Error(), "trace_hash") {
 		t.Fatalf("append error = %v, want tampered-hash rejection", err)
 	}
 	got, readErr := os.ReadFile(path)
@@ -507,7 +520,7 @@ func TestAppendHookAudit_RejectsWhitespaceOnlyTrailingRecord(t *testing.T) {
 	}
 
 	err = appendHookAudit(path, auditEnv("next"), nil, "allow", "ok")
-	if err == nil || !strings.Contains(err.Error(), "whitespace-only trailing record") {
+	if err == nil || !strings.Contains(err.Error(), "parse JSON") {
 		t.Fatalf("append error = %v, want whitespace-only-tail rejection", err)
 	}
 	after, err := os.Stat(path)

@@ -67,6 +67,11 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   chain whose final record is terminated by EOF rather than LF. The first
   resumed append prefixes the missing delimiter in the same write, including
   when the tail is in a rotated file and the active file is empty.
+- Before each hook append, the complete existing chain is replayed under the
+  append lock. The hook refuses to extend a chain with a broken link, hash, or
+  canonical-version downgrade and surfaces the lost audit record on stderr.
+  This intentionally replaces the historical O(1) tail-only recovery with an
+  O(n) integrity check in the size of the active hook log.
 - This intentionally supersedes the 0.7 documentation that described a future
   v2 writer as opt-in. Keeping v1 as the default would leave the new
   applied-action attribution outside the integrity commitment. Because Tool
@@ -794,7 +799,8 @@ Enterprise boundary is unchanged (deny-only, no redaction/inference/signing).
   a SHA-256 hash-chained JSONL log (verify with `tg verify`), so the
   coding-agent guard leaves a tamper-evident record like `tg-proxy` does. Tail
   read keeps appends O(1) per call. Best-effort: an audit failure never
-  changes the decision.
+  changes the decision. (The O(1) tail-only recovery described here was the
+  0.4 behavior; 0.8 supersedes it with full-chain replay before each append.)
 - **`tg coverage` verb** — measures what fraction of an agent's tool calls have
   ANY governing policy (scope-match), versus what passes only because nothing
   governs it. Reads a JSONL of envelopes *or* decision traces, so it runs

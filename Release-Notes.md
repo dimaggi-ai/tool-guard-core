@@ -450,8 +450,10 @@ effect: deny
 The hook path (`tg hook`, the PreToolUse guard for Claude Code / Codex /
 Antigravity) now appends every decision to a SHA-256 hash-chained JSONL log,
 verifiable offline with `tg verify` — the same guarantee `tg-proxy` already
-had. Tail-read keeps each append O(1). Best-effort: an audit-write failure
-never changes the returned decision.
+had. At introduction, tail-read kept each append O(1); 0.8 supersedes that
+with full-chain replay before each append so the hook cannot extend a chain
+its verifier rejects. Best-effort: an audit-write failure never changes the
+returned decision.
 
 ### 4. `tg coverage` — measure what's actually governed
 
