@@ -478,3 +478,126 @@ func TestEscalationExpiry_PreRotationFailureLeavesPendingWithoutTerminalTrace(t 
 		t.Fatal("uncertain expiry pre-rotation did not poison writer")
 	}
 }
+
+func TestEscalationApproval_TransientExpiryAuditFailureCannotAuthorizePastDueEntry(t *testing.T) {
+	p := newOperationalTestProxy(t, nil, false)
+	p.approverToken = "secret"
+	id := "past-due-after-transient-expiry-failure"
+	if e := p.escalations.add(envFor(id), decisionFor(domain.DecisionEscalated), 15); e == nil {
+		t.Fatal("seed escalation failed")
+	}
+	p.escalations.mu.Lock()
+	p.escalations.entries[id].ExpiresAt = time.Now().Add(-time.Second)
+	p.escalations.mu.Unlock()
+
+	fault := &faultInjectAuditFile{
+		auditLogFile:          p.auditLog,
+		statFailuresRemaining: 1,
+	}
+	p.auditLog = fault
+	expired, failures := p.escalations.reapExpiredAudited(p.emitEscalationExpiry)
+	if len(expired) != 0 || len(failures) != 1 {
+		t.Fatalf("expiry results = %d expired/%d failures, want 0/1", len(expired), len(failures))
+	}
+	if got := p.escalations.get(id); got == nil || got.State != EscPending || got.ResolvedAt != nil {
+		t.Fatalf("failed audited expiry state = %#v, want unresolved pending", got)
+	}
+	if p.auditPoisoned {
+		t.Fatal("proven pre-write expiry failure unexpectedly poisoned writer")
+	}
+
+	rec := resolveEscalationRequest(t, p, id, "approve")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("past-due approval status = %d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"error":"escalation_past_due"`) ||
+		!strings.Contains(body, `"state":"pending"`) ||
+		!strings.Contains(body, "do not authorize the action") {
+		t.Fatalf("past-due response lacks structured recovery guidance: %s", body)
+	}
+	if got := p.escalations.get(id); got == nil || got.State != EscPending || got.ResolvedAt != nil {
+		t.Fatalf("past-due approval changed state = %#v, want unresolved pending", got)
+	}
+	if fault.writeCalls != 0 {
+		t.Fatalf("past-due approval wrote %d audit records, want 0", fault.writeCalls)
+	}
+	if traces := readOperationalTraces(t, p); len(traces) != 0 {
+		t.Fatalf("past-due approval emitted terminal traces: %#v", traces)
+	}
+}
+
+func TestEscalationExpiry_DurableAuditPrecedesExpiredState(t *testing.T) {
+	p := newOperationalTestProxy(t, nil, false)
+	p.auditSyncMode = "none" // expiry must force durability in every mode
+	id := "durably-expired"
+	if e := p.escalations.add(envFor(id), decisionFor(domain.DecisionEscalated), 15); e == nil {
+		t.Fatal("seed escalation failed")
+	}
+	p.escalations.mu.Lock()
+	p.escalations.entries[id].ExpiresAt = time.Now().Add(-time.Second)
+	p.escalations.mu.Unlock()
+	fault := &faultInjectAuditFile{auditLogFile: p.auditLog}
+	p.auditLog = fault
+
+	expired, failures := p.escalations.reapExpiredAudited(p.emitEscalationExpiry)
+	if len(expired) != 1 || len(failures) != 0 {
+		t.Fatalf("expiry results = %d expired/%d failures, want 1/0", len(expired), len(failures))
+	}
+	got := p.escalations.get(id)
+	if got == nil || got.State != EscExpired || got.ResolvedAt == nil {
+		t.Fatalf("durable expiry state = %#v, want resolved expired", got)
+	}
+	if fault.writeCalls != 1 || fault.syncCalls != 1 || p.auditPoisoned || p.auditFailureCount.Load() != 0 {
+		t.Fatalf(
+			"durable expiry audit state: writes=%d syncs=%d poisoned=%v failures=%d, want 1/1/false/0",
+			fault.writeCalls, fault.syncCalls, p.auditPoisoned, p.auditFailureCount.Load(),
+		)
+	}
+	traces := readOperationalTraces(t, p)
+	if len(traces) != 1 || traces[0].EnvelopeID != id ||
+		traces[0].Decision != domain.DecisionDenied || traces[0].ActionTaken != domain.ActionDenied {
+		t.Fatalf("durable expiry traces = %#v, want one denied record for %s", traces, id)
+	}
+}
+
+func TestEscalationExpiry_AmbiguousTerminalWriteBecomesIndeterminate(t *testing.T) {
+	p := newOperationalTestProxy(t, nil, false)
+	id := "indeterminate-expiry"
+	if e := p.escalations.add(envFor(id), decisionFor(domain.DecisionEscalated), 15); e == nil {
+		t.Fatal("seed escalation failed")
+	}
+	p.escalations.mu.Lock()
+	p.escalations.entries[id].ExpiresAt = time.Now().Add(-time.Second)
+	p.escalations.mu.Unlock()
+	fault := &faultInjectAuditFile{
+		auditLogFile:             p.auditLog,
+		fullWriteErrorsRemaining: 1,
+		failTruncate:             true,
+	}
+	p.auditLog = fault
+
+	expired, failures := p.escalations.reapExpiredAudited(p.emitEscalationExpiry)
+	if len(expired) != 0 || len(failures) != 1 {
+		t.Fatalf("expiry results = %d expired/%d failures, want 0/1", len(expired), len(failures))
+	}
+	if !errors.Is(failures[0].Err, errAuditStateIndeterminate) ||
+		!errors.Is(failures[0].Err, errAuditRecordCommitted) {
+		t.Fatalf("ambiguous expiry error = %v, want indeterminate committed record", failures[0].Err)
+	}
+	got := p.escalations.get(id)
+	if got == nil || got.State != EscIndeterminate || got.ResolvedAt == nil {
+		t.Fatalf("ambiguous expiry state = %#v, want resolved indeterminate", got)
+	}
+	if fault.writeCalls != 1 || !p.auditPoisoned || p.auditFailureCount.Load() != 1 {
+		t.Fatalf(
+			"ambiguous expiry audit state: writes=%d poisoned=%v failures=%d, want 1/true/1",
+			fault.writeCalls, p.auditPoisoned, p.auditFailureCount.Load(),
+		)
+	}
+	traces := readOperationalTraces(t, p)
+	if len(traces) != 1 || traces[0].EnvelopeID != id ||
+		traces[0].Decision != domain.DecisionDenied || traces[0].ActionTaken != domain.ActionDenied {
+		t.Fatalf("ambiguous expiry traces = %#v, want one possibly-written denied record for %s", traces, id)
+	}
+}

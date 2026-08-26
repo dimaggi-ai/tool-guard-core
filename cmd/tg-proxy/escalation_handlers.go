@@ -88,6 +88,15 @@ func (p *proxy) escalationByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
+		if errors.Is(auditErr, errEscalationPastDue) {
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error":           "escalation_past_due",
+				"message":         "escalation is past expires_at and cannot be approved or denied while its expiry audit transition is pending",
+				"resolution_hint": "do not authorize the action; allow the expiry reaper to publish expired after its audit record succeeds, repairing the audit writer if necessary",
+				"escalation":      e,
+			})
+			return
+		}
 		if auditErr != nil {
 			message := "escalation resolution was not committed because its audit record could not be written durably"
 			hint := "repair the audit writer, then retry this pending escalation"

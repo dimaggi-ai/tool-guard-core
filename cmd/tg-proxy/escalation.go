@@ -22,6 +22,8 @@ const (
 	EscIndeterminate EscalationState = "indeterminate"
 )
 
+var errEscalationPastDue = errors.New("escalation is past due")
+
 // Escalation is one human-review decision and its lifecycle state.
 type Escalation struct {
 	ID             string                  `json:"id"` // envelope_id, reused
@@ -171,6 +173,14 @@ func (s *escalationStore) resolveAudited(
 	if e.State != EscPending {
 		ec := *e
 		return &ec, false, nil // already resolved
+	}
+	// The reaper may leave a due entry pending when it can prove that the
+	// expiry audit record was not written. Pending is an audit-recovery state
+	// in that case, not a renewed authorization window: never let a late human
+	// resolution bypass the original expiry deadline.
+	if !time.Now().UTC().Before(e.ExpiresAt) {
+		ec := *e
+		return &ec, false, errEscalationPastDue
 	}
 	candidate := *e
 	now := time.Now().UTC()

@@ -96,7 +96,9 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   approval cannot bypass the unresolved state. Expiration now uses the same
   audit-before-publish transaction as human resolution: a proven pre-write
   failure leaves the escalation pending, while a possibly written terminal
-  record makes its state `indeterminate`.
+  record makes its state `indeterminate`. A pending entry never regains an
+  authorization window after `expires_at`: late approval and denial return a
+  structured `escalation_past_due` conflict without writing an `allowed` trace.
 - Compile-only `js/wasm` and `wasip1/wasm` proxy builds no longer reference
   unavailable process-signal constants. Native SIGHUP reload and graceful
   shutdown behavior is unchanged.

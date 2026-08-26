@@ -89,6 +89,15 @@ The reaper sweeps every 30 seconds; any pending entry past its
 `expires_at` becomes `expired`. The agent's poll loop should treat
 `expired` the same as `denied`.
 
+Expiry is also audit-before-publish. A proven pre-write audit failure leaves
+the overdue entry visibly `pending` so the reaper can retry, but the original
+deadline remains authoritative: approval and denial return HTTP 409
+`escalation_past_due` and cannot emit an authorization trace. Repair the audit
+writer if necessary and let the reaper complete the `expired` transition. If a
+terminal expiry record may have been written but cannot be proven durable, the
+entry becomes `indeterminate`; follow the audit-reconciliation procedure above
+and never authorize the original action.
+
 ## Example policy
 
 ```yaml

@@ -162,7 +162,7 @@ The full flag list, copied from `tg-proxy -help`:
 -audit-sync-every int
     when audit-sync-mode=interval, fsync once every N appends (default 100)
 -audit-rotate-bytes int
-    rotate audit log when active file exceeds this many bytes
+    rotate a non-empty audit log before the next record would meet or exceed this many bytes
     (0 = never rotate)
 -rate-limit-rps float
     per-agent steady-state limit (req/s); 0 disables
