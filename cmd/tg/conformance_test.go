@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -32,8 +33,9 @@ type conformanceCase struct {
 	Mode        string                 `json:"mode"`
 	Envelope    map[string]interface{} `json:"envelope"`
 	Expect      struct {
-		Decision    string `json:"decision"`
-		ActionTaken string `json:"action_taken"`
+		Decision       string   `json:"decision"`
+		ActionTaken    string   `json:"action_taken"`
+		MatchedRuleIDs []string `json:"matched_rule_ids,omitempty"`
 	} `json:"expect"`
 }
 
@@ -119,7 +121,40 @@ func TestConformance(t *testing.T) {
 				t.Errorf("%s: action_taken = %q, want %q (reason: %s)",
 					c.Description, result.ActionTaken, c.Expect.ActionTaken, result.DecisionReason)
 			}
+			if c.Expect.MatchedRuleIDs != nil {
+				got := matchedRuleIDs(result.RuleResults)
+				want := slices.Clone(c.Expect.MatchedRuleIDs)
+				slices.Sort(want)
+				if !slices.Equal(got, want) {
+					t.Errorf("%s: matched_rule_ids = %q, want exact set %q",
+						c.Description, got, want)
+				}
+			}
 		})
+	}
+}
+
+func matchedRuleIDs(results []domain.RuleResult) []string {
+	ids := make([]string, 0, len(results))
+	for _, result := range results {
+		if result.Matched {
+			ids = append(ids, result.RuleID)
+		}
+	}
+	slices.Sort(ids)
+	return ids
+}
+
+func TestMatchedRuleIDsIncludesOnlyMatchedRulesAndPreservesDuplicates(t *testing.T) {
+	results := []domain.RuleResult{
+		{RuleID: "rule-b", Matched: true},
+		{RuleID: "ignored", Matched: false},
+		{RuleID: "rule-a", Matched: true},
+		{RuleID: "rule-a", Matched: true},
+	}
+	want := []string{"rule-a", "rule-a", "rule-b"}
+	if got := matchedRuleIDs(results); !slices.Equal(got, want) {
+		t.Fatalf("matchedRuleIDs() = %q, want %q", got, want)
 	}
 }
 

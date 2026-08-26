@@ -8,5 +8,5 @@
     "tool_group": "banking",
     "parameters": {"amount": 2500, "currency": "USD", "beneficiary": "acct-9"}
   },
-  "expect": {"decision": "escalated", "action_taken": "escalated"}
+  "expect": {"decision": "escalated", "action_taken": "escalated", "matched_rule_ids": ["rule-irreversible-escalate"]}
 }

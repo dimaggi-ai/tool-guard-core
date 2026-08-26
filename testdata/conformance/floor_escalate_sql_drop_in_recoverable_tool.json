@@ -7,5 +7,5 @@
     "tool_name": "update_records",
     "parameters": {"sql": "DROP TABLE users"}
   },
-  "expect": {"decision": "escalated", "action_taken": "escalated"}
+  "expect": {"decision": "escalated", "action_taken": "escalated", "matched_rule_ids": ["rule-irreversible-escalate"]}
 }

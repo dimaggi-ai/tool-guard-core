@@ -392,6 +392,17 @@ func TestIntegration_LintExitCodes(t *testing.T) {
 			t.Errorf("expected schema version in error; got: %s", stderr)
 		}
 	})
+
+	t.Run("comment-only policy is a named load error", func(t *testing.T) {
+		p := writeFile(t, dir, "comment-only.yaml", "# no policy content\n")
+		code, _, stderr := exitCode(t, "lint", "-policy", p)
+		if code != 1 {
+			t.Fatalf("exit = %d, want 1; stderr=%s", code, stderr)
+		}
+		if !strings.Contains(stderr, "comment-only.yaml") || !strings.Contains(stderr, "empty or comment-only") {
+			t.Errorf("expected filename and recovery hint in error; got: %s", stderr)
+		}
+	})
 }
 
 // ── tg benchmark ───────────────────────────────────────────────────────────

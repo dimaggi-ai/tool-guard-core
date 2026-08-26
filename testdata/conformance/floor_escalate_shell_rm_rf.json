@@ -7,5 +7,5 @@
     "tool_name": "apply_changes",
     "parameters": {"command": "rm -rf /var/data"}
   },
-  "expect": {"decision": "escalated", "action_taken": "escalated"}
+  "expect": {"decision": "escalated", "action_taken": "escalated", "matched_rule_ids": ["rule-irreversible-escalate"]}
 }

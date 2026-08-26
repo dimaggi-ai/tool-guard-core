@@ -8,5 +8,5 @@
     "tool_group": "filesystem_writes",
     "parameters": {"file_path": "/etc/tool-guard/policies/custom.yaml", "content": "policy_id: x"}
   },
-  "expect": {"decision": "escalated", "action_taken": "escalated"}
+  "expect": {"decision": "escalated", "action_taken": "escalated", "matched_rule_ids": ["rule-floor-self-protection"]}
 }
