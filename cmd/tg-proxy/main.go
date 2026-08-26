@@ -6,7 +6,7 @@
 //
 //	POST /evaluate         — body: ActionEnvelope JSON; returns EvaluationResult JSON
 //	GET  /healthz          — 200 OK if process is alive
-//	GET  /readyz           — 200 OK if at least one policy is loaded
+//	GET  /readyz           — 200 OK if policies are loaded and audit is healthy
 //	GET  /policies         — list of loaded policy IDs (debugging)
 //	GET  /metrics          — plain-text counters
 //	POST /reload           — re-read -policy-dir on demand (also fires on SIGHUP)
@@ -32,13 +32,11 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
@@ -57,16 +55,32 @@ import (
 	_ "github.com/dimaggi-ai/tool-guard-core/pkg/sqlguard/mssql"
 )
 
-// proxy holds the runtime state of the server. policies and lastHash are
-// the only mutable fields; both are guarded by mu so SIGHUP reload and
-// concurrent /evaluate requests do not race.
+// auditLogFile is the minimum file surface needed by the append and rotation
+// paths. Keeping it explicit also lets tests inject real short writes and
+// rollback failures without relying on process-wide resource limits.
+type auditLogFile interface {
+	Write([]byte) (int, error)
+	Sync() error
+	Stat() (os.FileInfo, error)
+	Truncate(int64) error
+	Close() error
+}
+
+// proxy holds the runtime state of the server. Policies are guarded by mu;
+// audit state is guarded by auditMu so reloads and concurrent evaluations do
+// not race or interleave hash-chain links.
 type proxy struct {
 	mu       sync.RWMutex
 	policies []domain.Policy
 
 	auditMu  sync.Mutex
-	auditLog *os.File
+	auditLog auditLogFile
 	lastHash string
+	// auditPoisoned is sticky for the process lifetime. It is set when an
+	// append may have changed the file and rollback cannot be proven durable.
+	// No later append is safe because the on-disk tail is then ambiguous.
+	auditPoisoned     bool
+	auditPoisonReason string
 	// auditNeedsSeparator is set on restart when the newest non-empty record
 	// is valid but EOF-terminated. The first append prefixes LF so JSONL
 	// records cannot be concatenated across a file or rotation boundary.
@@ -318,7 +332,7 @@ func main() {
 	// SIGHUP triggers a policy reload without restarting the server.
 	// SIGINT / SIGTERM trigger a graceful shutdown.
 	hup := make(chan os.Signal, 1)
-	signal.Notify(hup, syscall.SIGHUP)
+	notifyReloadSignal(hup)
 	go func() {
 		for range hup {
 			if err := p.reload(); err != nil {
@@ -378,7 +392,7 @@ func main() {
 	}()
 
 	shutdown := make(chan os.Signal, 1)
-	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
+	notifyShutdownSignals(shutdown)
 	go func() {
 		<-shutdown
 		log.Printf("tg-proxy: shutting down")

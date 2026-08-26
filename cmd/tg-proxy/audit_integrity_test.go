@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -13,6 +14,36 @@ import (
 	"github.com/dimaggi-ai/tool-guard-core/pkg/audit"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 )
+
+// faultInjectAuditFile produces a genuine short write against the underlying
+// file while retaining the rest of *os.File's behavior. Tests can separately
+// fail Truncate to exercise the sticky-poison path.
+type faultInjectAuditFile struct {
+	*os.File
+	shortWritesRemaining int
+	failTruncate         bool
+	writeCalls           int
+}
+
+func (f *faultInjectAuditFile) Write(record []byte) (int, error) {
+	f.writeCalls++
+	if f.shortWritesRemaining == 0 {
+		return f.File.Write(record)
+	}
+	f.shortWritesRemaining--
+	n := len(record) / 2
+	if n == 0 {
+		n = 1
+	}
+	return f.File.Write(record[:n])
+}
+
+func (f *faultInjectAuditFile) Truncate(size int64) error {
+	if f.failTruncate {
+		return errors.New("forced truncate failure")
+	}
+	return f.File.Truncate(size)
+}
 
 // makeValidTrace builds one trace whose TraceHash matches the canonical
 // recomputation and whose PreviousTraceHash links to prevHash — mirrors
@@ -33,6 +64,67 @@ func makeValidTrace(traceID, prevHash string, ts time.Time) domain.DecisionTrace
 	}
 	tr.TraceHash = h
 	return tr
+}
+
+func TestAppendTrace_ShortWriteRollsBackBeforeRetry(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "decisions.jsonl")
+	p := &proxy{auditPath: path, auditSyncMode: "none"}
+	if err := p.openAuditLog(); err != nil {
+		t.Fatalf("open audit log: %v", err)
+	}
+	realFile, ok := p.auditLog.(*os.File)
+	if !ok {
+		t.Fatalf("audit log type = %T, want *os.File", p.auditLog)
+	}
+	fault := &faultInjectAuditFile{File: realFile, shortWritesRemaining: 1}
+	p.auditLog = fault
+	t.Cleanup(func() { _ = fault.Close() })
+
+	failed := domain.DecisionTrace{
+		TraceID:     "short-write",
+		Timestamp:   time.Date(2026, 8, 26, 1, 2, 3, 0, time.UTC),
+		Decision:    domain.DecisionAllowed,
+		ActionTaken: domain.ActionAllowed,
+	}
+	err := p.appendTrace(&failed)
+	if !errors.Is(err, io.ErrShortWrite) || !strings.Contains(err.Error(), "partial write rolled back") {
+		t.Fatalf("short-write error = %v, want wrapped io.ErrShortWrite with rollback confirmation", err)
+	}
+	st, statErr := realFile.Stat()
+	if statErr != nil {
+		t.Fatal(statErr)
+	}
+	if st.Size() != 0 || p.auditCurrentBytes != 0 || p.auditAppendSeq != 0 || p.lastHash != "" || p.auditPoisoned {
+		t.Fatalf(
+			"state after rollback: size=%d bytes=%d seq=%d last_hash=%q poisoned=%v",
+			st.Size(), p.auditCurrentBytes, p.auditAppendSeq, p.lastHash, p.auditPoisoned,
+		)
+	}
+
+	retry := domain.DecisionTrace{
+		TraceID:     "after-short-write",
+		Timestamp:   time.Date(2026, 8, 26, 1, 2, 4, 0, time.UTC),
+		Decision:    domain.DecisionDenied,
+		ActionTaken: domain.ActionDenied,
+	}
+	if err := p.appendTrace(&retry); err != nil {
+		t.Fatalf("append after successful rollback: %v", err)
+	}
+	if err := p.auditLog.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	verifyFile, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := audit.VerifyChainFromReader(verifyFile)
+	_ = verifyFile.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Intact || report.Records != 1 {
+		t.Fatalf("chain after retry = %#v, want intact with one record", report)
+	}
 }
 
 func makeSizedProxyTrace(t *testing.T, target int) domain.DecisionTrace {

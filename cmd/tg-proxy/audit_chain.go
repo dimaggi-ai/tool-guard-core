@@ -21,6 +21,8 @@ import (
 // SHA-256 hash-chained JSONL log with size-based rotation and three
 // fsync modes. tg verify walks the rotation set across files.
 
+var errAuditWriterPoisoned = errors.New("audit writer poisoned")
+
 // recoverAuditTail returns the last parseable DecisionTrace from the
 // newest non-empty file in the audit rotation set — the active file if
 // it has records, otherwise the highest-indexed rotated sibling. This
@@ -249,6 +251,9 @@ func (p *proxy) verifyFullAuditChain() error {
 func (p *proxy) appendTrace(t *domain.DecisionTrace) error {
 	p.auditMu.Lock()
 	defer p.auditMu.Unlock()
+	if p.auditPoisoned {
+		return p.auditPoisonErrorLocked()
+	}
 	// Every new record carries its hash-schema version on disk. A missing
 	// marker is reserved for pre-v2 records and is interpreted as v1 by the
 	// verifier, which lets upgraded proxies continue an existing chain.
@@ -269,14 +274,31 @@ func (p *proxy) appendTrace(t *domain.DecisionTrace) error {
 	}
 	record = append(record, raw...)
 	record = append(record, '\n')
+
+	// A write can return both n > 0 and an error (or n < len(record) with a
+	// nil error). Capture an exact rollback boundary before touching the file.
+	// Without this, a retry would append after truncated JSON and permanently
+	// fork the hash chain even though lastHash was never advanced.
+	st, err := p.auditLog.Stat()
+	if err != nil {
+		return p.poisonAuditLocked(fmt.Sprintf("cannot establish pre-write rollback boundary: %v", err))
+	}
+	preWriteSize := st.Size()
 	n, err := p.auditLog.Write(record)
 	if err == nil && n != len(record) {
 		err = io.ErrShortWrite
 	}
 	if err != nil {
-		return err
+		if rollbackErr := p.rollbackAuditWriteLocked(preWriteSize); rollbackErr != nil {
+			return p.poisonAuditLocked(fmt.Sprintf(
+				"append failed after writing %d of %d bytes (%v); rollback to byte %d failed: %v",
+				n, len(record), err, preWriteSize, rollbackErr,
+			))
+		}
+		p.auditCurrentBytes = preWriteSize
+		return fmt.Errorf("append audit record after writing %d of %d bytes: %w (partial write rolled back)", n, len(record), err)
 	}
-	p.auditCurrentBytes += int64(len(record))
+	p.auditCurrentBytes = preWriteSize + int64(len(record))
 	p.auditAppendSeq++
 	p.auditNeedsSeparator = false
 
@@ -311,6 +333,48 @@ func (p *proxy) appendTrace(t *domain.DecisionTrace) error {
 		}
 	}
 	return nil
+}
+
+// rollbackAuditWriteLocked restores and durably verifies the exact file size
+// observed before a failed append. The caller must hold auditMu. Any failure
+// here makes the on-disk tail ambiguous, so appendTrace converts it into a
+// sticky poisoned state rather than risking a second append.
+func (p *proxy) rollbackAuditWriteLocked(preWriteSize int64) error {
+	if err := p.auditLog.Truncate(preWriteSize); err != nil {
+		return fmt.Errorf("truncate: %w", err)
+	}
+	// Rollback durability is mandatory even when normal append durability is
+	// configured as interval or none: readiness must never claim a repair that
+	// only exists in the page cache.
+	if err := p.auditLog.Sync(); err != nil {
+		return fmt.Errorf("sync: %w", err)
+	}
+	st, err := p.auditLog.Stat()
+	if err != nil {
+		return fmt.Errorf("verify size: %w", err)
+	}
+	if st.Size() != preWriteSize {
+		return fmt.Errorf("verify size: got %d, want %d", st.Size(), preWriteSize)
+	}
+	return nil
+}
+
+// poisonAuditLocked marks the writer unusable until process restart. The
+// caller must hold auditMu. The first reason wins so all later failures point
+// operators back to the event that made the tail uncertain.
+func (p *proxy) poisonAuditLocked(reason string) error {
+	if !p.auditPoisoned {
+		p.auditPoisoned = true
+		p.auditPoisonReason = reason
+	}
+	return p.auditPoisonErrorLocked()
+}
+
+func (p *proxy) auditPoisonErrorLocked() error {
+	if p.auditPoisonReason == "" {
+		return errAuditWriterPoisoned
+	}
+	return fmt.Errorf("%w: %s", errAuditWriterPoisoned, p.auditPoisonReason)
 }
 
 // rotateAuditLocked closes the current audit file, renames it to

@@ -76,6 +76,14 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   releases when a process exits. The persistent lockfile is never removed or
   stolen based on its age, so verification that takes longer than ten seconds
   cannot let another live process lock a different inode and fork the chain.
+- Proxy audit appends now roll a failed or short write back to the exact
+  pre-write size and durably verify that repair before another append. A
+  rollback failure permanently poisons that process's writer, makes
+  `/readyz` return 503, and suppresses fail-closed retry writes against the
+  ambiguous tail.
+- Compile-only `js/wasm` and `wasip1/wasm` proxy builds no longer reference
+  unavailable process-signal constants. Native SIGHUP reload and graceful
+  shutdown behavior is unchanged.
 - This intentionally supersedes the 0.7 documentation that described a future
   v2 writer as opt-in. Keeping v1 as the default would leave the new
   applied-action attribution outside the integrity commitment. Because Tool

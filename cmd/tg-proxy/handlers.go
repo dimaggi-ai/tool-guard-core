@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -35,6 +36,17 @@ func (p *proxy) readyz(w http.ResponseWriter, r *http.Request) {
 	p.mu.RLock()
 	n := len(p.policies)
 	p.mu.RUnlock()
+	p.auditMu.Lock()
+	auditPoisoned := p.auditPoisoned
+	p.auditMu.Unlock()
+	if auditPoisoned {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"status":   "not_ready",
+			"reason":   "audit writer is poisoned; restart after repairing and verifying the audit log",
+			"policies": n,
+		})
+		return
+	}
 	if n == 0 && p.failClosed {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
 			"status":   "not_ready",
@@ -425,7 +437,11 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 		if p.failClosed && actionProceeds(result.ActionTaken) {
 			applyOperationalDeny(result, "applied action would proceed but audit append failed; downgraded to deny (--fail-closed=true)")
 			syncResultOutcomeToTrace(&trace, result)
-			_ = p.appendTrace(&trace) // best-effort log of the override
+			// A poisoned writer has an ambiguous on-disk tail. Retrying would
+			// append after possible truncated JSON and make recovery harder.
+			if !errors.Is(auditErr, errAuditWriterPoisoned) {
+				_ = p.appendTrace(&trace) // best-effort log of the override
+			}
 		}
 	}
 

@@ -42,7 +42,7 @@ Available flags:
 | `-policy-dir` | `./policies` | directory of `*.yaml` to load on startup and on SIGHUP |
 | `-audit-log` | `./decisions.jsonl` | path to append the SHA-256 hash-chained JSONL |
 | `-default-mode` | `enforcement` | Call-site default. `shadow` is observe-only only for policies whose YAML mode is also `shadow`; enforcement policies still block. |
-| `-fail-closed` | `true` | return 503 from `/readyz` and from `/evaluate` when zero policies are loaded |
+| `-fail-closed` | `true` | return 503 from `/readyz` and fail closed in `/evaluate` when zero policies are loaded |
 
 Endpoints:
 
@@ -50,10 +50,16 @@ Endpoints:
 |---|---|---|
 | `POST` | `/evaluate` | body: `ActionEnvelope` JSON; returns `EvaluationResult` JSON |
 | `GET` | `/healthz` | liveness; 200 OK if process is alive |
-| `GET` | `/readyz` | readiness; 200 OK if at least one policy is loaded |
+| `GET` | `/readyz` | readiness; 200 OK if policy requirements are met and the audit writer has not been poisoned |
 | `GET` | `/policies` | list the policies currently loaded (debugging) |
 | `GET` | `/metrics` | plain-text counters; scrape-friendly |
 | `POST` | `/reload` | trigger a policy reload without restarting (also fires on `SIGHUP`) |
+
+The proxy rolls a failed or short audit write back to its exact pre-write file
+size and syncs that repair before accepting another append. If truncation,
+sync, or size verification fails, the writer enters a sticky poisoned state:
+later appends are rejected and `/readyz` returns 503 until an operator stops
+the process, repairs and verifies the audit log, and restarts the proxy.
 
 ### 1.2 Make a request from any language
 

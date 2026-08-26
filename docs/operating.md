@@ -243,7 +243,7 @@ boundary-deny trace in the audit chain so `tg verify` remains intact.
 | Endpoint | Returns |
 |---|---|
 | `GET /healthz` | 200 OK if the process is alive |
-| `GET /readyz` | 200 OK if at least one policy is loaded |
+| `GET /readyz` | 200 OK if policy requirements are met and the audit writer has not been poisoned |
 | `GET /policies` | JSON snapshot of loaded policy IDs (debugging) |
 | `GET /escalations` | JSON snapshot of pending+resolved escalations |
 
@@ -435,6 +435,7 @@ load.
 | Symptom | Likely cause | Action |
 |---|---|---|
 | Proxy refuses to start, "audit-log tail integrity check failed" | Audit log was tampered or corrupted | Run `tg verify` to locate the failure line; restore from backup; start with `-audit-log` pointing at the restored file |
+| `/readyz` returns 503 and reports a poisoned audit writer | An audit append failed and the proxy could not durably prove rollback to the pre-write boundary | Stop the proxy; preserve the log for incident review; truncate or restore the incomplete tail; run `tg verify`; restart only after verification succeeds |
 | Proxy returns 503 on every `/evaluate` | `-fail-closed=true` and no policies loaded | Check `-policy-dir` exists and contains a valid `*.yaml` |
 | Every `llm_classify` rule times out | Ollama unreachable; check `-ollama_url` in policy or that Ollama is running on the configured endpoint | `curl http://localhost:11434/api/tags` |
 | Latency suddenly 10x worse | Cold-start of a freshly-pulled Ollama model | First call after model swap is ~5-20s; subsequent calls are ~600ms |

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -305,6 +306,53 @@ func TestProxy_AuditFailureFailsClosedForEveryProceedingNonAllowAction(t *testin
 				t.Errorf("audit failure counters: audit=%d deny=%d, want 1/1", p.auditFailureCount.Load(), p.denyCount.Load())
 			}
 		})
+	}
+}
+
+func TestProxy_AuditRollbackFailurePoisonsReadinessAndSkipsRetry(t *testing.T) {
+	p := newOperationalTestProxy(t, []domain.Policy{
+		operationalPolicy("proceeding-flag", domain.PolicyModeEnforcement, domain.EffectFlag, "amount", 0),
+	}, false)
+	realFile, ok := p.auditLog.(*os.File)
+	if !ok {
+		t.Fatalf("audit log type = %T, want *os.File", p.auditLog)
+	}
+	fault := &faultInjectAuditFile{
+		File:                 realFile,
+		shortWritesRemaining: 1,
+		failTruncate:         true,
+	}
+	p.auditLog = fault
+
+	_, result := evaluateOperational(t, p, "poisoned-audit", 100)
+	if result.ActionTaken != domain.ActionDenied {
+		t.Fatalf("action after poisoned audit append = %q, want denied", result.ActionTaken)
+	}
+	assertOperationalDenyHasNoPolicyAttribution(t, result)
+	if fault.writeCalls != 1 {
+		t.Fatalf("audit writes = %d, want exactly 1 (no poisoned-writer retry)", fault.writeCalls)
+	}
+	if !p.auditPoisoned || p.auditPoisonReason == "" {
+		t.Fatalf("audit poison state = %v/%q, want sticky reason", p.auditPoisoned, p.auditPoisonReason)
+	}
+
+	writeCalls := fault.writeCalls
+	err := p.appendTrace(&domain.DecisionTrace{TraceID: "must-not-write"})
+	if !errors.Is(err, errAuditWriterPoisoned) {
+		t.Fatalf("append after poison = %v, want errAuditWriterPoisoned", err)
+	}
+	if fault.writeCalls != writeCalls {
+		t.Fatalf("poisoned append reached file: writes=%d, want %d", fault.writeCalls, writeCalls)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	rec := httptest.NewRecorder()
+	p.readyz(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("readyz status = %d, want 503; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "audit writer is poisoned") {
+		t.Fatalf("readyz body does not explain poisoned audit writer: %s", rec.Body.String())
 	}
 }
 
