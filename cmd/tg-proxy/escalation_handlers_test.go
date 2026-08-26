@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,23 @@ import (
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 )
+
+func requireJSONKeys(t *testing.T, rec *httptest.ResponseRecorder, keys ...string) map[string]any {
+	t.Helper()
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode JSON response: %v; body=%s", err, rec.Body.String())
+	}
+	if len(payload) != len(keys) {
+		t.Fatalf("response keys = %#v, want exactly %v", payload, keys)
+	}
+	for _, key := range keys {
+		if _, ok := payload[key]; !ok {
+			t.Fatalf("response missing %q: %#v", key, payload)
+		}
+	}
+	return payload
+}
 
 func resolveEscalationRequest(t *testing.T, p *proxy, id, action string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -55,6 +73,18 @@ func TestEscalationResolution_AuditPrecedesTerminalState(t *testing.T) {
 			traces := readOperationalTraces(t, p)
 			if len(traces) != 1 || traces[0].Decision != tt.wantDecision || traces[0].ActionTaken != tt.wantAction {
 				t.Fatalf("resolution audit traces = %#v, want one %s/%s record", traces, tt.wantDecision, tt.wantAction)
+			}
+
+			conflict := resolveEscalationRequest(t, p, id, tt.action)
+			if conflict.Code != http.StatusConflict {
+				t.Fatalf("already-resolved status = %d, want 409; body=%s", conflict.Code, conflict.Body.String())
+			}
+			payload := requireJSONKeys(t, conflict, "error", "escalation")
+			if errorCode, ok := payload["error"].(string); !ok || errorCode != "already resolved" {
+				t.Fatalf("already-resolved error = %#v, want string constant", payload["error"])
+			}
+			if _, ok := payload["escalation"].(map[string]any); !ok {
+				t.Fatalf("already-resolved escalation = %T, want object", payload["escalation"])
 			}
 		})
 	}
@@ -515,6 +545,15 @@ func TestEscalationApproval_TransientExpiryAuditFailureCannotAuthorizePastDueEnt
 		!strings.Contains(body, `"state":"pending"`) ||
 		!strings.Contains(body, "do not authorize the action") {
 		t.Fatalf("past-due response lacks structured recovery guidance: %s", body)
+	}
+	payload := requireJSONKeys(t, rec, "error", "message", "resolution_hint", "escalation")
+	for _, key := range []string{"error", "message", "resolution_hint"} {
+		if _, ok := payload[key].(string); !ok {
+			t.Fatalf("past-due %s = %T, want string", key, payload[key])
+		}
+	}
+	if _, ok := payload["escalation"].(map[string]any); !ok {
+		t.Fatalf("past-due escalation = %T, want object", payload["escalation"])
 	}
 	if got := p.escalations.get(id); got == nil || got.State != EscPending || got.ResolvedAt != nil {
 		t.Fatalf("past-due approval changed state = %#v, want unresolved pending", got)

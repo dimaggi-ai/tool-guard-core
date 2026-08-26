@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -67,6 +68,41 @@ func TestEscalationStore_Deny(t *testing.T) {
 	e, ok := s.resolve("env-2", "dba", "policy violation in spirit", false)
 	if !ok || e.State != EscDenied {
 		t.Errorf("deny failed: ok=%v e=%+v", ok, e)
+	}
+}
+
+func TestEscalationStore_ResolutionUsesOneDeadlineTimestamp(t *testing.T) {
+	base := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	clock := base
+	s := newEscalationStore()
+	s.now = func() time.Time { return clock }
+
+	before := s.add(envFor("before-deadline"), decisionFor(domain.DecisionEscalated), 15)
+	clock = before.ExpiresAt.Add(-time.Nanosecond)
+	resolved, ok, err := s.resolveAudited("before-deadline", "operator", "verified", true, nil)
+	if err != nil || !ok || resolved.State != EscApproved || resolved.ResolvedAt == nil {
+		t.Fatalf("before-deadline resolution = %#v, ok=%v err=%v", resolved, ok, err)
+	}
+	if !resolved.ResolvedAt.Equal(clock) || !resolved.ResolvedAt.Before(resolved.ExpiresAt) {
+		t.Fatalf("resolved_at=%v expires_at=%v, want captured time strictly before deadline", resolved.ResolvedAt, resolved.ExpiresAt)
+	}
+
+	clock = base
+	atDeadline := s.add(envFor("at-deadline"), decisionFor(domain.DecisionEscalated), 15)
+	clock = atDeadline.ExpiresAt
+	callbackCalled := false
+	rejected, ok, err := s.resolveAudited(
+		"at-deadline", "operator", "too late", true,
+		func(*Escalation) error {
+			callbackCalled = true
+			return nil
+		},
+	)
+	if !errors.Is(err, errEscalationPastDue) || ok || callbackCalled {
+		t.Fatalf("deadline resolution = %#v, ok=%v err=%v callback=%v; want rejected before audit", rejected, ok, err, callbackCalled)
+	}
+	if rejected == nil || rejected.State != EscPending || rejected.ResolvedAt != nil {
+		t.Fatalf("deadline rejection mutated state: %#v", rejected)
 	}
 }
 

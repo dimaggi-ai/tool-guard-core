@@ -49,6 +49,7 @@ type escalationStore struct {
 	mu         sync.Mutex
 	entries    map[string]*Escalation
 	maxEntries int
+	now        func() time.Time
 }
 
 // defaultEscalationMaxEntries caps the in-memory pending+resolved
@@ -59,7 +60,15 @@ func newEscalationStore() *escalationStore {
 	return &escalationStore{
 		entries:    make(map[string]*Escalation),
 		maxEntries: defaultEscalationMaxEntries,
+		now:        time.Now,
 	}
+}
+
+func (s *escalationStore) currentTime() time.Time {
+	if s.now != nil {
+		return s.now().UTC()
+	}
+	return time.Now().UTC()
 }
 
 // evictOldestResolvedLocked drops the oldest resolved entry (any
@@ -97,7 +106,7 @@ func (s *escalationStore) add(envelope *domain.ActionEnvelope, decision *domain.
 	if timeoutMinutes < 1 {
 		timeoutMinutes = 15
 	}
-	now := time.Now().UTC()
+	now := s.currentTime()
 	e := &Escalation{
 		ID:        envelope.EnvelopeID,
 		State:     EscPending,
@@ -174,7 +183,7 @@ func (s *escalationStore) resolveAudited(
 		ec := *e
 		return &ec, false, nil // already resolved
 	}
-	now := time.Now().UTC()
+	now := s.currentTime()
 	// The reaper may leave a due entry pending when it can prove that the
 	// expiry audit record was not written. Pending is an audit-recovery state
 	// in that case, not a renewed authorization window: never let a late human
@@ -221,7 +230,7 @@ type escalationExpiryFailure struct {
 func (s *escalationStore) reapExpiredAudited(
 	beforeCommit func(*Escalation) error,
 ) ([]Escalation, []escalationExpiryFailure) {
-	now := time.Now().UTC()
+	now := s.currentTime()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var (
