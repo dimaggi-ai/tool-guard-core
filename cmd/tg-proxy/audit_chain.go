@@ -178,7 +178,9 @@ func (p *proxy) openAuditLog() error {
 		p.lastHash = last.TraceHash
 		p.auditNeedsSeparator = needsSeparator
 	}
-	f, err := os.OpenFile(p.auditPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	// O_RDWR is required for transactional append rollback on Windows:
+	// File.Truncate on an append-only/write-only handle returns access denied.
+	f, err := os.OpenFile(p.auditPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0o644)
 	if err != nil {
 		return err
 	}
@@ -413,7 +415,7 @@ func (p *proxy) rotateAuditLocked() error {
 			return fmt.Errorf("rotation index overflow (>%d existing rotations)", idx)
 		}
 	}
-	f, err := os.OpenFile(p.auditPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(p.auditPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0o644)
 	if err != nil {
 		// Rename succeeded but new-active open failed. Re-open the
 		// rotated tail so we don't break the chain — appends will
@@ -433,7 +435,7 @@ func (p *proxy) rotateAuditLocked() error {
 // every subsequent append returns an error tracked via
 // auditFailureCount — explicit failure, not silent corruption.
 func (p *proxy) reopenAuditLocked() {
-	f, err := os.OpenFile(p.auditPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(p.auditPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0o644)
 	if err != nil {
 		log.Printf("tg-proxy: audit re-open after failed rotation: %v", err)
 		return
@@ -449,7 +451,7 @@ func (p *proxy) reopenAuditLocked() {
 // appends continue into the rotated file rather than disappear.
 func (p *proxy) reopenRotatedLocked(idx int) {
 	rotated := fmt.Sprintf("%s.%d", p.auditPath, idx)
-	f, err := os.OpenFile(rotated, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(rotated, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0o644)
 	if err != nil {
 		log.Printf("tg-proxy: audit re-open rotated tail %s: %v", rotated, err)
 		return
