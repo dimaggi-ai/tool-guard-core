@@ -21,30 +21,46 @@ def receipt_reference(result: Receiptable) -> Optional[str]:
         receipt = getattr(result, "resolution_receipt", None)
     if receipt is None:
         return None
-    digest = receipt.trace_hash.removeprefix("sha256:")
+    required_fields = (
+        "receipt_version",
+        "trace_id",
+        "trace_hash",
+        "hash_algorithm",
+        "canonical_trace_version",
+        "integrity_model",
+        "decision",
+        "action_taken",
+        "timestamp",
+        "receipt_uri",
+    )
+    fields = {name: getattr(receipt, name, None) for name in required_fields}
+    if not all(isinstance(value, str) for value in fields.values()):
+        return None
+
+    digest = fields["trace_hash"].removeprefix("sha256:")
     valid_digest = (
-        receipt.trace_hash.startswith("sha256:")
+        fields["trace_hash"].startswith("sha256:")
         and len(digest) == 64
         and all(char in "0123456789abcdef" for char in digest)
     )
     expected_uri = (
-        f"urn:tool-guard:trace:{receipt.canonical_trace_version}:"
-        f"{receipt.trace_hash}"
+        f"urn:tool-guard:trace:{fields['canonical_trace_version']}:"
+        f"{fields['trace_hash']}"
     )
     if not (
-        receipt.receipt_version == "1"
-        and receipt.trace_id
+        fields["receipt_version"] == "1"
+        and fields["trace_id"]
         and valid_digest
-        and receipt.hash_algorithm == "sha256"
-        and receipt.canonical_trace_version
-        and receipt.integrity_model == "hash-chain"
-        and receipt.decision
-        and receipt.action_taken
-        and receipt.timestamp
-        and receipt.receipt_uri == expected_uri
+        and fields["hash_algorithm"] == "sha256"
+        and fields["canonical_trace_version"]
+        and fields["integrity_model"] == "hash-chain"
+        and fields["decision"]
+        and fields["action_taken"]
+        and fields["timestamp"]
+        and fields["receipt_uri"] == expected_uri
     ):
         return None
-    return receipt.receipt_uri
+    return fields["receipt_uri"]
 
 
 def attach_receipt_reference(

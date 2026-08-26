@@ -498,16 +498,34 @@ func fire(client *http.Client, target string, env envelope, mustNotAllow bool, t
 }
 
 func validEvaluationResponse(status int, result evalResult) bool {
-	validDecision := result.Decision == "allowed" || result.Decision == "flagged" || result.Decision == "escalated" || result.Decision == "denied"
-	validAction := result.ActionTaken == "allowed" || result.ActionTaken == "flagged" || result.ActionTaken == "escalated" || result.ActionTaken == "denied" || result.ActionTaken == "allowed_shadow"
-	if !validDecision || !validAction {
+	validPair := false
+	switch result.Decision {
+	case "allowed":
+		validPair = result.ActionTaken == "allowed"
+	case "flagged":
+		validPair = result.ActionTaken == "flagged"
+	case "escalated":
+		// A shadow escalation can proceed, while a lower-severity enforced
+		// flag can own the action even though the aggregate decision remains
+		// escalated.
+		validPair = result.ActionTaken == "allowed_shadow" ||
+			result.ActionTaken == "flagged" ||
+			result.ActionTaken == "escalated"
+	case "denied":
+		// A shadow deny can coexist with a lower-severity enforcement action.
+		validPair = result.ActionTaken == "allowed_shadow" ||
+			result.ActionTaken == "flagged" ||
+			result.ActionTaken == "escalated" ||
+			result.ActionTaken == "denied"
+	}
+	if !validPair {
 		return false
 	}
 	switch status {
 	case http.StatusOK:
 		return result.ActionTaken != "escalated"
 	case http.StatusAccepted:
-		return result.Decision == "escalated" && result.ActionTaken == "escalated" && result.EscalationID != "" && result.PollURL != ""
+		return result.ActionTaken == "escalated" && result.EscalationID != "" && result.PollURL != ""
 	default:
 		return false
 	}

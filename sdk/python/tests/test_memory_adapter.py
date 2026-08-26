@@ -63,6 +63,29 @@ def test_malformed_receipt_uri_or_required_field_is_not_forwarded():
         assert attach_receipt_reference({}, result) == {}
 
 
+def test_non_string_receipt_fields_are_ignored_without_raising():
+    required_fields = (
+        "receipt_version",
+        "trace_id",
+        "trace_hash",
+        "hash_algorithm",
+        "canonical_trace_version",
+        "integrity_model",
+        "decision",
+        "action_taken",
+        "timestamp",
+        "receipt_uri",
+    )
+    for field in required_fields:
+        receipt = DecisionReceipt.from_dict(_RECEIPT.to_dict())
+        setattr(receipt, field, 123)
+        result = EvaluationResult(
+            decision="denied", action_taken="denied", decision_receipt=receipt
+        )
+        assert receipt_reference(result) is None
+        assert attach_receipt_reference({}, result) == {}
+
+
 def test_attach_and_copy_helpers():
     result = EvaluationResult(
         decision="denied", action_taken="denied", decision_receipt=_RECEIPT

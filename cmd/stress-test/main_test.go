@@ -38,6 +38,7 @@ func TestFireRejectsEmpty204AndMalformedDecisionBodies(t *testing.T) {
 		{name: "empty 200", status: http.StatusOK},
 		{name: "valid deny", status: http.StatusOK, body: `{"decision":"denied","action_taken":"denied"}`, wantValid: true, wantAction: "denied"},
 		{name: "valid escalation", status: http.StatusAccepted, body: `{"decision":"escalated","action_taken":"escalated","escalation_id":"esc-1","poll_url":"/escalations/esc-1"}`, wantValid: true, wantAction: "escalated"},
+		{name: "valid mixed-mode escalation", status: http.StatusAccepted, body: `{"decision":"denied","action_taken":"escalated","escalation_id":"esc-1","poll_url":"/escalations/esc-1"}`, wantValid: true, wantAction: "escalated"},
 		{name: "202 missing poll metadata", status: http.StatusAccepted, body: `{"decision":"escalated","action_taken":"escalated"}`, wantAction: "escalated"},
 	}
 	for _, tt := range tests {
@@ -55,6 +56,59 @@ func TestFireRejectsEmpty204AndMalformedDecisionBodies(t *testing.T) {
 			}
 			if got := len(appendSuccessfulLatency(nil, out)); got != boolInt(tt.wantValid) {
 				t.Fatalf("successful latency count = %d, want %d", got, boolInt(tt.wantValid))
+			}
+		})
+	}
+}
+
+func TestValidEvaluationResponseDecisionActionMatrix(t *testing.T) {
+	decisions := []string{"allowed", "flagged", "escalated", "denied"}
+	actions := []string{"allowed", "flagged", "escalated", "denied", "allowed_shadow"}
+	valid := map[string]bool{
+		"allowed/allowed":          true,
+		"flagged/flagged":          true,
+		"escalated/flagged":        true,
+		"escalated/escalated":      true,
+		"escalated/allowed_shadow": true,
+		"denied/flagged":           true,
+		"denied/escalated":         true,
+		"denied/denied":            true,
+		"denied/allowed_shadow":    true,
+	}
+
+	for _, decision := range decisions {
+		for _, action := range actions {
+			name := decision + "/" + action
+			status := http.StatusOK
+			result := evalResult{Decision: decision, ActionTaken: action}
+			if action == "escalated" {
+				status = http.StatusAccepted
+				result.EscalationID = "esc-1"
+				result.PollURL = "/escalations/esc-1"
+			}
+			if got := validEvaluationResponse(status, result); got != valid[name] {
+				t.Errorf("validEvaluationResponse(%d, %s) = %v, want %v", status, name, got, valid[name])
+			}
+		}
+	}
+}
+
+func TestValidEvaluationResponseRejectsWrongStatusAndMissingEscalationMetadata(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		result evalResult
+	}{
+		{name: "ordinary action with 202", status: http.StatusAccepted, result: evalResult{Decision: "denied", ActionTaken: "denied"}},
+		{name: "escalation with 200", status: http.StatusOK, result: evalResult{Decision: "escalated", ActionTaken: "escalated", EscalationID: "esc-1", PollURL: "/escalations/esc-1"}},
+		{name: "escalation missing id", status: http.StatusAccepted, result: evalResult{Decision: "escalated", ActionTaken: "escalated", PollURL: "/escalations/esc-1"}},
+		{name: "escalation missing poll URL", status: http.StatusAccepted, result: evalResult{Decision: "denied", ActionTaken: "escalated", EscalationID: "esc-1"}},
+		{name: "unsupported status", status: http.StatusNoContent, result: evalResult{Decision: "allowed", ActionTaken: "allowed"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if validEvaluationResponse(tt.status, tt.result) {
+				t.Fatal("validEvaluationResponse() = true, want false")
 			}
 		})
 	}
