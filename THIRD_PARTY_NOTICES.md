@@ -19,9 +19,11 @@ The modules linked into a binary depend on its build tags:
 | `golang.org/x/sys` | v0.47.0 | BSD-3-Clause |
 
 The default-build `tg` binary links `gopkg.in/yaml.v3` plus
-`golang.org/x/sys` for OS advisory file locking. The default-build
-`tg-proxy` binary links `gopkg.in/yaml.v3` only. `pg_query_go` is opt-in
-via `-tags=pg_strict` and links its C library (also Apache-2.0); strict
+`golang.org/x/sys` for OS advisory file locking. On non-Windows platforms,
+the default-build `tg-proxy` binary links `gopkg.in/yaml.v3` only; Windows
+proxy builds also link `golang.org/x/sys/windows` for write-through audit-log
+rotation. `pg_query_go` is opt-in via `-tags=pg_strict` and links its C library
+(also Apache-2.0); strict
 variants for MySQL (`-tags=mysql_strict`) and SQLite
 (`-tags=sqlite_strict`) link the additional modules listed below.
 

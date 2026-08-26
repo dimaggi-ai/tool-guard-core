@@ -5,6 +5,54 @@ per-change record see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## 0.8.0 — 2026-08-26
+
+"Decision evidence you can carry" — audit provenance moves to canonical v2,
+proxy decisions gain portable receipts, and exports become directly usable by
+standard JSONL pipelines. This release also corrects policy mode precedence and
+ambiguous policy identities. It contains intentional pre-1.0 migrations; read
+the upgrade notes before deploying a writer against an existing audit chain.
+
+### Highlights
+
+- **Hash-bound provenance and decision receipts.** Canonical v2 binds the raw
+  decision, applied action, engine version, policy-set digest, and schema
+  version. Durable proxy responses expose correlation receipts only after the
+  corresponding trace append succeeds. Human approval, denial, and expiry
+  transitions are published only after their terminal audit record is durable.
+- **Verified JSONL export.** `tg export` walks rotations oldest-first, verifies
+  the complete chain before writing stdout, and supports time, policy, and
+  action selectors. Its record-size boundary now exactly matches the writer and
+  verifier: 4 MiB is accepted; larger logical records are rejected.
+- **Authoritative policy modes and unambiguous identities.** YAML policy mode
+  controls the applied action, so a shadow policy observes without blocking and
+  a shadow call-site cannot weaken an enforcement policy. Duplicate
+  `(policy_id, version)` and duplicate per-policy `rule_id` values are rejected.
+- **Transactional release publication.** Tag CI stages the GitHub Release as a
+  draft, attests archives, signs and verifies container digests, and publishes
+  the Python package through PyPI trusted publishing. The draft is promoted
+  only after registry verification succeeds.
+
+### Upgrading
+
+1. Run the 0.8 `tg lint` and `tg simulate` against every deployed policy set.
+   Resolve duplicate policy/rule identities and confirm that every shadow
+   policy is intentionally non-blocking.
+2. Quiesce every writer sharing an audit chain, back up all active and rotated
+   files, and verify the same bytes with both 0.7 and 0.8. Upgrade all consumers
+   and writers for that chain together. Do not append with 0.7 after the first
+   v2 record; full rollback steps are in [docs/operating.md](docs/operating.md).
+3. Go callers that assigned `engine.LLMClassifyHook` directly must migrate to
+   `engine.SetLLMClassifyHook()` and `engine.GetLLMClassifyHook()`. The mutable
+   exported variable was removed because direct writes could race concurrent
+   evaluation; the hook signature itself is unchanged.
+4. Python clients may consume the new decision and resolution receipt types.
+   Receipt absence is never authorization. Escalations may report the terminal
+   safety state `indeterminate` when a possibly written audit transition cannot
+   be proven durable; treat it as no authorization and reconcile the log.
+
+---
+
 ## 0.7.0 — 2026-08-20
 
 "Load strictly, prove it shipped" — policy loading becomes strict

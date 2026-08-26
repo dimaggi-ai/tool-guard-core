@@ -19,7 +19,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout (with tags)
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       - name: Verify this tag is reachable from main
@@ -47,12 +47,12 @@ jobs:
     needs: verify
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           # setuptools-scm derives the SDK version from the release tag.
           fetch-depth: 0
           fetch-tags: true
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       - name: Build and validate distributions
@@ -61,7 +61,7 @@ jobs:
           python -m build --outdir dist/python sdk/python
           python -m twine check dist/python/*
           python scripts/verify-python-dist.py dist/python --expected-version "${GITHUB_REF_NAME#v}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: python-dist
           path: dist/python/
@@ -69,6 +69,7 @@ jobs:
           retention-days: 7
 
   release:
+    name: Stage artifacts and signed images
     needs: [preflight, verify, python-package]
     runs-on: ubuntu-latest
     permissions:
@@ -78,12 +79,12 @@ jobs:
       attestations: write # actions/attest-build-provenance (publish the attestation)
     steps:
       - name: Checkout (with tags)
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           # Keep in lockstep with go.mod and ci.yml — a release built on a
           # different toolchain than CI tested is untested code.
@@ -91,23 +92,23 @@ jobs:
           cache: true
 
       - name: Set up QEMU (for cross-arch container builds)
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install syft (for SBOM)
-        uses: anchore/sbom-action/download-syft@v0
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
 
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
         with:
           distribution: goreleaser
           version: "~> v2"
@@ -127,7 +128,7 @@ jobs:
       # separate rebuild-and-diff verifier job this repo doesn't have yet
       # — don't conflate the two when talking about this publicly.
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
         with:
           subject-path: "dist/*.tar.gz,dist/*.zip,dist/checksums.txt"
 
@@ -145,7 +146,7 @@ jobs:
       # for some other tag shape (v0.7.0-anything) can never satisfy the
       # documented verification.
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@f713795cb21599bc4e5c4b58cbad1da852d7eeb9 # v3
 
       - name: Sign container images (keyless, by digest)
         env:
@@ -159,11 +160,8 @@ jobs:
             cosign sign --yes "${IMAGE}@${digest}"
           done
 
-      # The GitHub Release (published by GoReleaser, above) already
-      # claims the images are signed — so prove it before the workflow
-      # goes green: verify both manifests against the exact documented
-      # identity. A failed or skipped signing step fails the release
-      # here instead of shipping release notes that overclaim.
+      # The GitHub Release is still a draft at this point. Prove both
+      # manifests before the final job makes those notes public.
       - name: Verify container signatures (fail release if unsigned)
         env:
           IMAGE: ghcr.io/dimaggi-ai/tool-guard-core
@@ -187,11 +185,61 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      # SHA-pinned because this job can mint a PyPI OIDC token.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: python-dist
           path: dist/python
       - name: Publish with PyPI trusted publishing
-        uses: pypa/gh-action-pypi-publish@release/v1
+        # SHA-pinned because a mutable ref in an id-token:write job can steal
+        # the trusted-publishing identity and the distribution artifact.
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1, reviewed 2026-08-26
         with:
           packages-dir: dist/python/
+          # A retry after PyPI accepted one distribution but the workflow
+          # lost its response must not fail on that already-present file.
+          skip-existing: true
+
+  finalize-release:
+    name: Verify registries and publish GitHub Release
+    needs: [release, publish-python]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Verify staged release and PyPI package
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ "$(gh release view "${TAG}" --json isDraft --jq '.isDraft')" != "true" ]; then
+            echo "::error::${TAG} is not a draft; refusing non-transactional promotion" >&2
+            exit 1
+          fi
+
+          version="${TAG#v}"
+          found=false
+          for attempt in $(seq 1 18); do
+            if curl --fail --silent --show-error \
+              --connect-timeout 5 --max-time 15 \
+              "https://pypi.org/pypi/toolguard-core/${version}/json" >/dev/null; then
+              found=true
+              break
+            fi
+            echo "PyPI has not exposed toolguard-core ${version} yet (attempt ${attempt}/18)"
+            sleep 10
+          done
+          if [ "${found}" != "true" ]; then
+            echo "::error::PyPI did not expose toolguard-core ${version}; GitHub Release remains a draft" >&2
+            exit 1
+          fi
+
+      - name: Publish verified GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release edit "${TAG}" --draft=false
+          test "$(gh release view "${TAG}" --json isDraft --jq '.isDraft')" = "false"

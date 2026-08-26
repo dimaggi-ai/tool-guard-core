@@ -13,10 +13,15 @@ import (
 type EscalationState string
 
 const (
-	EscPending  EscalationState = "pending"
-	EscApproved EscalationState = "approved"
-	EscDenied   EscalationState = "denied"
-	EscExpired  EscalationState = "expired"
+	// escRegistering is an internal reservation used while the initial
+	// escalated decision is being appended. It is deliberately invisible to
+	// pollers and approvers: an escalation does not exist as an authorizable
+	// object until its first audit record is durable.
+	escRegistering EscalationState = "registering"
+	EscPending     EscalationState = "pending"
+	EscApproved    EscalationState = "approved"
+	EscDenied      EscalationState = "denied"
+	EscExpired     EscalationState = "expired"
 	// EscIndeterminate means a terminal audit record may exist but its
 	// durability and the corresponding state transition could not be proven.
 	// Operators must reconcile the log; neither approval nor denial is granted.
@@ -83,7 +88,7 @@ func (s *escalationStore) evictOldestResolvedLocked() bool {
 		oldest   time.Time
 	)
 	for id, e := range s.entries {
-		if e.State == EscPending {
+		if e.State == EscPending || e.State == escRegistering {
 			continue
 		}
 		t := e.CreatedAt
@@ -102,16 +107,18 @@ func (s *escalationStore) evictOldestResolvedLocked() bool {
 	return true
 }
 
-// add registers a new pending escalation. Caller passes the timeout
-// in minutes (from EffectConfig.TimeoutMinutes or a default).
-func (s *escalationStore) add(envelope *domain.ActionEnvelope, decision *domain.EvaluationResult, timeoutMinutes int) *Escalation {
+// reserve claims an escalation ID while its initial audit record is being
+// appended. Reserved entries count against the hard cap and block ID reuse,
+// but are hidden from get/list/resolve until publishReserved transitions the
+// exact reservation to pending.
+func (s *escalationStore) reserve(envelope *domain.ActionEnvelope, decision *domain.EvaluationResult, timeoutMinutes int) *Escalation {
 	if timeoutMinutes < 1 {
 		timeoutMinutes = 15
 	}
 	now := s.currentTime()
 	e := &Escalation{
 		ID:        envelope.EnvelopeID,
-		State:     EscPending,
+		State:     escRegistering,
 		CreatedAt: now,
 		ExpiresAt: now.Add(time.Duration(timeoutMinutes) * time.Minute),
 		Envelope:  *envelope,
@@ -150,10 +157,54 @@ func (s *escalationStore) add(envelope *domain.ActionEnvelope, decision *domain.
 	return e
 }
 
+// publishReserved makes an exact, successfully audited reservation visible to
+// agents and approvers. Pointer identity prevents a stale request from
+// publishing a later entry that reused the same ID.
+func (s *escalationStore) publishReserved(expected *Escalation) bool {
+	if expected == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.entries[expected.ID]
+	if !ok || e != expected || e.State != escRegistering {
+		return false
+	}
+	e.State = EscPending
+	return true
+}
+
+// discardReserved removes only the exact hidden reservation supplied by the
+// caller. It is used when provenance stamping or the initial audit append
+// fails, ensuring that an unaudited escalation can never be approved later.
+func (s *escalationStore) discardReserved(expected *Escalation) bool {
+	if expected == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.entries[expected.ID]
+	if !ok || e != expected || e.State != escRegistering {
+		return false
+	}
+	delete(s.entries, expected.ID)
+	return true
+}
+
+// add preserves the store helper used by tests and non-auditing callers. The
+// proxy's evaluate path uses reserve/publishReserved around the audit append.
+func (s *escalationStore) add(envelope *domain.ActionEnvelope, decision *domain.EvaluationResult, timeoutMinutes int) *Escalation {
+	e := s.reserve(envelope, decision, timeoutMinutes)
+	if e == nil || !s.publishReserved(e) {
+		return nil
+	}
+	return e
+}
+
 func (s *escalationStore) get(id string) *Escalation {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if e, ok := s.entries[id]; ok {
+	if e, ok := s.entries[id]; ok && e.State != escRegistering {
 		ec := *e
 		return &ec
 	}
@@ -179,6 +230,9 @@ func (s *escalationStore) resolveAudited(
 	defer s.mu.Unlock()
 	e, ok := s.entries[id]
 	if !ok {
+		return nil, false, nil
+	}
+	if e.State == escRegistering {
 		return nil, false, nil
 	}
 	if e.State != EscPending {
@@ -294,6 +348,9 @@ func (s *escalationStore) list() []Escalation {
 	defer s.mu.Unlock()
 	out := make([]Escalation, 0, len(s.entries))
 	for _, e := range s.entries {
+		if e.State == escRegistering {
+			continue
+		}
 		out = append(out, *e)
 	}
 	return out

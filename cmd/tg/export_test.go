@@ -124,6 +124,61 @@ func TestExportUnfilteredPreservesOriginalJSONLines(t *testing.T) {
 	}
 }
 
+func TestExportAcceptsExactMaximumRecord(t *testing.T) {
+	trace := hookAuditTraceOfSize(t, audit.MaxTraceRecordBytes)
+	line, err := audit.MarshalTraceRecord(trace)
+	if err != nil {
+		t.Fatalf("MarshalTraceRecord: %v", err)
+	}
+	terminators := map[string][]byte{
+		"LF":   {'\n'},
+		"CRLF": {'\r', '\n'},
+		"EOF":  nil,
+	}
+	for name, terminator := range terminators {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "exact-max.jsonl")
+			contents := append(append([]byte(nil), line...), terminator...)
+			if err := os.WriteFile(path, contents, 0o600); err != nil {
+				t.Fatalf("write exact-max fixture: %v", err)
+			}
+			code, stdout, stderr := runExportForTest(t, "-file", path)
+			if code != 0 || stderr != "" || stdout != string(line)+"\n" {
+				t.Fatalf("exact-max export code=%d stdout-bytes=%d stderr=%q", code, len(stdout), stderr)
+			}
+		})
+	}
+}
+
+func TestExportRejectsRecordOverMaximum(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "over-max.jsonl")
+	raw := bytes.Repeat([]byte{'x'}, audit.MaxTraceRecordBytes+1)
+	if err := os.WriteFile(path, append(raw, '\n'), 0o600); err != nil {
+		t.Fatalf("write over-max fixture: %v", err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	err = streamAuditExport(
+		[]auditFileSnapshot{{path: path, file: f, size: info.Size()}},
+		auditExportFilter{},
+		&output,
+	)
+	if err == nil || !strings.Contains(err.Error(), "maximum is 4194304") {
+		t.Fatalf("over-max export error=%v, want explicit record-size rejection", err)
+	}
+	if output.Len() != 0 {
+		t.Fatalf("over-max export wrote %d bytes before rejection", output.Len())
+	}
+}
+
 func TestExportFiltersTimePolicyAndAction(t *testing.T) {
 	base := time.Date(2026, 8, 25, 10, 0, 0, 0, time.UTC)
 	t1 := makeExportTrace(t, "t1", base, domain.ActionAllowed, []string{"policy-a"}, "")

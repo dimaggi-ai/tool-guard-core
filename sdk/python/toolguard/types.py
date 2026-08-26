@@ -69,6 +69,7 @@ class EscalationState:
     APPROVED = "approved"
     DENIED = "denied"
     EXPIRED = "expired"
+    INDETERMINATE = "indeterminate"
 
 
 # ---------------------------------------------------------------------------

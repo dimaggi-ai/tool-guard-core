@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -123,6 +124,15 @@ func TestPolicyCompat(t *testing.T) {
 				if string(result.ActionTaken) != c.Expect.ActionTaken {
 					t.Errorf("%s (%s): action_taken = %q, want %q (reason: %s) — a %s-vintage policy file now evaluates differently than the corpus expects",
 						c.Description, version, result.ActionTaken, c.Expect.ActionTaken, result.DecisionReason, version)
+				}
+				if c.Expect.MatchedRuleIDs != nil {
+					got := matchedRuleIDs(result.RuleResults)
+					want := slices.Clone(c.Expect.MatchedRuleIDs)
+					slices.Sort(want)
+					if !slices.Equal(got, want) {
+						t.Errorf("%s (%s): matched_rule_ids = %q, want exact set %q — a %s-vintage policy now attributes the outcome to different rules",
+							c.Description, version, got, want, version)
+					}
 				}
 			})
 		}

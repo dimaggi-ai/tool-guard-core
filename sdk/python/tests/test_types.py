@@ -19,6 +19,7 @@ from toolguard.types import (
     DecisionReceipt,
     EnvelopeContext,
     Escalation,
+    EscalationState,
     EvaluationResult,
     Framework,
     IntegrationType,
@@ -28,6 +29,16 @@ from toolguard.types import (
     SessionStateContext,
     VerifiedContext,
 )
+
+
+def test_escalation_state_constants_match_server_contract():
+    assert {
+        EscalationState.PENDING,
+        EscalationState.APPROVED,
+        EscalationState.DENIED,
+        EscalationState.EXPIRED,
+        EscalationState.INDETERMINATE,
+    } == {"pending", "approved", "denied", "expired", "indeterminate"}
 
 
 # ---------------------------------------------------------------------------

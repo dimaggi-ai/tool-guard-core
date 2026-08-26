@@ -177,12 +177,17 @@ func main() {
 
 		candidateRPS := successfulRPS(candidate, *compareDuration)
 		baselineRPS := successfulRPS(baseline, *compareDuration)
+		candidateHealthy, candidateReason := comparisonResultHealthy(candidate)
+		baselineHealthy, baselineReason := comparisonResultHealthy(baseline)
 		regressionPct, throughputPassed, valid := relativeThroughputGate(candidateRPS, baselineRPS, *maxRegressionPct)
-		if !valid {
-			fmt.Println("  ⚠ REGRESSION CHECK INVALID: baseline completed zero successful responses")
+		if !candidateHealthy {
+			fmt.Printf("  ⚠ REGRESSION CHECK INVALID: candidate result is unhealthy: %s\n", candidateReason)
 			comparisonMet = false
-		} else if candidate.wrongDec > 0 {
-			fmt.Printf("  ⚠ REGRESSION CHECK FAILED: candidate produced %d wrong decisions\n", candidate.wrongDec)
+		} else if !baselineHealthy {
+			fmt.Printf("  ⚠ REGRESSION CHECK INVALID: baseline result is unhealthy: %s\n", baselineReason)
+			comparisonMet = false
+		} else if !valid {
+			fmt.Println("  ⚠ REGRESSION CHECK INVALID: baseline completed zero successful responses")
 			comparisonMet = false
 		} else if !throughputPassed {
 			fmt.Printf("  ⚠ REGRESSION: candidate %.1f req/s is %.2f%% below baseline %.1f req/s (limit: < %.2f%%)\n",
@@ -381,6 +386,34 @@ func relativeThroughputGate(candidateRPS, baselineRPS, maxRegressionPct float64)
 	return regressionPct, regressionPct < maxRegressionPct, true
 }
 
+// comparisonResultHealthy rejects throughput samples that do not represent a
+// functioning proxy. Comparing only successful RPS can otherwise make a
+// candidate look faster than a baseline that spent most of the phase returning
+// errors. The relative gate is intentionally strict: either side producing a
+// transport error, timeout, non-2xx response, or wrong decision invalidates the
+// sample instead of turning correctness failures into a performance number.
+func comparisonResultHealthy(result levelResult) (bool, string) {
+	if result.total <= 0 {
+		return false, "no requests completed"
+	}
+	if result.connErrors > 0 || result.timeouts > 0 {
+		return false, fmt.Sprintf("transport failures: conn_err=%d timeouts=%d", result.connErrors, result.timeouts)
+	}
+	if result.wrongDec > 0 {
+		return false, fmt.Sprintf("wrong decisions=%d", result.wrongDec)
+	}
+	for status, count := range result.byStatus {
+		if count > 0 && (status < 200 || status >= 300) {
+			return false, fmt.Sprintf("HTTP %d responses=%d", status, count)
+		}
+	}
+	successes := int64(len(result.latencies))
+	if successes != result.total {
+		return false, fmt.Sprintf("successful response ratio %.2f%% (%d/%d), want 100%%", 100*float64(successes)/float64(result.total), successes, result.total)
+	}
+	return true, ""
+}
+
 func buildEnvelope(rng *rand.Rand) (envelope, bool) {
 	// issue_refund is money movement, so the shipped ./policies set guards it
 	// in depth: refund_cap.yaml denies any single amount over $500, while the
@@ -473,7 +506,7 @@ func waitHealthy(client *http.Client, target string, timeout time.Duration) erro
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 	for time.Now().Before(deadline) {
-		resp, err := client.Get(strings.TrimRight(target, "/") + "/healthz")
+		resp, err := client.Get(strings.TrimRight(target, "/") + "/readyz")
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
@@ -483,7 +516,7 @@ func waitHealthy(client *http.Client, target string, timeout time.Duration) erro
 		lastErr = err
 		time.Sleep(200 * time.Millisecond)
 	}
-	return fmt.Errorf("still unhealthy after %s (last error: %v)", timeout, lastErr)
+	return fmt.Errorf("still not ready after %s (last error: %v)", timeout, lastErr)
 }
 
 func randID(rng *rand.Rand) string {

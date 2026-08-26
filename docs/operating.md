@@ -376,8 +376,13 @@ hashed and chained correctly), not fail-recoverable.
 
 ## Upgrade path
 
-Tool Guard follows semver and is still pre-1.0. Version 0.8.0 contains one
-explicitly documented breaking audit-format migration: new writers stamp
+Tool Guard follows semver and is still pre-1.0. Version 0.8.0 contains
+explicitly documented mode-precedence, policy-identity, Go API, and
+audit-format migrations. For the Go API change, replace direct reads or writes
+of the removed mutable `engine.LLMClassifyHook` variable with
+`engine.GetLLMClassifyHook()` or `engine.SetLLMClassifyHook()`; the synchronized
+accessors preserve the hook signature and avoid races with concurrent
+evaluation. For the audit migration, new writers stamp
 `CanonicalTraceVersion = v2` so the raw decision and applied-action provenance
 are both bound by the canonical hash. V2 also binds `engine_version`, a
 deterministic `policy_set_hash`, and `schema_version`. The policy digest is

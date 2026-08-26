@@ -95,3 +95,28 @@ func TestRelativeThroughputGate(t *testing.T) {
 		})
 	}
 }
+
+func TestComparisonResultHealthyRejectsCorrectnessAndAvailabilityFailures(t *testing.T) {
+	tests := []struct {
+		name   string
+		result levelResult
+		want   bool
+	}{
+		{name: "healthy", result: levelResult{total: 2, byStatus: map[int]int64{200: 1, 202: 1}, latencies: []time.Duration{time.Millisecond, time.Millisecond}}, want: true},
+		{name: "empty", result: levelResult{byStatus: map[int]int64{}}},
+		{name: "server errors", result: levelResult{total: 2, byStatus: map[int]int64{200: 1, 500: 1}, latencies: []time.Duration{time.Millisecond}}},
+		{name: "client errors", result: levelResult{total: 2, byStatus: map[int]int64{200: 1, 429: 1}, latencies: []time.Duration{time.Millisecond}}},
+		{name: "connection errors", result: levelResult{total: 2, byStatus: map[int]int64{200: 1}, connErrors: 1, latencies: []time.Duration{time.Millisecond}}},
+		{name: "timeouts", result: levelResult{total: 2, byStatus: map[int]int64{200: 1}, timeouts: 1, latencies: []time.Duration{time.Millisecond}}},
+		{name: "wrong decisions", result: levelResult{total: 1, byStatus: map[int]int64{200: 1}, wrongDec: 1, latencies: []time.Duration{time.Millisecond}}},
+		{name: "incomplete accounting", result: levelResult{total: 2, byStatus: map[int]int64{200: 2}, latencies: []time.Duration{time.Millisecond}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, _ := comparisonResultHealthy(tt.result)
+			if got != tt.want {
+				t.Fatalf("comparisonResultHealthy() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

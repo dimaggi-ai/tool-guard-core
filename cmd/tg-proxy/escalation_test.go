@@ -44,6 +44,44 @@ func TestEscalationStore_AddAndGet(t *testing.T) {
 	}
 }
 
+func TestEscalationStore_ReservationIsHiddenUntilAudited(t *testing.T) {
+	s := newEscalationStore()
+	reserved := s.reserve(envFor("reserved"), decisionFor(domain.DecisionEscalated), 15)
+	if reserved == nil || reserved.State != escRegistering {
+		t.Fatalf("reservation = %+v, want internal registering state", reserved)
+	}
+	if got := s.get("reserved"); got != nil {
+		t.Fatalf("hidden reservation visible via get: %+v", got)
+	}
+	if got := s.list(); len(got) != 0 {
+		t.Fatalf("hidden reservation visible via list: %+v", got)
+	}
+	if got, ok := s.resolve("reserved", "operator", "must not race audit", true); ok || got != nil {
+		t.Fatalf("hidden reservation resolved: got=%+v ok=%v", got, ok)
+	}
+	if !s.publishReserved(reserved) {
+		t.Fatal("publishReserved failed")
+	}
+	if got := s.get("reserved"); got == nil || got.State != EscPending {
+		t.Fatalf("published reservation = %+v, want pending", got)
+	}
+}
+
+func TestEscalationStore_DiscardOnlyExactHiddenReservation(t *testing.T) {
+	s := newEscalationStore()
+	reserved := s.reserve(envFor("reserved"), decisionFor(domain.DecisionEscalated), 15)
+	stale := *reserved
+	if s.discardReserved(&stale) {
+		t.Fatal("discard accepted a stale copy instead of the exact reservation")
+	}
+	if !s.discardReserved(reserved) {
+		t.Fatal("discardReserved failed for exact reservation")
+	}
+	if replacement := s.reserve(envFor("reserved"), decisionFor(domain.DecisionEscalated), 15); replacement == nil {
+		t.Fatal("discarded reservation continued blocking ID reuse")
+	}
+}
+
 func TestEscalationStore_Approve(t *testing.T) {
 	s := newEscalationStore()
 	s.add(envFor("env-1"), decisionFor(domain.DecisionEscalated), 15)

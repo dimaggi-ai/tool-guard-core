@@ -312,6 +312,38 @@ func TestProxy_AuditFailureFailsClosedForEveryProceedingNonAllowAction(t *testin
 	}
 }
 
+func TestProxy_UnauditedEscalationIsDiscardedEvenInFailOpenMode(t *testing.T) {
+	p := newOperationalTestProxy(t, []domain.Policy{
+		operationalPolicy("escalate", domain.PolicyModeEnforcement, domain.EffectEscalate, "amount", 0),
+	}, false)
+	p.failClosed = false
+	if err := p.auditLog.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	status, result := evaluateOperational(t, p, "unaudited-escalation", 100)
+	if status != http.StatusOK || result.ActionTaken != domain.ActionDenied {
+		t.Fatalf("audit-failed escalation status/action = %d/%q, want 200/denied", status, result.ActionTaken)
+	}
+	assertOperationalDenyHasNoPolicyAttribution(t, result)
+	if got := p.escalations.get("unaudited-escalation"); got != nil {
+		t.Fatalf("audit-failed escalation remained authorizable: %+v", got)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/escalations/unaudited-escalation/approve", strings.NewReader(`{"approver":"operator"}`))
+	req.Header.Set("Authorization", "Bearer approver-secret")
+	p.approverToken = "approver-secret"
+	rec := httptest.NewRecorder()
+	p.escalationByID(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("approval of audit-failed escalation status=%d body=%s, want 404", rec.Code, rec.Body.String())
+	}
+	if p.auditFailureCount.Load() != 1 || p.denyCount.Load() != 1 || p.escalateCount.Load() != 0 {
+		t.Fatalf("counters audit=%d deny=%d escalate=%d, want 1/1/0",
+			p.auditFailureCount.Load(), p.denyCount.Load(), p.escalateCount.Load())
+	}
+}
+
 func TestProxy_AuditRollbackFailurePoisonsReadinessAndSkipsRetry(t *testing.T) {
 	p := newOperationalTestProxy(t, []domain.Policy{
 		operationalPolicy("proceeding-flag", domain.PolicyModeEnforcement, domain.EffectFlag, "amount", 0),

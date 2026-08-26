@@ -435,12 +435,14 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 	// poll URL would let an agent see another entry's approval
 	// state, and escalating past the cap would silently drop the
 	// pending entry. Better to surface a clean deny.
+	var escalationReservation *Escalation
 	if result.ActionTaken == domain.ActionEscalated {
 		timeoutMin := p.escalationDefaultMin
 		if t := timeoutFromMatchedRules(result, policies); t > 0 {
 			timeoutMin = t
 		}
-		if registered := p.escalations.add(&env, result, timeoutMin); registered == nil {
+		escalationReservation = p.escalations.reserve(&env, result, timeoutMin)
+		if escalationReservation == nil {
 			applyOperationalDeny(result, "escalation could not be registered (envelope_id collision or pending-store at cap); downgraded to deny")
 			syncResultOutcomeToTrace(&trace, result)
 		}
@@ -458,7 +460,20 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 	if auditErr != nil {
 		log.Printf("tg-proxy: append audit trace: %v", auditErr)
 		p.auditFailureCount.Add(1)
-		if p.failClosed && actionProceeds(result.ActionTaken) {
+		if escalationReservation != nil {
+			p.escalations.discardReserved(escalationReservation)
+			escalationReservation = nil
+			applyOperationalDeny(result, "escalation audit append failed; hidden reservation discarded and action downgraded to deny")
+			syncResultOutcomeToTrace(&trace, result)
+			// Escalation authorization is always audit-gated, independent of
+			// fail-open for ordinary actions. When the failed write was proven
+			// rolled back, make one best-effort durable record of the deny.
+			if !errors.Is(auditErr, errAuditWriterPoisoned) {
+				if retryErr := p.appendTrace(&trace); retryErr == nil {
+					receipt = receiptForAppendedTrace(&trace)
+				}
+			}
+		} else if p.failClosed && actionProceeds(result.ActionTaken) {
 			applyOperationalDeny(result, "applied action would proceed but audit append failed; downgraded to deny (--fail-closed=true)")
 			syncResultOutcomeToTrace(&trace, result)
 			// A poisoned writer has an ambiguous on-disk tail. Retrying would
@@ -469,6 +484,16 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		receipt = receiptForAppendedTrace(&trace)
+		if escalationReservation != nil && !p.escalations.publishReserved(escalationReservation) {
+			// Hidden reservations cannot be evicted or resolved. Treat a failed
+			// publication as an internal safety invariant violation rather than
+			// returning a poll URL that has no pending object.
+			log.Printf("tg-proxy: audited escalation %q could not be published", env.EnvelopeID)
+			applyOperationalDeny(result, "audited escalation could not be published; downgraded to deny")
+			syncResultOutcomeToTrace(&trace, result)
+			receipt = nil
+			escalationReservation = nil
+		}
 	}
 
 	switch result.ActionTaken {

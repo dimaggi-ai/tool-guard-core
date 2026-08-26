@@ -108,6 +108,16 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   Guard is pre-1.0, 0.8 carries this explicitly documented breaking migration
   in a minor release rather than weakening the audit guarantee.
 
+### Breaking Go API migration planned for 0.8.0
+
+- The exported mutable package variable `engine.LLMClassifyHook` has been
+  removed. Direct writes raced with concurrent evaluations and bypassed the
+  synchronization added for policy reload and parallel tests. Replace direct
+  assignment with `engine.SetLLMClassifyHook(hook)` and reads with
+  `engine.GetLLMClassifyHook()`; pass `nil` to the setter to clear the hook.
+  This is an intentional pre-1.0 source break. The hook signature and runtime
+  behavior are unchanged.
+
 ### Release verification
 
 - Tag-triggered releases now call the complete CI workflow and cannot build or
@@ -115,6 +125,10 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   vulnerability, policy-lint, SDK, and release-config gates used for merges
   pass on the tagged commit. The release workflow no longer maintains a
   separate test list, and publish permissions are limited to publishing jobs.
+- GoReleaser now stages a draft GitHub Release. Archive attestation, container
+  signing and verification, and idempotent PyPI trusted publishing must all
+  succeed before a final job promotes the draft. A failed publish therefore
+  leaves no public GitHub Release that claims incomplete artifacts.
 
 ### Proxy decision receipts
 
@@ -144,6 +158,9 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   `--policy` and `--action` selectors make the stream usable by standard log
   pipelines without a new runtime dependency. A damaged chain is rejected
   before stdout receives any record.
+- Export uses the same 4 MiB logical-record boundary as audit writers and the
+  verifier: an exact-maximum record is accepted and a larger record is rejected
+  before JSON decoding.
 
 ### Documentation integrity
 

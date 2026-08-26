@@ -240,11 +240,14 @@ func streamAuditExport(files []auditFileSnapshot, filter auditExportFilter, stdo
 	out := bufio.NewWriter(stdout)
 	for _, snapshot := range files {
 		scanner := bufio.NewScanner(io.NewSectionReader(snapshot.file, 0, snapshot.size))
-		scanner.Buffer(make([]byte, 0, 1<<20), 4*1024*1024)
+		scanner.Buffer(make([]byte, 0, 1<<20), audit.MaxTraceRecordScanBytes)
 		for scanner.Scan() {
 			raw := scanner.Bytes()
 			if len(bytes.TrimSpace(raw)) == 0 {
 				continue
+			}
+			if len(raw) > audit.MaxTraceRecordBytes {
+				return fmt.Errorf("decode %s: audit record is %d bytes; maximum is %d", snapshot.path, len(raw), audit.MaxTraceRecordBytes)
 			}
 			var record auditExportView
 			if err := json.Unmarshal(raw, &record); err != nil {
