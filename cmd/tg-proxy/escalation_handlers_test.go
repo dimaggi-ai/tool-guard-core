@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 )
@@ -259,13 +260,19 @@ func TestEscalationApproval_DurableRotationBarrierPrecedesApproval(t *testing.T)
 	if e := p.escalations.add(envFor(id), decisionFor(domain.DecisionEscalated), 15); e == nil {
 		t.Fatal("seed escalation failed")
 	}
-	if p.auditDirectorySync != nil {
-		t.Fatal("test requires nil per-proxy override to exercise production default dispatch")
+	directorySyncCalls := 0
+	platformDirectorySync := p.auditRotation.syncDirectory
+	p.auditRotation.syncDirectory = func(path string) error {
+		directorySyncCalls++
+		return platformDirectorySync(path)
 	}
 
 	rec := resolveEscalationRequest(t, p, id, "approve")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("rotating approval status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if directorySyncCalls != 1 {
+		t.Fatalf("platform directory barriers = %d, want 1", directorySyncCalls)
 	}
 	if _, err := os.Stat(p.auditPath + ".1"); err != nil {
 		t.Fatalf("rotated audit file: %v", err)
@@ -291,7 +298,7 @@ func TestOrdinaryRotationBarrierFailurePoisonsBeforeLaterApproval(t *testing.T) 
 	}
 	p.auditRotateBytes = 1
 	directorySyncCalls := 0
-	p.auditDirectorySync = func(string) error {
+	p.auditRotation.syncDirectory = func(string) error {
 		directorySyncCalls++
 		return errors.New("forced prior directory sync failure")
 	}
@@ -378,7 +385,7 @@ func TestOrdinaryRotationRenameFailureAfterClosePoisonsWriter(t *testing.T) {
 		t.Fatalf("seed audit trace: %v", err)
 	}
 	p.auditRotateBytes = 1
-	p.auditRename = func(string, string) error { return errors.New("forced rename failure") }
+	p.auditRotation.rename = func(string, string) error { return errors.New("forced rename failure") }
 
 	err := p.appendTrace(&domain.DecisionTrace{
 		TraceID:  "must-not-write-after-rename-failure",
@@ -412,7 +419,7 @@ func TestEscalationApproval_PreRotationBarrierFailureRemainsUnapproved(t *testin
 		t.Fatalf("seed audit trace: %v", err)
 	}
 	p.auditRotateBytes = 1
-	p.auditDirectorySync = func(string) error { return errors.New("forced directory sync failure") }
+	p.auditRotation.syncDirectory = func(string) error { return errors.New("forced directory sync failure") }
 	id := "approval-rotation-indeterminate"
 	if e := p.escalations.add(envFor(id), decisionFor(domain.DecisionEscalated), 15); e == nil {
 		t.Fatal("seed escalation failed")
@@ -430,5 +437,44 @@ func TestEscalationApproval_PreRotationBarrierFailureRemainsUnapproved(t *testin
 	}
 	if _, err := os.Stat(p.auditPath + ".1"); err != nil {
 		t.Fatalf("uncertain rotated audit file: %v", err)
+	}
+}
+
+func TestEscalationExpiry_PreRotationFailureLeavesPendingWithoutTerminalTrace(t *testing.T) {
+	p := newOperationalTestProxy(t, nil, false)
+	if err := p.appendTrace(&domain.DecisionTrace{
+		TraceID:  "expiry-rotation-seed",
+		Decision: domain.DecisionDenied, ActionTaken: domain.ActionDenied,
+	}); err != nil {
+		t.Fatalf("seed audit trace: %v", err)
+	}
+	p.auditRotateBytes = 1
+	p.auditRotation.syncDirectory = func(string) error { return errors.New("forced expiry directory sync failure") }
+	id := "expiry-before-failed-rotation"
+	if e := p.escalations.add(envFor(id), decisionFor(domain.DecisionEscalated), 15); e == nil {
+		t.Fatal("seed escalation failed")
+	}
+	p.escalations.mu.Lock()
+	p.escalations.entries[id].ExpiresAt = time.Now().Add(-time.Second)
+	p.escalations.mu.Unlock()
+
+	expired, failures := p.escalations.reapExpiredAudited(p.emitEscalationExpiry)
+	if len(expired) != 0 || len(failures) != 1 {
+		t.Fatalf("expiry results = %d expired/%d failures, want 0/1", len(expired), len(failures))
+	}
+	if got := p.escalations.get(id); got == nil || got.State != EscPending || got.ResolvedAt != nil {
+		t.Fatalf("failed audited expiry state = %#v, want unresolved pending", got)
+	}
+	for _, path := range p.auditCandidatesNewestFirst() {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read audit candidate %s: %v", path, err)
+		}
+		if strings.Contains(string(raw), id) {
+			t.Fatalf("failed expiry reached audit candidate %s: %s", path, raw)
+		}
+	}
+	if !p.auditPoisoned {
+		t.Fatal("uncertain expiry pre-rotation did not poison writer")
 	}
 }

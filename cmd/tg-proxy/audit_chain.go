@@ -267,10 +267,10 @@ func (p *proxy) verifyFullAuditChain() error {
 //
 // Rotation:
 //
-//	When auditRotateBytes > 0 and the active file exceeds that size
-//	after an append, the file is closed and renamed to
+//	When auditRotateBytes > 0 and the next record would make a non-empty
+//	active file meet or exceed that size, the current file is renamed to
 //	`<auditPath>.<n>` where n is the next free index. A fresh
-//	auditPath is opened. The chain continues unbroken because
+//	auditPath is opened before the record is written. The chain continues because
 //	lastHash carries across the rotation. `tg verify` walks the
 //	rotation set in chain order.
 func (p *proxy) appendTrace(t *domain.DecisionTrace) error {
@@ -325,9 +325,9 @@ func (p *proxy) appendTraceWithDurability(t *domain.DecisionTrace, forceDurable 
 			}
 			return fmt.Errorf("rotate audit log before append: %w", err)
 		}
-		// A separator belongs only between records in the same file. The new
-		// active file starts clean even if the rotated tail ended at EOF.
-		p.auditNeedsSeparator = false
+		// Preserve auditNeedsSeparator across the file boundary. Full-chain
+		// verification concatenates rotation members as one logical JSONL stream,
+		// so a tail that ended at EOF still needs LF before the first active record.
 		st, err = p.auditLog.Stat()
 		if err != nil {
 			return fmt.Errorf("stat new active audit log before append: %w", err)
@@ -471,6 +471,9 @@ func (p *proxy) auditPoisonErrorLocked() error {
 // appendTrace poisons the writer and never writes the current trace because the
 // rotation's on-disk transition did not complete as a proven transaction.
 func (p *proxy) rotateAuditLocked() error {
+	if p.auditRotation.rename == nil || p.auditRotation.syncDirectory == nil {
+		return errors.New("audit rotation operations are not configured")
+	}
 	if err := p.auditLog.Sync(); err != nil {
 		return fmt.Errorf("sync before rotate: %w", err)
 	}
@@ -486,11 +489,7 @@ func (p *proxy) rotateAuditLocked() error {
 	for {
 		candidate := fmt.Sprintf("%s.%d", p.auditPath, idx)
 		if _, err := os.Stat(candidate); errors.Is(err, os.ErrNotExist) {
-			rename := renameAuditFile
-			if p.auditRename != nil {
-				rename = p.auditRename
-			}
-			if err := rename(p.auditPath, candidate); err != nil {
+			if err := p.auditRotation.rename(p.auditPath, candidate); err != nil {
 				p.reopenAuditLocked() // recover; ignore reopen err — already broken
 				return fmt.Errorf("%w: rename to %s: %v", errAuditRotationStateUncertain, candidate, err)
 			}
@@ -520,11 +519,7 @@ func (p *proxy) rotateAuditLocked() error {
 	if err := f.Sync(); err != nil {
 		return fmt.Errorf("%w: sync new active audit file: %v", errAuditRotationStateUncertain, err)
 	}
-	directorySync := syncAuditDirectory
-	if p.auditDirectorySync != nil {
-		directorySync = p.auditDirectorySync
-	}
-	if err := directorySync(filepath.Dir(p.auditPath)); err != nil {
+	if err := p.auditRotation.syncDirectory(filepath.Dir(p.auditPath)); err != nil {
 		return fmt.Errorf("%w: sync audit rotation directory: %v", errAuditRotationStateUncertain, err)
 	}
 	log.Printf("tg-proxy: rotated audit log → %s.%d", p.auditPath, idx)

@@ -167,6 +167,36 @@ func (p *proxy) emitEscalationResolution(e *Escalation, approved bool) error {
 	return nil
 }
 
+// emitEscalationExpiry durably records the deny-by-timeout transition before
+// the store publishes EscExpired.
+func (p *proxy) emitEscalationExpiry(e *Escalation) error {
+	amount, amountStatus := evaluatedAmountFromEnvelope(&e.Envelope)
+	trace := domain.DecisionTrace{
+		TraceID:           fmt.Sprintf("trc-%d", time.Now().UnixNano()),
+		Timestamp:         time.Now().UTC(),
+		EnvelopeID:        e.Envelope.EnvelopeID,
+		AgentID:           e.Envelope.AgentID,
+		AgentVersion:      e.Envelope.AgentVersion,
+		SessionID:         e.Envelope.SessionID,
+		TurnNumber:        e.Envelope.TurnNumber,
+		OrgID:             e.Envelope.OrgID,
+		ToolName:          e.Envelope.ToolName,
+		ToolGroup:         e.Envelope.ToolGroup,
+		Amount:            amount,
+		AmountParseStatus: amountStatus,
+		Decision:          domain.DecisionDenied,
+		ActionTaken:       domain.ActionDenied,
+		DecisionReason:    fmt.Sprintf("escalation %s expired without approval", e.ID),
+		Mode:              domain.PolicyModeEnforcement,
+	}
+	if err := p.appendTraceDurable(&trace); err != nil {
+		log.Printf("tg-proxy: emitEscalationExpiry audit: %v", err)
+		p.auditFailureCount.Add(1)
+		return err
+	}
+	return nil
+}
+
 // splitCommaPaths parses a comma-separated path list into a slice, trimming
 // blanks. Values are left as-is; engine.ViolatesProtectedPaths cleans them.
 func splitCommaPaths(s string) []string {

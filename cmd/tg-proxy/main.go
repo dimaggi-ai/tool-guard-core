@@ -66,6 +66,21 @@ type auditLogFile interface {
 	Close() error
 }
 
+// auditRotationOps is bound once per proxy. Production and test fixtures use
+// platformAuditRotationOps; fault-injection tests replace one operation only on
+// their own proxy, without mutating package-global behavior.
+type auditRotationOps struct {
+	rename        func(string, string) error
+	syncDirectory func(string) error
+}
+
+func platformAuditRotationOps() auditRotationOps {
+	return auditRotationOps{
+		rename:        renameAuditFile,
+		syncDirectory: syncAuditDirectory,
+	}
+}
+
 // proxy holds the runtime state of the server. Policies are guarded by mu;
 // audit state is guarded by auditMu so reloads and concurrent evaluations do
 // not race or interleave hash-chain links.
@@ -86,21 +101,16 @@ type proxy struct {
 	// records cannot be concatenated across a file or rotation boundary.
 	auditNeedsSeparator bool
 
-	defaultMode       domain.PolicyMode
-	failClosed        bool
-	unknownToolsDeny  bool
-	maxJSONDepth      int
-	auditSyncMode     string // every | interval | none
-	auditSyncEvery    int
-	auditRotateBytes  int64
-	auditAppendSeq    int64
-	auditCurrentBytes int64
-	// auditDirectorySync overrides the platform rotation-metadata barrier in
-	// tests. Production leaves it nil and uses syncAuditDirectory.
-	auditDirectorySync func(string) error
-	// auditRename overrides only the rename syscall in fault-injection tests.
-	// Production leaves it nil and calls renameAuditFile directly.
-	auditRename          func(string, string) error
+	defaultMode          domain.PolicyMode
+	failClosed           bool
+	unknownToolsDeny     bool
+	maxJSONDepth         int
+	auditSyncMode        string // every | interval | none
+	auditSyncEvery       int
+	auditRotateBytes     int64
+	auditAppendSeq       int64
+	auditCurrentBytes    int64
+	auditRotation        auditRotationOps
 	rateLimit            *rateLimiter // nil if disabled
 	rateLimitKeyBy       string
 	velocity             *velocityTracker // nil if disabled
@@ -152,7 +162,7 @@ func main() {
 		maxJSONDepth      = flag.Int("max-envelope-depth", 32, "reject /evaluate envelopes whose JSON nests deeper than this (DoS defense)")
 		auditSyncMode     = flag.String("audit-sync-mode", "every", "audit fsync mode: every | interval | none")
 		auditSyncEvery    = flag.Int("audit-sync-every", 100, "when audit-sync-mode=interval, fsync once every N appends")
-		auditRotateBytes  = flag.Int64("audit-rotate-bytes", 0, "rotate audit log when active file exceeds this many bytes (0 = never rotate)")
+		auditRotateBytes  = flag.Int64("audit-rotate-bytes", 0, "rotate a non-empty audit log before the next record would meet or exceed this many bytes (0 = never rotate)")
 		rateLimitRPS      = flag.Float64("rate-limit-rps", 0, "per-agent steady-state limit (req/s); 0 disables rate limiting")
 		rateLimitBurst    = flag.Float64("rate-limit-burst", 50, "per-agent burst capacity used when -rate-limit-rps > 0")
 		rateLimitKeyBy    = flag.String("rate-limit-key-by", "agent_id", "envelope field to key the limiter on: agent_id | session_id | org_id")
@@ -297,6 +307,7 @@ func main() {
 		policyDir:            *policyDir,
 		auditPath:            *auditPath,
 		startedAt:            time.Now().UTC(),
+		auditRotation:        platformAuditRotationOps(),
 	}
 	switch *defaultMode {
 	case "shadow":
@@ -360,38 +371,12 @@ func main() {
 			case <-reaperCtx.Done():
 				return
 			case <-t.C:
-				if expired := p.escalations.reapExpired(); len(expired) > 0 {
+				expired, failures := p.escalations.reapExpiredAudited(p.emitEscalationExpiry)
+				if len(expired) > 0 {
 					log.Printf("tg-proxy: escalation reaper expired %d pending entries", len(expired))
-					// Append a synthetic deny trace for each
-					// expired entry so the audit chain reflects
-					// the terminal state. Without this an operator
-					// scanning the chain would see only the
-					// original "escalated" trace with no record
-					// that the lifecycle ended in deny-by-timeout.
-					for _, e := range expired {
-						amount, amountStatus := evaluatedAmountFromEnvelope(&e.Envelope)
-						trace := domain.DecisionTrace{
-							TraceID:           fmt.Sprintf("trc-%d", time.Now().UnixNano()),
-							Timestamp:         time.Now().UTC(),
-							EnvelopeID:        e.Envelope.EnvelopeID,
-							AgentID:           e.Envelope.AgentID,
-							AgentVersion:      e.Envelope.AgentVersion,
-							SessionID:         e.Envelope.SessionID,
-							TurnNumber:        e.Envelope.TurnNumber,
-							OrgID:             e.Envelope.OrgID,
-							ToolName:          e.Envelope.ToolName,
-							ToolGroup:         e.Envelope.ToolGroup,
-							Amount:            amount,
-							AmountParseStatus: amountStatus,
-							Decision:          domain.DecisionDenied,
-							ActionTaken:       domain.ActionDenied,
-							DecisionReason:    fmt.Sprintf("escalation %s expired without approval", e.ID),
-							Mode:              domain.PolicyModeEnforcement,
-						}
-						if err := p.appendTrace(&trace); err != nil {
-							log.Printf("tg-proxy: append expiry trace for %s: %v", e.ID, err)
-						}
-					}
+				}
+				for _, failure := range failures {
+					log.Printf("tg-proxy: expire escalation %s audit: %v", failure.Escalation.ID, failure.Err)
 				}
 			}
 		}

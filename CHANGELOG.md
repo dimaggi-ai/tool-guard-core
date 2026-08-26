@@ -93,7 +93,10 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   Windows). A failed rotation therefore cannot leave a durable `allowed` trace
   that fail-closed later reports as `denied`. Any uncertain rotation poisons the
   writer in every sync mode, so `/readyz` cannot remain green and a later
-  approval cannot bypass the unresolved state.
+  approval cannot bypass the unresolved state. Expiration now uses the same
+  audit-before-publish transaction as human resolution: a proven pre-write
+  failure leaves the escalation pending, while a possibly written terminal
+  record makes its state `indeterminate`.
 - Compile-only `js/wasm` and `wasip1/wasm` proxy builds no longer reference
   unavailable process-signal constants. Native SIGHUP reload and graceful
   shutdown behavior is unchanged.

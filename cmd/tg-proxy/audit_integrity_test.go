@@ -31,6 +31,62 @@ type faultInjectAuditFile struct {
 	syncCalls                int
 }
 
+func TestAppendTrace_PreRotationPreservesEOFTailDelimiter(t *testing.T) {
+	dir := t.TempDir()
+	active := filepath.Join(dir, "decisions.jsonl")
+	first := makeValidTrace("eof-before-rotation", "", time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC))
+	firstLine, err := json.Marshal(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(active, firstLine, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	p := &proxy{
+		auditPath:     active,
+		auditSyncMode: "none",
+		auditRotation: platformAuditRotationOps(),
+	}
+	if err := p.openAuditLog(); err != nil {
+		t.Fatalf("open EOF tail: %v", err)
+	}
+	if !p.auditNeedsSeparator {
+		t.Fatal("EOF tail did not request cross-file separator")
+	}
+	p.auditRotateBytes = 1
+	second := domain.DecisionTrace{
+		TraceID:     "after-eof-prerotation",
+		Timestamp:   time.Date(2026, 8, 25, 12, 0, 1, 0, time.UTC),
+		Decision:    domain.DecisionDenied,
+		ActionTaken: domain.ActionDenied,
+	}
+	if err := p.appendTrace(&second); err != nil {
+		t.Fatalf("append after EOF pre-rotation: %v", err)
+	}
+	activeRaw, err := os.ReadFile(active)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(activeRaw) == 0 || activeRaw[0] != '\n' {
+		t.Fatalf("new active file missing cross-rotation LF: %q", activeRaw)
+	}
+	if err := p.verifyFullAuditChain(); err != nil {
+		t.Fatalf("full chain after EOF pre-rotation: %v", err)
+	}
+	if err := p.auditLog.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted := &proxy{auditPath: active, auditSyncMode: "none"}
+	if err := restarted.openAuditLog(); err != nil {
+		t.Fatalf("restart after EOF pre-rotation: %v", err)
+	}
+	defer restarted.auditLog.Close()
+	if restarted.lastHash != second.TraceHash {
+		t.Fatalf("restart tail = %q, want %q", restarted.lastHash, second.TraceHash)
+	}
+}
+
 func (f *faultInjectAuditFile) Close() error {
 	if f.closeFailuresRemaining > 0 {
 		f.closeFailuresRemaining--

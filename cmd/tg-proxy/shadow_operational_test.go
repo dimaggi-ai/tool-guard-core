@@ -59,6 +59,7 @@ func newOperationalTestProxy(t *testing.T, policies []domain.Policy, trackVeloci
 		escalationDefaultMin: 15,
 		eval:                 engine.NewEvaluator(),
 		startedAt:            time.Now().UTC(),
+		auditRotation:        platformAuditRotationOps(),
 	}
 	// Rotation replaces p.auditLog. Close the handle that is current at cleanup
 	// time so Windows can remove the temporary directory after rotating tests.

@@ -9,7 +9,8 @@ import (
 
 func TestSyncAuditDirectory_RejectsMissingDirectory(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing")
-	if err := syncAuditDirectory(missing); err == nil {
-		t.Fatal("syncAuditDirectory(missing) = nil, want platform open/sync error")
+	ops := platformAuditRotationOps()
+	if err := ops.syncDirectory(missing); err == nil {
+		t.Fatal("platform rotation directory sync(missing) = nil, want open/sync error")
 	}
 }

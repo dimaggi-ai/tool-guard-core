@@ -185,7 +185,8 @@ a rotation failure cannot commit an action that the response later changes.
 Rotation flushes the rename and replacement-file metadata before completing.
 Any uncertain rotation poisons the writer, fails readiness, and blocks later
 appends; the current trace has not been written and no terminal escalation
-state is published. `tg verify` walks the rotation set in order.
+state is published. Automatic expiration follows the same audit-before-publish
+ordering as approval and denial. `tg verify` walks the rotation set in order.
 
 ## The escalation flow
 

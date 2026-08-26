@@ -199,25 +199,53 @@ func (s *escalationStore) resolveAudited(
 	return &ec, true, nil
 }
 
-// reapExpired marks any pending entry past its expires_at as expired
-// and returns shallow copies of every entry just expired. The caller
-// (proxy reaper goroutine) writes a synthetic Decision=denied trace
-// per expired entry so the audit chain captures the lifecycle
-// terminating without operator action.
-func (s *escalationStore) reapExpired() []Escalation {
+type escalationExpiryFailure struct {
+	Escalation Escalation
+	Err        error
+}
+
+// reapExpiredAudited prepares each due expiration, invokes beforeCommit while
+// the entry is still pending, and publishes expired only after the audit
+// transition succeeds. An ambiguous terminal write becomes indeterminate;
+// a proven pre-write failure leaves the entry pending for operator recovery.
+func (s *escalationStore) reapExpiredAudited(
+	beforeCommit func(*Escalation) error,
+) ([]Escalation, []escalationExpiryFailure) {
 	now := time.Now().UTC()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var out []Escalation
+	var (
+		out      []Escalation
+		failures []escalationExpiryFailure
+	)
 	for _, e := range s.entries {
 		if e.State == EscPending && !now.Before(e.ExpiresAt) {
-			e.State = EscExpired
+			candidate := *e
+			candidate.State = EscExpired
 			t := now
-			e.ResolvedAt = &t
+			candidate.ResolvedAt = &t
+			if beforeCommit != nil {
+				if err := beforeCommit(&candidate); err != nil {
+					if errors.Is(err, errAuditStateIndeterminate) || errors.Is(err, errAuditRecordCommitted) {
+						candidate.State = EscIndeterminate
+						*e = candidate
+					}
+					failures = append(failures, escalationExpiryFailure{Escalation: *e, Err: err})
+					continue
+				}
+			}
+			*e = candidate
 			out = append(out, *e)
 		}
 	}
-	return out
+	return out, failures
+}
+
+// reapExpired preserves the store-only helper used by unit tests and callers
+// that do not own an audit writer.
+func (s *escalationStore) reapExpired() []Escalation {
+	expired, _ := s.reapExpiredAudited(nil)
+	return expired
 }
 
 // list returns a snapshot of all entries (pending + resolved). Used
