@@ -35,10 +35,11 @@ release baseline**. An exact 10% regression fails.
 
 Methodology, exactly as the workflow runs it:
 
-- **Harness:** `cmd/stress-test` first fires a realistic allow/deny mix of
-  `/evaluate` envelopes at the candidate loaded with the shipped `policies/`
-  directory, stepping concurrency through 1, 10, 50, 200. It then measures
-  candidate and baseline concurrently before an overload phase (2,000
+- **Harness:** `cmd/stress-test` first measures the fresh candidate and baseline
+  concurrently, before candidate-only load can mutate the bounded escalation
+  store. It then fires a realistic allow/deny mix of `/evaluate` envelopes at
+  the candidate loaded with the shipped `policies/` directory, stepping
+  concurrency through 1, 10, 50, 200, before an overload phase (2,000
   in-flight) that must fail *closed* (clean rejections — never a 200 with the
   wrong decision, never a hang).
 - **Throughput denominator:** every contract-valid HTTP 200/202 evaluation

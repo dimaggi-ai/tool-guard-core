@@ -178,6 +178,30 @@ func TestValidateComparisonConfig(t *testing.T) {
 	}
 }
 
+func TestMeasurementPlanStartsComparisonWithBothTargetsFresh(t *testing.T) {
+	levels := []int{1, 10, 50}
+	plan := measurementPlan(levels, true)
+	if len(plan) != len(levels)+1 || !plan[0].comparison {
+		t.Fatalf("measurementPlan() = %#v, want comparison before every candidate-only level", plan)
+	}
+	for i, concurrency := range levels {
+		phase := plan[i+1]
+		if phase.comparison || phase.concurrency != concurrency {
+			t.Fatalf("measurementPlan()[%d] = %#v, want candidate-only concurrency %d", i+1, phase, concurrency)
+		}
+	}
+
+	withoutBaseline := measurementPlan(levels, false)
+	if len(withoutBaseline) != len(levels) {
+		t.Fatalf("measurementPlan() without baseline has %d phases, want %d", len(withoutBaseline), len(levels))
+	}
+	for i, phase := range withoutBaseline {
+		if phase.comparison || phase.concurrency != levels[i] {
+			t.Fatalf("measurementPlan() without baseline phase %d = %#v", i, phase)
+		}
+	}
+}
+
 func TestRelativeThroughputGate(t *testing.T) {
 	tests := []struct {
 		name      string

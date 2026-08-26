@@ -136,8 +136,44 @@ func main() {
 
 	overallFailClosed := true
 	floorMet := true
+	comparisonMet := true
 	var expectedAuditRecords int64
-	for _, c := range levels {
+	for _, phase := range measurementPlan(levels, *baselineTarget != "") {
+		if phase.comparison {
+			fmt.Printf("\n--- relative regression phase: concurrency=%d per target for %s ---\n", *compareConcurrency, *compareDuration)
+			candidate, baseline := runTargetComparison(*target, *baselineTarget, *compareConcurrency, *compareDuration)
+			expectedAuditRecords += int64(len(candidate.latencies))
+			fmt.Println("candidate:")
+			printLevel(*compareConcurrency, *compareDuration, candidate)
+			fmt.Println("baseline:")
+			printLevel(*compareConcurrency, *compareDuration, baseline)
+
+			candidateRPS := successfulRPS(candidate, *compareDuration)
+			baselineRPS := successfulRPS(baseline, *compareDuration)
+			candidateHealthy, candidateReason := comparisonResultHealthy(candidate)
+			baselineHealthy, baselineReason := comparisonResultHealthy(baseline)
+			regressionPct, throughputPassed, valid := relativeThroughputGate(candidateRPS, baselineRPS, *maxRegressionPct)
+			if !candidateHealthy {
+				fmt.Printf("  ⚠ REGRESSION CHECK INVALID: candidate result is unhealthy: %s\n", candidateReason)
+				comparisonMet = false
+			} else if !baselineHealthy {
+				fmt.Printf("  ⚠ REGRESSION CHECK INVALID: baseline result is unhealthy: %s\n", baselineReason)
+				comparisonMet = false
+			} else if !valid {
+				fmt.Println("  ⚠ REGRESSION CHECK INVALID: baseline completed zero successful responses")
+				comparisonMet = false
+			} else if !throughputPassed {
+				fmt.Printf("  ⚠ REGRESSION: candidate %.1f req/s is %.2f%% below baseline %.1f req/s (limit: < %.2f%%)\n",
+					candidateRPS, regressionPct, baselineRPS, *maxRegressionPct)
+				comparisonMet = false
+			} else {
+				fmt.Printf("  ✓ relative gate passed: candidate %.1f req/s, baseline %.1f req/s, regression %.2f%% (< %.2f%%)\n",
+					candidateRPS, baselineRPS, regressionPct, *maxRegressionPct)
+			}
+			continue
+		}
+
+		c := phase.concurrency
 		res := runLevel(*target, c, *duration, 0)
 		expectedAuditRecords += int64(len(res.latencies))
 		printLevel(c, *duration, res)
@@ -169,40 +205,6 @@ func main() {
 		if !found {
 			fmt.Printf("stress-test: -floor-concurrency=%d was never tested — add it to -concurrency\n", *floorConcurrency)
 			floorMet = false
-		}
-	}
-
-	comparisonMet := true
-	if *baselineTarget != "" {
-		fmt.Printf("\n--- relative regression phase: concurrency=%d per target for %s ---\n", *compareConcurrency, *compareDuration)
-		candidate, baseline := runTargetComparison(*target, *baselineTarget, *compareConcurrency, *compareDuration)
-		expectedAuditRecords += int64(len(candidate.latencies))
-		fmt.Println("candidate:")
-		printLevel(*compareConcurrency, *compareDuration, candidate)
-		fmt.Println("baseline:")
-		printLevel(*compareConcurrency, *compareDuration, baseline)
-
-		candidateRPS := successfulRPS(candidate, *compareDuration)
-		baselineRPS := successfulRPS(baseline, *compareDuration)
-		candidateHealthy, candidateReason := comparisonResultHealthy(candidate)
-		baselineHealthy, baselineReason := comparisonResultHealthy(baseline)
-		regressionPct, throughputPassed, valid := relativeThroughputGate(candidateRPS, baselineRPS, *maxRegressionPct)
-		if !candidateHealthy {
-			fmt.Printf("  ⚠ REGRESSION CHECK INVALID: candidate result is unhealthy: %s\n", candidateReason)
-			comparisonMet = false
-		} else if !baselineHealthy {
-			fmt.Printf("  ⚠ REGRESSION CHECK INVALID: baseline result is unhealthy: %s\n", baselineReason)
-			comparisonMet = false
-		} else if !valid {
-			fmt.Println("  ⚠ REGRESSION CHECK INVALID: baseline completed zero successful responses")
-			comparisonMet = false
-		} else if !throughputPassed {
-			fmt.Printf("  ⚠ REGRESSION: candidate %.1f req/s is %.2f%% below baseline %.1f req/s (limit: < %.2f%%)\n",
-				candidateRPS, regressionPct, baselineRPS, *maxRegressionPct)
-			comparisonMet = false
-		} else {
-			fmt.Printf("  ✓ relative gate passed: candidate %.1f req/s, baseline %.1f req/s, regression %.2f%% (< %.2f%%)\n",
-				candidateRPS, baselineRPS, regressionPct, *maxRegressionPct)
 		}
 	}
 
@@ -248,6 +250,26 @@ type levelResult struct {
 	wrongDec   int64           // malformed/unsupported 2xx or unsafe over-cap action
 	latencies  []time.Duration // contract-valid 200/202 responses only
 	worstHang  time.Duration
+}
+
+type measurementPhase struct {
+	comparison  bool
+	concurrency int
+}
+
+// measurementPlan keeps both proxies in equivalent initial state for the
+// relative gate. Candidate-only levels mutate bounded runtime state (notably
+// the pending-escalation store), so the simultaneous comparison must always be
+// the first state-mutating phase when a baseline is configured.
+func measurementPlan(levels []int, includeComparison bool) []measurementPhase {
+	plan := make([]measurementPhase, 0, len(levels)+1)
+	if includeComparison {
+		plan = append(plan, measurementPhase{comparison: true})
+	}
+	for _, concurrency := range levels {
+		plan = append(plan, measurementPhase{concurrency: concurrency})
+	}
+	return plan
 }
 
 func validateComparisonConfig(baselineTarget string, concurrency int, duration time.Duration, maxRegressionPct float64) error {
