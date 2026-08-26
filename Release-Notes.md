@@ -95,9 +95,15 @@ Tag CI keeps the GitHub Release as a draft while it attests archives, signs and
 verifies container digests, and publishes through PyPI Trusted Publishing. The
 draft is promoted only after registry checks succeed. This is staged, not
 atomic: registry artifacts can become visible before GitHub Release promotion.
-If a later step fails, the GitHub Release remains a draft; inspect the failed
-workflow, preserve the same tag and artifacts, and rerun the idempotent publish
-path only after correcting the release infrastructure.
+The finalizer compares the published PyPI filenames and SHA-256 digests with
+the exact wheel and source archive produced by the release workflow before it
+promotes the GitHub Release.
+If a step fails before promotion, the GitHub Release remains a draft; inspect
+the failed workflow, preserve the same tag and artifacts, and rerun the
+idempotent publish path only after correcting the release infrastructure. A
+runner can lose its response after promotion succeeds; on that retry, the
+finalizer rechecks the registries, recognizes the already-public release, and
+verifies its final state instead of attempting to republish artifacts.
 
 ---
 

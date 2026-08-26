@@ -227,4 +227,6 @@ jobs:
           args: check
 
       - name: Verify transactional release wiring
-        run: python3 scripts/verify-release-transaction.py
+        run: |
+          python3 scripts/verify-release-transaction.py
+          python3 -m unittest discover -s scripts -p 'test_verify_pypi_release.py'

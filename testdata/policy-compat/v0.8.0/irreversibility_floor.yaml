@@ -1,0 +1,177 @@
+schema_version: 1
+policy_id: irreversibility-floor
+name: irreversibility-floor
+description: >
+  The irreversibility floor. An action whose effect cannot be undone must
+  never be auto-allowed — it is escalated to a human reviewer
+  (human-in-the-loop) before it runs. Tool Guard's reversibility classifier
+  (deterministic; no network, no LLM) marks money movement
+  (payments/wire/transfer/refund), account or data destruction, production
+  deploy/publish, physical actuation, and destructive statements (SQL
+  DROP/TRUNCATE or unscoped DELETE, shell `rm -rf`) as `irreversible`. This
+  is a structural safety control: calls classified irreversible are never
+  silently committed by this policy. An action the classifier cannot
+  recognize is `unknown` and is ALSO escalated — the fail-safe: an unfamiliar
+  structural shape is not auto-allowed merely because no rule named it. Clearly
+  reversible actions (reads, add-label, create-draft) are allowed; recoverable
+  actions (scoped writes, undoable with effort) are permitted by default.
+version: 1
+# priority is advisory only (it affects evaluation ORDER, used for tie-breaks in
+# the reason string / primary citation) — it does NOT create decision
+# precedence. The floor's guarantee that an irreversible action is never
+# auto-allowed rests on the engine's MAX-SEVERITY resolution: this policy's
+# `escalate` (severity 3) outranks any other policy's `allow` (severity 1), so a
+# more permissive policy cannot override it regardless of priority.
+priority: 1
+status: approved
+mode: enforcement
+
+# Compliance mapping: EU AI Act Article 14 requires that high-risk AI
+# systems remain under effective human oversight. Routing every
+# irreversible action to a human reviewer is a direct implementation of
+# that oversight obligation.
+compliance:
+  eu_ai_act:
+    - art_14
+
+# The floor evaluates EVERY tool call, avoiding gaps in per-tool scope coverage.
+# It still cannot observe downstream semantics or world state; see the README's
+# limitations. The global intent is explicit so `tg lint` can distinguish this
+# designed floor from an accidental scope leak.
+scope:
+  intentionally_global: true
+
+rules:
+  # Self-protection: a policy that evaluates write-capable tools should not be
+  # editable by the agent it governs. Writes into a Tool Guard config/policy
+  # location are escalated (the floor escalates rather than denies — the
+  # operator may legitimately be editing policies through the agent). Runtime
+  # deployments should ALSO pass -protect-paths/-protect-self, which deny
+  # unconditionally and cannot be edited away; this rule is the in-policy
+  # backstop the linter checks for.
+  - rule_id: rule-floor-self-protection
+    name: writes to Tool Guard policy locations require the operator
+    rule_type: sanity
+    description: >
+      Any file-targeting write whose path resolves into a Tool Guard policy
+      or audit location is escalated for human review before it runs.
+    conditions:
+      and:
+        # path_classify fails closed on a missing field; gate on presence so
+        # tool calls without a file path fall through to the floor rules.
+        - field: parameters.file_path
+          operator: neq
+          value: ""
+        - path_classify:
+            field: parameters.file_path
+            require:
+              clean_first: true
+              denied_canonical_prefixes:
+                - /etc/tool-guard/
+                - /var/lib/tool-guard/
+                - /var/log/tool-guard/
+                - policies/
+                - /**/policies/
+                - irreversibility_floor.yaml
+    effect: escalate
+    effect_config:
+      severity: high
+      escalate_to: human_reviewer
+      timeout_minutes: 60
+      suggested_response: >
+        This write targets a Tool Guard policy location. A human must review
+        and approve it before it runs.
+    citation:
+      document_id: EU-AI-ACT-2024-1689
+      document_title: Regulation (EU) 2024/1689 (EU AI Act)
+      section: Article 14 — Human oversight
+      excerpt: >
+        Oversight measures shall be commensurate with the risks; the system
+        safeguards that implement oversight shall themselves be protected
+        from modification by the overseen system.
+  - rule_id: rule-irreversible-escalate
+    name: irreversible actions require human oversight
+    rule_type: sanity
+    description: >
+      Reversibility floor. Any call the engine classifies as `irreversible`
+      is escalated for human-in-the-loop review rather than executed
+      automatically. An effect that cannot be undone is never auto-allowed.
+    conditions:
+      field: reversibility
+      operator: eq
+      value: irreversible
+    effect: escalate
+    effect_config:
+      severity: high
+      escalate_to: human_reviewer
+      timeout_minutes: 60
+      suggested_response: >
+        This action cannot be undone (classified irreversible). A human must
+        review and approve it before it runs.
+    citation:
+      document_id: EU-AI-ACT-2024-1689
+      document_title: Regulation (EU) 2024/1689 (EU AI Act)
+      section: Article 14 — Human oversight
+      excerpt: >
+        High-risk AI systems shall be designed and developed in such a way,
+        including with appropriate human-machine interface tools, that they
+        can be effectively overseen by natural persons during the period in
+        which they are in use. Actions whose effects are irreversible remain
+        subject to human oversight and cannot be auto-approved by the system.
+
+  - rule_id: rule-unknown-escalate
+    name: unrecognized actions require human oversight (fail-safe)
+    rule_type: sanity
+    description: >
+      Fail-safe floor. An action the reversibility classifier could not
+      recognize is `unknown` — NOT reversible. Because the classifier keeps
+      `unknown` distinct precisely so a policy can demand positive proof of
+      reversibility before auto-allowing, the floor escalates it for
+      human-in-the-loop review rather than letting an unrecognized (possibly
+      irreversible) action fall through to the engine's default-allow. This is
+      what makes the deterministic classifier a floor and not just a
+      default-allow labeler: unrecognized structure escalates instead of
+      slipping through a gap in name/parameter coverage.
+    conditions:
+      field: reversibility
+      operator: eq
+      value: unknown
+    effect: escalate
+    effect_config:
+      severity: high
+      escalate_to: human_reviewer
+      timeout_minutes: 60
+      suggested_response: >
+        This action could not be classified as reversible (classified unknown).
+        Per the fail-safe floor, a human must review and approve it before it
+        runs.
+    citation:
+      document_id: EU-AI-ACT-2024-1689
+      document_title: Regulation (EU) 2024/1689 (EU AI Act)
+      section: Article 14 — Human oversight
+      excerpt: >
+        High-risk AI systems shall be designed and developed in such a way that
+        they can be effectively overseen by natural persons. An action whose
+        reversibility cannot be established is treated as requiring oversight
+        rather than auto-approved.
+
+  # Allow examples: clearly reversible actions do not need the human gate.
+  - rule_id: rule-reversible-allow
+    name: clearly reversible actions are permitted
+    rule_type: sanity
+    description: >
+      Read-only or trivially-undoable actions (reversibility=reversible,
+      e.g. read/list/get, add-label, create-draft) are explicitly allowed.
+    conditions:
+      field: reversibility
+      operator: eq
+      value: reversible
+    effect: allow
+    citation:
+      document_id: EU-AI-ACT-2024-1689
+      document_title: Regulation (EU) 2024/1689 (EU AI Act)
+      section: Article 14 — Human oversight
+      excerpt: >
+        Reversible actions do not carry the same oversight requirement as
+        irreversible ones; the oversight measures are proportionate to the
+        risks.

@@ -206,32 +206,54 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      # Keep gh repository resolution explicit even though this job checks out
+      # the tag for the registry-verification helper below.
+      GH_REPO: ${{ github.repository }}
     steps:
+      - name: Checkout release verification code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Download the exact Python distributions sent to PyPI
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: python-dist
+          path: dist/python
       - name: Verify staged release and PyPI package
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          if [ "$(gh release view "${TAG}" --json isDraft --jq '.isDraft')" != "true" ]; then
-            echo "::error::${TAG} is not a draft; refusing non-transactional promotion" >&2
+          release_draft="$(gh release view "${TAG}" --json isDraft --jq '.isDraft')"
+          if [ "${release_draft}" != "true" ] && [ "${GITHUB_RUN_ATTEMPT}" = "1" ]; then
+            echo "::error::${TAG} was already public on the first finalizer attempt; refusing unexpected release state" >&2
             exit 1
+          fi
+          if [ "${release_draft}" != "true" ]; then
+            echo "${TAG} is already public on retry; prerequisites will be reverified before accepting that state"
           fi
 
           version="${TAG#v}"
           found=false
+          metadata="${RUNNER_TEMP}/pypi-${version}.json"
           for attempt in $(seq 1 18); do
             if curl --fail --silent --show-error \
               --connect-timeout 5 --max-time 15 \
-              "https://pypi.org/pypi/toolguard-core/${version}/json" >/dev/null; then
+              "https://pypi.org/pypi/toolguard-core/${version}/json" >"${metadata}" && \
+              python3 scripts/verify_pypi_release.py \
+                --metadata "${metadata}" \
+                --dist-dir dist/python \
+                --expected-version "${version}"; then
               found=true
               break
             fi
-            echo "PyPI has not exposed toolguard-core ${version} yet (attempt ${attempt}/18)"
+            echo "PyPI has not exposed the exact toolguard-core ${version} distributions yet (attempt ${attempt}/18)"
             sleep 10
           done
           if [ "${found}" != "true" ]; then
-            echo "::error::PyPI did not expose toolguard-core ${version}; GitHub Release remains a draft" >&2
+            echo "::error::PyPI did not expose the exact toolguard-core ${version} filenames and SHA-256 digests; GitHub Release remains a draft" >&2
             exit 1
           fi
 
@@ -241,5 +263,9 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          gh release edit "${TAG}" --draft=false
+          if [ "$(gh release view "${TAG}" --json isDraft --jq '.isDraft')" = "true" ]; then
+            gh release edit "${TAG}" --draft=false
+          else
+            echo "${TAG} was already promoted by an earlier attempt; verifying final state"
+          fi
           test "$(gh release view "${TAG}" --json isDraft --jq '.isDraft')" = "false"

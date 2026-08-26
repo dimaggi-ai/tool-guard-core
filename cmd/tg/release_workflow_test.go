@@ -20,11 +20,15 @@ type workflowJobSpec struct {
 	Uses        string             `yaml:"uses"`
 	Needs       any                `yaml:"needs"`
 	Permissions map[string]string  `yaml:"permissions"`
+	Env         map[string]string  `yaml:"env"`
 	Steps       []workflowStepSpec `yaml:"steps"`
 }
 
 type workflowStepSpec struct {
-	Run string `yaml:"run"`
+	Name string         `yaml:"name"`
+	Uses string         `yaml:"uses"`
+	With map[string]any `yaml:"with"`
+	Run  string         `yaml:"run"`
 }
 
 func TestReleaseWorkflowReusesFullCI(t *testing.T) {
@@ -62,6 +66,22 @@ func TestReleaseWorkflowReusesFullCI(t *testing.T) {
 	assertWorkflowPermissions(t, "publish-python", release.Jobs["publish-python"].Permissions, map[string]string{
 		"id-token": "write",
 	})
+	finalizer, ok := release.Jobs["finalize-release"]
+	if !ok {
+		t.Fatal("release.yml has no finalizer job")
+	}
+	assertWorkflowPermissions(t, "finalize-release", finalizer.Permissions, map[string]string{
+		"contents": "write",
+	})
+	if finalizer.Env["GH_REPO"] != "${{ github.repository }}" {
+		t.Errorf("finalizer GH_REPO = %q, want explicit github.repository", finalizer.Env["GH_REPO"])
+	}
+	for _, dependency := range []string{"release", "publish-python"} {
+		if !workflowDependsOn(release.Jobs, "finalize-release", dependency, nil) {
+			t.Errorf("finalizer can run without successful %s job", dependency)
+		}
+	}
+	assertFinalizerTransaction(t, finalizer)
 
 	for _, jobName := range []string{"python-package", "release", "publish-python"} {
 		if !workflowDependsOn(release.Jobs, jobName, "verify", nil) {
@@ -85,6 +105,49 @@ func TestReleaseWorkflowReusesFullCI(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func assertFinalizerTransaction(t *testing.T, finalizer workflowJobSpec) {
+	t.Helper()
+	const (
+		downloadAction = "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"
+		verifyCommand  = "python3 scripts/verify_pypi_release.py"
+		promoteCommand = `gh release edit "${TAG}" --draft=false`
+		finalCheck     = `test "$(gh release view "${TAG}" --json isDraft --jq '.isDraft')" = "false"`
+	)
+
+	downloadIndex, verifyIndex, promoteIndex, finalCheckIndex := -1, -1, -1, -1
+	promoteCount := 0
+	for index, step := range finalizer.Steps {
+		if step.Uses == downloadAction && step.With["name"] == "python-dist" && step.With["path"] == "dist/python" {
+			downloadIndex = index
+		}
+		if strings.Contains(step.Run, verifyCommand) {
+			verifyIndex = index
+		}
+		if strings.Contains(step.Run, promoteCommand) {
+			promoteIndex = index
+			promoteCount += strings.Count(step.Run, promoteCommand)
+		}
+		if strings.Contains(step.Run, finalCheck) {
+			finalCheckIndex = index
+		}
+	}
+	if downloadIndex < 0 {
+		t.Error("finalizer does not download the exact python-dist artifact")
+	}
+	if verifyIndex < downloadIndex {
+		t.Errorf("PyPI artifact verification step %d must follow download step %d", verifyIndex, downloadIndex)
+	}
+	if promoteCount != 1 {
+		t.Errorf("finalizer has %d active promotion commands, want exactly 1", promoteCount)
+	}
+	if promoteIndex <= verifyIndex {
+		t.Errorf("promotion step %d must follow PyPI verification step %d", promoteIndex, verifyIndex)
+	}
+	if finalCheckIndex != promoteIndex {
+		t.Errorf("final public-state check step %d must be the promotion step %d", finalCheckIndex, promoteIndex)
 	}
 }
 

@@ -9,14 +9,32 @@ root = Path(__file__).resolve().parents[1]
 goreleaser = (root / ".goreleaser.yaml").read_text(encoding="utf-8")
 workflow = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
 action_refs = re.findall(r"^\s*uses:\s*([^\s#]+)", workflow, flags=re.MULTILINE)
+finalizer = workflow.split("\n  finalize-release:\n", maxsplit=1)[-1]
+active_finalizer = "\n".join(
+    line for line in finalizer.splitlines() if not line.lstrip().startswith("#")
+)
+verify_index = active_finalizer.find("python3 scripts/verify_pypi_release.py")
+promote_command = 'gh release edit "${TAG}" --draft=false'
+promote_index = active_finalizer.find(promote_command)
+final_state_command = 'test "$(gh release view "${TAG}" --json isDraft --jq \'.isDraft\')" = "false"'
+final_state_index = active_finalizer.find(final_state_command)
 
 checks = {
     "GoReleaser stages a draft": "  draft: true" in goreleaser,
     "PyPI retries are idempotent": "          skip-existing: true" in workflow,
     "finalizer waits for artifacts and PyPI": "    needs: [release, publish-python]" in workflow,
-    "finalizer verifies the release is still a draft": 'is not a draft; refusing non-transactional promotion' in workflow,
-    "finalizer verifies PyPI before promotion": "PyPI did not expose toolguard-core" in workflow,
-    "only finalizer promotes the release": workflow.count('gh release edit "${TAG}" --draft=false') == 1,
+    "checkout-free finalizer has repository context": "      GH_REPO: ${{ github.repository }}" in workflow,
+    "first finalizer attempt rejects unexpected public state": "was already public on the first finalizer attempt" in workflow,
+    "promotion retry accepts a previously completed edit": "was already promoted by an earlier attempt" in workflow,
+    "finalizer downloads the release's Python distributions": (
+        "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093" in finalizer
+        and "          name: python-dist" in finalizer
+        and "          path: dist/python" in finalizer
+    ),
+    "finalizer verifies PyPI filenames and digests": "python3 scripts/verify_pypi_release.py" in active_finalizer,
+    "only finalizer actively promotes the release": active_finalizer.count(promote_command) == 1,
+    "promotion occurs after PyPI verification": 0 <= verify_index < promote_index,
+    "final public-state check occurs after promotion": 0 <= promote_index < final_state_index,
     "OIDC download action is SHA-pinned": "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093" in workflow,
     "PyPI publisher action is SHA-pinned": "pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33" in workflow,
     "every third-party release action is SHA-pinned": all(
