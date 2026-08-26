@@ -1,8 +1,8 @@
 name: Nightly stress
 
 # Runs the load/overload/audit-chain suite (cmd/stress-test) with a longer
-# fuzz budget than the 30s/target PR gate in ci.yml, and asserts a
-# published throughput/latency floor at a fixed concurrency level.
+# fuzz budget than the 30s/target PR gate in ci.yml, asserts a published
+# throughput/latency floor, and enforces the pathological-SQL duration ceiling.
 #
 # NOT run on every PR: GitHub-hosted runners have noisy, shared-tenant
 # performance (confirmed locally — the same run varied from ~10k to ~26k
@@ -44,6 +44,18 @@ jobs:
           go build -o bin/tg ./cmd/tg
           go build -o bin/tg-proxy ./cmd/tg-proxy
           go build -o bin/stress-test ./cmd/stress-test
+
+      - name: Record performance runner
+        run: |
+          uname -a
+          lscpu
+          go version
+
+      - name: Pathological SQL classifier ceiling
+        run: >-
+          go test -tags=performance
+          -run '^TestPerformance_SQLClassifyPathologicalInput$'
+          -count=1 -timeout=3m ./pkg/engine/
 
       - name: Start tg-proxy
         run: |
