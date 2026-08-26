@@ -143,27 +143,49 @@ func (s *escalationStore) get(id string) *Escalation {
 }
 
 func (s *escalationStore) resolve(id, approver, reason string, approved bool) (*Escalation, bool) {
+	e, ok, _ := s.resolveAudited(id, approver, reason, approved, nil)
+	return e, ok
+}
+
+// resolveAudited prepares a terminal state, invokes beforeCommit while the
+// entry is still pending, and publishes the state only if that callback
+// succeeds. Holding the store lock across the callback serializes competing
+// approvals for the same entry. The callback must not call back into the
+// escalation store.
+func (s *escalationStore) resolveAudited(
+	id, approver, reason string,
+	approved bool,
+	beforeCommit func(*Escalation) error,
+) (*Escalation, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e, ok := s.entries[id]
 	if !ok {
-		return nil, false
+		return nil, false, nil
 	}
 	if e.State != EscPending {
 		ec := *e
-		return &ec, false // already resolved
+		return &ec, false, nil // already resolved
 	}
+	candidate := *e
 	now := time.Now().UTC()
-	e.ResolvedAt = &now
-	e.Approver = approver
-	e.ApproverReason = reason
+	candidate.ResolvedAt = &now
+	candidate.Approver = approver
+	candidate.ApproverReason = reason
 	if approved {
-		e.State = EscApproved
+		candidate.State = EscApproved
 	} else {
-		e.State = EscDenied
+		candidate.State = EscDenied
 	}
+	if beforeCommit != nil {
+		if err := beforeCommit(&candidate); err != nil {
+			current := *e
+			return &current, false, err
+		}
+	}
+	*e = candidate
 	ec := *e
-	return &ec, true
+	return &ec, true, nil
 }
 
 // reapExpired marks any pending entry past its expires_at as expired

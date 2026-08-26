@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -126,7 +127,7 @@ func (p *proxy) emitBoundaryDeny(env *domain.ActionEnvelope, reason string, mode
 // AgentID/SessionID/OrgID/Tool* are copied from the original envelope
 // so the trace is queryable on the same identity axes as the rest of
 // the chain.
-func (p *proxy) emitEscalationResolution(e *Escalation, approved bool) {
+func (p *proxy) emitEscalationResolution(e *Escalation, approved bool) error {
 	var (
 		decision    domain.Decision
 		actionTaken domain.ActionTaken
@@ -162,7 +163,15 @@ func (p *proxy) emitEscalationResolution(e *Escalation, approved bool) {
 	if err := p.appendTrace(&trace); err != nil {
 		log.Printf("tg-proxy: emitEscalationResolution audit: %v", err)
 		p.auditFailureCount.Add(1)
+		if errors.Is(err, errAuditRecordCommitted) {
+			// The full record is part of the live chain; only its explicit
+			// durability barrier failed. Commit the matching in-memory state so
+			// the log and approval registry cannot contradict each other.
+			return nil
+		}
+		return err
 	}
+	return nil
 }
 
 // splitCommaPaths parses a comma-separated path list into a slice, trimming

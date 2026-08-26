@@ -80,7 +80,9 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   pre-write size and durably verify that repair before another append. A
   rollback failure permanently poisons that process's writer, makes
   `/readyz` return 503, and suppresses fail-closed retry writes against the
-  ambiguous tail.
+  ambiguous tail. Human approval and denial endpoints append their lifecycle
+  record before committing the terminal state; a pre-commit audit failure
+  returns 503 and leaves the escalation pending.
 - Compile-only `js/wasm` and `wasip1/wasm` proxy builds no longer reference
   unavailable process-signal constants. Native SIGHUP reload and graceful
   shutdown behavior is unchanged.

@@ -32,15 +32,22 @@ GET  /escalations/<id>
 POST /escalations/<id>/approve
   Authorization: Bearer <approver-token>
   Body (optional): {"approver": "alice", "reason": "verified runbook"}
-  → state transitions pending → approved
   → audit chain logs the approve event
+  → only then state transitions pending → approved
 
 POST /escalations/<id>/deny
   Authorization: Bearer <approver-token>
   Body (optional): {"approver": "alice", "reason": "policy violation"}
-  → state transitions pending → denied
   → audit chain logs the deny event
+  → only then state transitions pending → denied
 ```
+
+Approval and denial are transactional with their audit record. If the record
+cannot be committed to the live chain, the endpoint returns HTTP 503 with a
+structured `audit_append_failed` response and the escalation remains
+`pending`. Repair
+the audit writer and wait for `/readyz` to return 200 before retrying. A 200
+approval therefore never authorizes execution without its linked audit entry.
 
 ## Token configuration
 

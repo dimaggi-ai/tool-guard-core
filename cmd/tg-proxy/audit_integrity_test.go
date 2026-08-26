@@ -16,13 +16,33 @@ import (
 )
 
 // faultInjectAuditFile produces a genuine short write against the underlying
-// file while retaining the rest of *os.File's behavior. Tests can separately
-// fail Truncate to exercise the sticky-poison path.
+// production file while delegating all behavior that is not under test. Tests
+// can separately fail Stat, Sync, or Truncate to exercise recovery boundaries.
 type faultInjectAuditFile struct {
 	auditLogFile
-	shortWritesRemaining int
-	failTruncate         bool
-	writeCalls           int
+	shortWritesRemaining  int
+	statFailuresRemaining int
+	syncFailuresRemaining int
+	failTruncate          bool
+	writeCalls            int
+	statCalls             int
+}
+
+func (f *faultInjectAuditFile) Sync() error {
+	if f.syncFailuresRemaining > 0 {
+		f.syncFailuresRemaining--
+		return errors.New("forced sync failure")
+	}
+	return f.auditLogFile.Sync()
+}
+
+func (f *faultInjectAuditFile) Stat() (os.FileInfo, error) {
+	f.statCalls++
+	if f.statFailuresRemaining > 0 {
+		f.statFailuresRemaining--
+		return nil, errors.New("forced transient stat failure")
+	}
+	return f.auditLogFile.Stat()
 }
 
 func (f *faultInjectAuditFile) Write(record []byte) (int, error) {
@@ -121,6 +141,44 @@ func TestAppendTrace_ShortWriteRollsBackBeforeRetry(t *testing.T) {
 	}
 	if !report.Intact || report.Records != 1 {
 		t.Fatalf("chain after retry = %#v, want intact with one record", report)
+	}
+}
+
+func TestAppendTrace_PreWriteStatFailureCanRecover(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "decisions.jsonl")
+	p := &proxy{auditPath: path, auditSyncMode: "none"}
+	if err := p.openAuditLog(); err != nil {
+		t.Fatalf("open audit log: %v", err)
+	}
+	fault := &faultInjectAuditFile{auditLogFile: p.auditLog, statFailuresRemaining: 1}
+	p.auditLog = fault
+	t.Cleanup(func() { _ = fault.Close() })
+
+	first := domain.DecisionTrace{
+		TraceID:     "stat-failure",
+		Timestamp:   time.Date(2026, 8, 26, 1, 3, 3, 0, time.UTC),
+		Decision:    domain.DecisionAllowed,
+		ActionTaken: domain.ActionAllowed,
+	}
+	err := p.appendTrace(&first)
+	if err == nil || !strings.Contains(err.Error(), "stat audit log before append") {
+		t.Fatalf("first append error = %v, want pre-write stat failure", err)
+	}
+	if p.auditPoisoned || fault.writeCalls != 0 {
+		t.Fatalf("pre-write stat failure poisoned=%v writes=%d, want false/0", p.auditPoisoned, fault.writeCalls)
+	}
+
+	second := domain.DecisionTrace{
+		TraceID:     "after-stat-failure",
+		Timestamp:   time.Date(2026, 8, 26, 1, 3, 4, 0, time.UTC),
+		Decision:    domain.DecisionDenied,
+		ActionTaken: domain.ActionDenied,
+	}
+	if err := p.appendTrace(&second); err != nil {
+		t.Fatalf("append after transient stat failure: %v", err)
+	}
+	if fault.statCalls != 2 || fault.writeCalls != 1 || p.auditPoisoned {
+		t.Fatalf("recovery state: stats=%d writes=%d poisoned=%v, want 2/1/false", fault.statCalls, fault.writeCalls, p.auditPoisoned)
 	}
 }
 

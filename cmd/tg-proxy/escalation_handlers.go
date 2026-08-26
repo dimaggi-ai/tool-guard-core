@@ -74,9 +74,26 @@ func (p *proxy) escalationByID(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(io.LimitReader(r.Body, 1<<16))
 		_ = json.Unmarshal(raw, &body) // body optional
 		approved := action == "approve"
-		e, ok := p.escalations.resolve(id, body.Approver, body.Reason, approved)
+		e, ok, auditErr := p.escalations.resolveAudited(
+			id,
+			body.Approver,
+			body.Reason,
+			approved,
+			func(candidate *Escalation) error {
+				return p.emitEscalationResolution(candidate, approved)
+			},
+		)
 		if e == nil {
 			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if auditErr != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+				"error":           "audit_append_failed",
+				"message":         "escalation resolution was not committed because its audit record could not be written",
+				"resolution_hint": "repair the audit writer, wait for /readyz to return 200, then retry; the escalation remains pending",
+				"escalation":      e,
+			})
 			return
 		}
 		if !ok {
@@ -86,12 +103,9 @@ func (p *proxy) escalationByID(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		// Audit the state transition. The original escalate decision
-		// is already in the chain (from /evaluate); this entry records
-		// the human approval/denial as a separate, linked event so a
-		// verifier can replay the full lifecycle and answer "who
-		// approved this and when". docs/escalation.md commits to this.
-		p.emitEscalationResolution(e, approved)
+		// resolveAudited appended the state-transition record before it
+		// published this terminal state. A 200 therefore never exposes an
+		// approval that is missing from the audit chain.
 		writeJSON(w, http.StatusOK, e)
 		return
 	}

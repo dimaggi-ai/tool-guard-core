@@ -21,7 +21,14 @@ import (
 // SHA-256 hash-chained JSONL log with size-based rotation and three
 // fsync modes. tg verify walks the rotation set across files.
 
-var errAuditWriterPoisoned = errors.New("audit writer poisoned")
+var (
+	errAuditWriterPoisoned = errors.New("audit writer poisoned")
+	// errAuditRecordCommitted marks a durability-barrier error after the full
+	// record reached the file and the in-memory chain advanced. Callers that
+	// coordinate other state must commit that state too, or the audit record
+	// would claim a transition the application rolled back.
+	errAuditRecordCommitted = errors.New("audit record committed")
+)
 
 // diskAuditLog keeps the path alongside the open descriptor so the Windows
 // implementation can obtain a rollback-capable handle without giving up
@@ -297,7 +304,11 @@ func (p *proxy) appendTrace(t *domain.DecisionTrace) error {
 	// fork the hash chain even though lastHash was never advanced.
 	st, err := p.auditLog.Stat()
 	if err != nil {
-		return p.poisonAuditLocked(fmt.Sprintf("cannot establish pre-write rollback boundary: %v", err))
+		// No Write has happened, so the tail is unchanged and unambiguous.
+		// Treat even a transient metadata failure as a normal append error;
+		// sticky poison is reserved for a failed rollback after Write may have
+		// modified the file.
+		return fmt.Errorf("stat audit log before append: %w", err)
 	}
 	preWriteSize := st.Size()
 	n, err := p.auditLog.Write(record)
@@ -329,12 +340,12 @@ func (p *proxy) appendTrace(t *domain.DecisionTrace) error {
 	switch p.auditSyncMode {
 	case "every":
 		if err := p.auditLog.Sync(); err != nil {
-			return err
+			return fmt.Errorf("%w: sync audit log: %v", errAuditRecordCommitted, err)
 		}
 	case "interval":
 		if p.auditAppendSeq%int64(p.auditSyncEvery) == 0 {
 			if err := p.auditLog.Sync(); err != nil {
-				return err
+				return fmt.Errorf("%w: sync audit log: %v", errAuditRecordCommitted, err)
 			}
 		}
 	case "none":

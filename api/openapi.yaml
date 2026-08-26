@@ -192,6 +192,7 @@ paths:
         "404": {$ref: "#/components/responses/NotFound"}
         "405": {$ref: "#/components/responses/PlainMethodNotAllowed"}
         "409": {$ref: "#/components/responses/AlreadyResolved"}
+        "503": {$ref: "#/components/responses/AuditUnavailable"}
   /escalations/{id}/deny:
     parameters:
       - $ref: "#/components/parameters/EscalationID"
@@ -215,6 +216,7 @@ paths:
         "404": {$ref: "#/components/responses/NotFound"}
         "405": {$ref: "#/components/responses/PlainMethodNotAllowed"}
         "409": {$ref: "#/components/responses/AlreadyResolved"}
+        "503": {$ref: "#/components/responses/AuditUnavailable"}
 components:
   securitySchemes:
     approverToken:
@@ -274,6 +276,18 @@ components:
             required: [error, escalation]
             properties:
               error: {type: string, const: already resolved}
+              escalation: {$ref: "#/components/schemas/Escalation"}
+    AuditUnavailable:
+      description: Audit append failed; the escalation remains pending.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error, message, resolution_hint, escalation]
+            properties:
+              error: {type: string, const: audit_append_failed}
+              message: {type: string}
+              resolution_hint: {type: string}
               escalation: {$ref: "#/components/schemas/Escalation"}
   schemas:
     Error:

@@ -108,6 +108,20 @@ func TestEvaluationSchemasAllowOnlyDeclaredComposedProperties(t *testing.T) {
 	}
 }
 
+func TestEscalationResolutionDocumentsAuditFailure(t *testing.T) {
+	doc := loadContract(t)
+	paths := asMap(t, doc["paths"], "paths")
+	for _, path := range []string{"/escalations/{id}/approve", "/escalations/{id}/deny"} {
+		item := asMap(t, paths[path], "paths."+path)
+		post := asMap(t, item["post"], path+" post")
+		responses := asMap(t, post["responses"], path+" responses")
+		unavailable := asMap(t, responses["503"], path+" responses.503")
+		if unavailable["$ref"] != "#/components/responses/AuditUnavailable" {
+			t.Errorf("%s 503 response = %v, want AuditUnavailable ref", path, unavailable)
+		}
+	}
+}
+
 func walkRefs(t *testing.T, value any, components map[string]any) {
 	t.Helper()
 	switch node := value.(type) {
