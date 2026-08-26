@@ -22,16 +22,25 @@ import (
 // (not by scanning the whole thing), so appending stays O(1) per call even as
 // the log grows across a long agent session.
 func appendHookAudit(path string, env *domain.ActionEnvelope, result *domain.EvaluationResult, decision, reason string) error {
+	amount, _ := env.Amount()
+	timestamp := env.Timestamp
+	if timestamp.IsZero() {
+		timestamp = time.Now().UTC()
+	}
 	trace := domain.DecisionTrace{
-		CanonicalVersion: audit.CanonicalTraceVersion,
-		TraceID:          fmt.Sprintf("trc-%d", time.Now().UnixNano()),
-		Timestamp:        time.Now().UTC(),
-		OrgID:            env.OrgID,
-		EnvelopeID:       env.EnvelopeID,
-		AgentID:          env.AgentID,
-		SessionID:        env.SessionID,
-		ToolName:         env.ToolName,
-		ToolGroup:        env.ToolGroup,
+		CanonicalVersion:   audit.CanonicalTraceVersion,
+		TraceID:            fmt.Sprintf("trc-%d", time.Now().UnixNano()),
+		Timestamp:          timestamp.UTC(),
+		OrgID:              env.OrgID,
+		EnvelopeID:         env.EnvelopeID,
+		AgentID:            env.AgentID,
+		AgentVersion:       env.AgentVersion,
+		SessionID:          env.SessionID,
+		TurnNumber:         env.TurnNumber,
+		ToolName:           env.ToolName,
+		ToolGroup:          env.ToolGroup,
+		Amount:             amount,
+		ParametersRedacted: append([]byte(nil), env.ParametersRedacted...),
 	}
 	if result == nil {
 		// Pre-evaluation operational decisions have no engine provenance. Keep a
@@ -190,8 +199,11 @@ func lastTraceHash(path string) (string, error) {
 	if len(lastLine) > audit.MaxTraceRecordBytes {
 		return "", fmt.Errorf("audit tail: last record exceeds %d bytes", audit.MaxTraceRecordBytes)
 	}
-	if len(bytes.TrimSpace(lastLine)) == 0 {
+	if len(lastLine) == 0 {
 		return "", nil
+	}
+	if len(bytes.TrimSpace(lastLine)) == 0 {
+		return "", fmt.Errorf("audit tail: whitespace-only trailing record")
 	}
 	var rec struct {
 		TraceHash string `json:"trace_hash"`

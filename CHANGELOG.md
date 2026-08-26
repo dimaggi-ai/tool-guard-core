@@ -6,6 +6,21 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Breaking mode-precedence correction planned for 0.8.0
+
+- A policy's YAML `mode` is now authoritative. In 0.7, the default
+  enforcement call-site could override a `mode: shadow` policy and block its
+  deny or escalation. In 0.8, that policy still reports the raw denied or
+  escalated decision, but its applied action is `allowed_shadow`: `tg
+  evaluate` exits 0, the proxy executes the tool, and `tg hook` emits `allow`.
+  The Python SDK exposes both `decision` and `action_taken` so integrations can
+  distinguish observation from enforcement. The reverse downgrade is not
+  allowed: a shadow call-site cannot weaken a `mode: enforcement` policy.
+- Before upgrading, review every deployed shadow policy. Change it to
+  `mode: enforcement` if its matches must continue blocking execution; leave
+  it in shadow only when observe-without-blocking is intentional. Test the
+  resulting set with `tg simulate` before rollout.
+
 ### Breaking audit-format migration planned for 0.8.0
 
 - New audit writers stamp canonical trace v2 so the raw decision and the

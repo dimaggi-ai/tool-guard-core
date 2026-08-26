@@ -342,6 +342,40 @@ func TestAppendHookAudit_RejectsVerifierOversizedWhitespaceRecord(t *testing.T) 
 	}
 }
 
+func TestAppendHookAudit_RejectsWhitespaceOnlyTrailingRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	if err := appendHookAudit(path, auditEnv("first"), nil, "allow", "ok"); err != nil {
+		t.Fatalf("seed audit: %v", err)
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(" \n"); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = appendHookAudit(path, auditEnv("next"), nil, "allow", "ok")
+	if err == nil || !strings.Contains(err.Error(), "whitespace-only trailing record") {
+		t.Fatalf("append error = %v, want whitespace-only-tail rejection", err)
+	}
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Size() != before.Size() {
+		t.Fatalf("rejected append changed file size from %d to %d", before.Size(), after.Size())
+	}
+}
+
 func TestAppendHookAuditBestEffort_ReportsOversizedRecord(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.jsonl")
 	result := &domain.EvaluationResult{

@@ -101,6 +101,23 @@ rules:
     citation: {document_id: d, excerpt: "unreachable"}
 `
 
+const hookAmountPolicy = `policy_id: hook-amount-test
+name: hook-amount-test
+version: 1
+status: approved
+mode: enforcement
+scope:
+  tool_names: [issue_refund]
+rules:
+  - rule_id: deny-over-cap
+    conditions:
+      field: amount
+      operator: gt
+      value: 500
+    effect: deny
+    citation: {document_id: d, excerpt: "refund cap"}
+`
+
 func writeHookPolicy(t *testing.T, content string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -217,6 +234,43 @@ func TestHook_ShadowPolicyAuditPreservesEvaluation(t *testing.T) {
 	}
 	if ok, err := audit.VerifyCanonicalTraceHash(&trace); err != nil || !ok {
 		t.Fatalf("hook audit hash invalid: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestHook_AuditPreservesHashBoundAmount(t *testing.T) {
+	pol := writeHookPolicy(t, hookAmountPolicy)
+	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
+	stdin := `{"tool_name":"issue_refund","tool_input":{"amount":750}}`
+	out, code := runHookStr(t, stdin, "-policy", pol, "-audit-log", auditPath)
+	if code != 0 || hookDecision(t, out) != "deny" {
+		t.Fatalf("amount hook result: code=%d output=%s", code, out)
+	}
+
+	raw, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var trace domain.DecisionTrace
+	if err := json.Unmarshal(bytes.TrimSpace(raw), &trace); err != nil {
+		t.Fatalf("decode hook audit: %v", err)
+	}
+	if trace.Amount != 750 {
+		t.Fatalf("audit amount = %v, want 750", trace.Amount)
+	}
+	report, err := audit.VerifyChainFromReader(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Intact || report.Records != 1 {
+		t.Fatalf("amount audit verification = %#v", report)
+	}
+	trace.Amount = 751
+	ok, err := audit.VerifyCanonicalTraceHash(&trace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("changing the evaluated amount did not break the canonical hash")
 	}
 }
 
