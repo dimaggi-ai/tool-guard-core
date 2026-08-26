@@ -79,6 +79,9 @@ guard catching it after the fact — do it right the first time.
   repository `dimaggi-ai/tool-guard-core`, workflow `release.yml`, and GitHub
   environment `pypi`. This is a one-time maintainer-side PyPI configuration;
   the workflow intentionally has no long-lived upload token.
+- `make api-check` is green. If the release intentionally changes the exported
+  Go API, the compatibility impact and baseline refresh followed the process in
+  `docs/api-stability.md`.
 - Any change to policy evaluation, the policy loader, the SDK, audit
   integrity, or a release workflow in this release has been run through
   the internal review checklist in `docs/REVIEW-PROCESS.md` — as a

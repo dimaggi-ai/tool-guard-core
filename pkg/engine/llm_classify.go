@@ -36,11 +36,11 @@ var (
 
 const llmClientCacheMaxEntries = 64
 
-// llmHookMu protects LLMClassifyHook against concurrent set/read from
+// llmHookMu protects llmClassifyHook against concurrent set/read from
 // test goroutines and (eventually) operator reload paths.
 var llmHookMu sync.RWMutex
 
-// LLMClassifyHook lets operators short-circuit the Ollama call —
+// llmClassifyHook lets operators short-circuit the Ollama call —
 // useful for tests, dry runs, or air-gapped environments. When set,
 // the engine calls this function INSTEAD of dispatching to llmguard.
 //
@@ -49,22 +49,22 @@ var llmHookMu sync.RWMutex
 // Setting this to a stub allows the OSS test suite to exercise every
 // llm_classify rule without a running Ollama.
 //
-// Callers should use SetLLMClassifyHook / GetLLMClassifyHook rather
-// than touching this var directly so the access is race-safe.
-var LLMClassifyHook func(ctx context.Context, prompt, imageURL string, forbidden []string, model string) (*llmguard.ClassifyResult, error)
+// It is intentionally private: direct mutation bypasses llmHookMu and races
+// with evaluation. Use SetLLMClassifyHook / GetLLMClassifyHook.
+var llmClassifyHook func(ctx context.Context, prompt, imageURL string, forbidden []string, model string) (*llmguard.ClassifyResult, error)
 
 // SetLLMClassifyHook sets the test hook under a mutex. Pass nil to
 // clear.
 func SetLLMClassifyHook(h func(ctx context.Context, prompt, imageURL string, forbidden []string, model string) (*llmguard.ClassifyResult, error)) {
 	llmHookMu.Lock()
-	LLMClassifyHook = h
+	llmClassifyHook = h
 	llmHookMu.Unlock()
 }
 
 // GetLLMClassifyHook reads the current hook under a read-mutex.
 func GetLLMClassifyHook() func(ctx context.Context, prompt, imageURL string, forbidden []string, model string) (*llmguard.ClassifyResult, error) {
 	llmHookMu.RLock()
-	h := LLMClassifyHook
+	h := llmClassifyHook
 	llmHookMu.RUnlock()
 	return h
 }

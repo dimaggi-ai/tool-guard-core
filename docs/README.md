@@ -15,6 +15,8 @@ authoring policies for, and operating Tool Guard Core.
   your first policy in 5 commands.
 - [**Architecture**](architecture.md) - how the engine, the audit
   chain, and the classifiers fit together.
+- [**Go API stability**](api-stability.md) - public package scope,
+  API-diff CI gate, and the reviewed baseline-update process.
 - [**Creating Policies**](creating-policies.md) - full YAML schema
   with every operator and classifier.
 
