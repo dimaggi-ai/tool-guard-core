@@ -83,7 +83,9 @@ func TestEscalationApproval_AuditRollbackFailureLeavesPending(t *testing.T) {
 		!strings.Contains(body, `"state":"pending"`) {
 		t.Fatalf("structured failure response missing error/pending state: %s", rec.Body.String())
 	}
-	if !strings.Contains(body, "repair the audit writer, then retry") || strings.Contains(body, "wait for /readyz") {
+	if !strings.Contains(body, "resubmitted with a fresh envelope ID") ||
+		!strings.Contains(body, "do not retry this escalation ID") ||
+		strings.Contains(body, "wait for /readyz") {
 		t.Fatalf("structured failure response has an inaccurate recovery hint: %s", body)
 	}
 	pending := p.escalations.get(id)
@@ -98,42 +100,114 @@ func TestEscalationApproval_AuditRollbackFailureLeavesPending(t *testing.T) {
 	}
 }
 
-func TestEscalationApproval_FullWriteSyncFailureLeavesPendingAndPoisonsReadiness(t *testing.T) {
+func TestEscalationResolution_AlwaysSyncsAndRollsBackBeforePublishingState(t *testing.T) {
+	for _, syncMode := range []string{"none", "interval"} {
+		for _, action := range []string{"approve", "deny"} {
+			t.Run(syncMode+"/"+action, func(t *testing.T) {
+				p := newOperationalTestProxy(t, nil, false)
+				p.failClosed = false // let /readyz isolate audit readiness in this test
+				p.approverToken = "secret"
+				p.auditSyncMode = syncMode
+				p.auditSyncEvery = 10 // first interval append is not a normal boundary
+				id := syncMode + "-" + action + "-sync-failure"
+				if e := p.escalations.add(envFor(id), decisionFor(domain.DecisionEscalated), 15); e == nil {
+					t.Fatal("seed escalation failed")
+				}
+				fault := &faultInjectAuditFile{
+					auditLogFile:          p.auditLog,
+					syncFailuresRemaining: 1,
+				}
+				p.auditLog = fault
+
+				failed := resolveEscalationRequest(t, p, id, action)
+				if failed.Code != http.StatusServiceUnavailable {
+					t.Fatalf("resolution status = %d, want 503 after failed forced sync; body=%s", failed.Code, failed.Body.String())
+				}
+				pending := p.escalations.get(id)
+				if pending == nil || pending.State != EscPending || pending.ResolvedAt != nil || pending.Approver != "" {
+					t.Fatalf("state after rolled-back sync failure = %#v, want unchanged pending escalation", pending)
+				}
+				if fault.writeCalls != 1 || fault.syncCalls != 2 || p.auditPoisoned || p.auditAppendSeq != 0 || p.lastHash != "" {
+					t.Fatalf(
+						"rollback state: writes=%d syncs=%d poisoned=%v seq=%d hash=%q, want 1/2/false/0/empty",
+						fault.writeCalls, fault.syncCalls, p.auditPoisoned, p.auditAppendSeq, p.lastHash,
+					)
+				}
+				if traces := readOperationalTraces(t, p); len(traces) != 0 {
+					t.Fatalf("rolled-back resolution left terminal traces: %#v", traces)
+				}
+				readyReq := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+				readyRec := httptest.NewRecorder()
+				p.readyz(readyRec, readyReq)
+				if readyRec.Code != http.StatusOK {
+					t.Fatalf("readyz status = %d, want 200 after proven rollback; body=%s", readyRec.Code, readyRec.Body.String())
+				}
+
+				retried := resolveEscalationRequest(t, p, id, action)
+				if retried.Code != http.StatusOK {
+					t.Fatalf("retry status = %d, want 200 after transient sync failure; body=%s", retried.Code, retried.Body.String())
+				}
+				wantState := EscApproved
+				if action == "deny" {
+					wantState = EscDenied
+				}
+				if resolved := p.escalations.get(id); resolved == nil || resolved.State != wantState {
+					t.Fatalf("retried resolution = %#v, want %s", resolved, wantState)
+				}
+				if fault.syncCalls != 4 {
+					t.Fatalf("sync calls after durable retry = %d, want 4 (failed barrier, rollback, read, retry barrier)", fault.syncCalls)
+				}
+			})
+		}
+	}
+}
+
+func TestEscalationApproval_FullWriteRollbackFailureBecomesIndeterminate(t *testing.T) {
 	p := newOperationalTestProxy(t, nil, false)
 	p.approverToken = "secret"
 	p.auditSyncMode = "every"
-	id := "approval-sync-failure"
+	id := "approval-indeterminate"
 	if e := p.escalations.add(envFor(id), decisionFor(domain.DecisionEscalated), 15); e == nil {
 		t.Fatal("seed escalation failed")
 	}
 	fault := &faultInjectAuditFile{
 		auditLogFile:          p.auditLog,
 		syncFailuresRemaining: 1,
+		failTruncate:          true,
 	}
 	p.auditLog = fault
 
 	rec := resolveEscalationRequest(t, p, id, "approve")
 	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("resolution status = %d, want 503 for uncertain durability; body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("resolution status = %d, want 503 for indeterminate durability; body=%s", rec.Code, rec.Body.String())
 	}
-	pending := p.escalations.get(id)
-	if pending == nil || pending.State != EscPending || pending.ResolvedAt != nil || pending.Approver != "" {
-		t.Fatalf("state after committed record sync failure = %#v, want unchanged pending escalation", pending)
+	if !strings.Contains(rec.Body.String(), `"state":"indeterminate"`) ||
+		!strings.Contains(rec.Body.String(), "resubmitted with a fresh envelope ID") {
+		t.Fatalf("indeterminate response lacks state/recovery guidance: %s", rec.Body.String())
+	}
+	indeterminate := p.escalations.get(id)
+	if indeterminate == nil || indeterminate.State != EscIndeterminate || indeterminate.ResolvedAt == nil {
+		t.Fatalf("state after failed full-write rollback = %#v, want indeterminate", indeterminate)
 	}
 	if fault.writeCalls != 1 || !p.auditPoisoned || p.auditFailureCount.Load() != 1 {
-		t.Fatalf(
-			"sync failure state: writes=%d poisoned=%v failures=%d, want 1/true/1",
-			fault.writeCalls, p.auditPoisoned, p.auditFailureCount.Load(),
-		)
-	}
-	readyReq := httptest.NewRequest(http.MethodGet, "/readyz", nil)
-	readyRec := httptest.NewRecorder()
-	p.readyz(readyRec, readyReq)
-	if readyRec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("readyz status = %d, want 503 after uncertain durability; body=%s", readyRec.Code, readyRec.Body.String())
+		t.Fatalf("uncertain audit state: writes=%d poisoned=%v failures=%d, want 1/true/1", fault.writeCalls, p.auditPoisoned, p.auditFailureCount.Load())
 	}
 	traces := readOperationalTraces(t, p)
 	if len(traces) != 1 || traces[0].ActionTaken != domain.ActionAllowed {
-		t.Fatalf("uncertain approval trace = %#v, want exactly one possibly-written allowed record", traces)
+		t.Fatalf("uncertain terminal trace = %#v, want one possibly-written allowed record", traces)
+	}
+
+	restarted := newOperationalTestProxy(t, nil, false)
+	restarted.approverToken = "secret"
+	oldRetry := resolveEscalationRequest(t, restarted, id, "approve")
+	if oldRetry.Code != http.StatusNotFound {
+		t.Fatalf("old escalation after restart = %d, want 404; body=%s", oldRetry.Code, oldRetry.Body.String())
+	}
+	freshID := id + "-resubmitted"
+	if e := restarted.escalations.add(envFor(freshID), decisionFor(domain.DecisionEscalated), 15); e == nil {
+		t.Fatal("seed fresh escalation failed")
+	}
+	if fresh := resolveEscalationRequest(t, restarted, freshID, "approve"); fresh.Code != http.StatusOK {
+		t.Fatalf("fresh resubmitted escalation status = %d, want 200; body=%s", fresh.Code, fresh.Body.String())
 	}
 }

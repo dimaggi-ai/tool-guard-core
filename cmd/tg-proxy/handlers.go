@@ -434,13 +434,7 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 	if auditErr != nil {
 		log.Printf("tg-proxy: append audit trace: %v", auditErr)
 		p.auditFailureCount.Add(1)
-		if errors.Is(auditErr, errAuditRecordCommitted) {
-			// The complete original trace may already be present on disk and is
-			// the live chain tail. Never mutate and append the same trace ID as a
-			// fail-closed retry: that creates contradictory, verifier-valid
-			// records. The sync failure poisons readiness, so no later request can
-			// extend the uncertain tail before operator reconciliation.
-		} else if p.failClosed && actionProceeds(result.ActionTaken) {
+		if p.failClosed && actionProceeds(result.ActionTaken) {
 			applyOperationalDeny(result, "applied action would proceed but audit append failed; downgraded to deny (--fail-closed=true)")
 			syncResultOutcomeToTrace(&trace, result)
 			// A poisoned writer has an ambiguous on-disk tail. Retrying would

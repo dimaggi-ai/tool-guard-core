@@ -159,7 +159,7 @@ func (p *proxy) emitEscalationResolution(e *Escalation, approved bool) error {
 		ActionTaken:       actionTaken,
 		DecisionReason:    reason,
 	}
-	if err := p.appendTrace(&trace); err != nil {
+	if err := p.appendTraceDurable(&trace); err != nil {
 		log.Printf("tg-proxy: emitEscalationResolution audit: %v", err)
 		p.auditFailureCount.Add(1)
 		return err

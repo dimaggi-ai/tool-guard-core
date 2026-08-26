@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"sync"
 	"time"
 
@@ -15,9 +16,13 @@ const (
 	EscApproved EscalationState = "approved"
 	EscDenied   EscalationState = "denied"
 	EscExpired  EscalationState = "expired"
+	// EscIndeterminate means a terminal audit record may exist but its
+	// durability and the corresponding state transition could not be proven.
+	// Operators must reconcile the log; neither approval nor denial is granted.
+	EscIndeterminate EscalationState = "indeterminate"
 )
 
-// Escalation is one pending decision that's waiting for a human.
+// Escalation is one human-review decision and its lifecycle state.
 type Escalation struct {
 	ID             string                  `json:"id"` // envelope_id, reused
 	State          EscalationState         `json:"state"`
@@ -179,6 +184,12 @@ func (s *escalationStore) resolveAudited(
 	}
 	if beforeCommit != nil {
 		if err := beforeCommit(&candidate); err != nil {
+			if errors.Is(err, errAuditRecordCommitted) {
+				candidate.State = EscIndeterminate
+				*e = candidate
+				indeterminate := *e
+				return &indeterminate, false, err
+			}
 			current := *e
 			return &current, false, err
 		}

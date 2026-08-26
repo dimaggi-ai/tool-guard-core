@@ -116,9 +116,10 @@ For every `/evaluate` request the proxy walks this sequence:
 8. **Audit append** - the versioned decision-bearing projection is
    canonical-encoded and SHA-256-hashed, then the full trace is linked to
    the previous record and written to the JSONL log. `lastHash` advances
-   BEFORE the durability barrier so a Sync failure cannot fork the chain. A
-   failed durability barrier poisons readiness and prevents later appends until
-   an operator repairs and verifies the uncertain tail.
+   before the durability barrier. If that barrier fails, the complete write is
+   rolled back durably and the prior hash/counters are restored. If rollback
+   cannot be proven, readiness is poisoned and later appends stop until an
+   operator repairs and verifies the uncertain tail.
 9. **Response** - JSON `EvaluationResult` with decision, reason,
    matched rules, citations, escalation poll URL (if applicable).
 

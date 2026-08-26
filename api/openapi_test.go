@@ -122,6 +122,25 @@ func TestEscalationResolutionDocumentsAuditFailure(t *testing.T) {
 	}
 }
 
+func TestEscalationSchemaIncludesIndeterminateAuditState(t *testing.T) {
+	doc := loadContract(t)
+	components := asMap(t, doc["components"], "components")
+	schemas := asMap(t, components["schemas"], "components.schemas")
+	escalation := asMap(t, schemas["Escalation"], "components.schemas.Escalation")
+	properties := asMap(t, escalation["properties"], "components.schemas.Escalation.properties")
+	state := asMap(t, properties["state"], "components.schemas.Escalation.properties.state")
+	values, ok := state["enum"].([]any)
+	if !ok {
+		t.Fatalf("Escalation.state enum = %T, want array", state["enum"])
+	}
+	for _, value := range values {
+		if value == "indeterminate" {
+			return
+		}
+	}
+	t.Fatalf("Escalation.state enum = %v, want indeterminate", values)
+}
+
 func walkRefs(t *testing.T, value any, components map[string]any) {
 	t.Helper()
 	switch node := value.(type) {

@@ -43,12 +43,19 @@ POST /escalations/<id>/deny
 ```
 
 Approval and denial are transactional with their audit record. If the record
-cannot be committed to the live chain, the endpoint returns HTTP 503 with a
-structured `audit_append_failed` response and the escalation remains
-`pending`. Repair the audit writer, then retry. If `/readyz` reports audit
-poisoning, restart only after repairing and verifying the audit log. A 200
-approval therefore never authorizes execution without a durably linked audit
-entry.
+cannot be written and synced durably, the proxy rolls it back and the endpoint
+returns HTTP 503 with a structured `audit_append_failed` response. A successful
+rollback leaves the escalation `pending`; repair the writer and retry that
+escalation. Approval and denial force this durability barrier even when general
+evaluation logging uses `audit-sync-mode=interval` or `none`.
+
+If the rollback itself cannot be proven durable, the audit tail is ambiguous,
+`/readyz` returns 503, and the escalation becomes `indeterminate`. Stop approval
+processing, preserve and repair the audit log, run `tg verify`, restart the
+proxy, and have the originating action resubmitted with a fresh envelope ID.
+The escalation registry is in memory, so the old ID cannot be retried after a
+restart. A 200 approval therefore never authorizes execution without a durably
+linked audit entry.
 
 ## Token configuration
 
@@ -73,7 +80,9 @@ pending  ──── approve ───▶  approved
    │
    ├──────── deny ──────▶  denied
    │
-   └──── timeout (default 15 min, configurable) ────▶  expired
+   ├──── timeout (default 15 min, configurable) ────▶  expired
+   │
+   └──── uncertain audit durability ───────────────▶  indeterminate
 ```
 
 The reaper sweeps every 30 seconds; any pending entry past its

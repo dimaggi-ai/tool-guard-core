@@ -26,9 +26,11 @@ type faultInjectAuditFile struct {
 	failTruncate          bool
 	writeCalls            int
 	statCalls             int
+	syncCalls             int
 }
 
 func (f *faultInjectAuditFile) Sync() error {
+	f.syncCalls++
 	if f.syncFailuresRemaining > 0 {
 		f.syncFailuresRemaining--
 		return errors.New("forced sync failure")

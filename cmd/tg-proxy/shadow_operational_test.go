@@ -352,7 +352,7 @@ func TestProxy_AuditRollbackFailurePoisonsReadinessAndSkipsRetry(t *testing.T) {
 	}
 }
 
-func TestProxy_FullWriteSyncFailurePreservesSingleTraceAndPoisonsReadiness(t *testing.T) {
+func TestProxy_FullWriteSyncFailureRollsBackAndFailsClosed(t *testing.T) {
 	p := newOperationalTestProxy(t, []domain.Policy{
 		operationalPolicy("proceeding-flag", domain.PolicyModeEnforcement, domain.EffectFlag, "amount", 0),
 	}, false)
@@ -364,25 +364,62 @@ func TestProxy_FullWriteSyncFailurePreservesSingleTraceAndPoisonsReadiness(t *te
 	p.auditLog = fault
 
 	_, result := evaluateOperational(t, p, "sync-uncertain", 100)
-	if result.ActionTaken != domain.ActionFlagged {
-		t.Fatalf("action after full write and failed sync = %q, want original flagged result", result.ActionTaken)
+	if result.ActionTaken != domain.ActionDenied {
+		t.Fatalf("action after full write and failed sync = %q, want fail-closed deny", result.ActionTaken)
 	}
+	assertOperationalDenyHasNoPolicyAttribution(t, result)
+	if fault.writeCalls != 2 {
+		t.Fatalf("audit writes = %d, want rolled-back original plus one durable deny", fault.writeCalls)
+	}
+	if p.auditPoisoned || p.auditFailureCount.Load() != 1 {
+		t.Fatalf("audit state: poisoned=%v failures=%d, want false/1 after proven rollback", p.auditPoisoned, p.auditFailureCount.Load())
+	}
+	traces := readOperationalTraces(t, p)
+	if len(traces) != 1 || traces[0].ActionTaken != result.ActionTaken || traces[0].Decision != result.Decision {
+		t.Fatalf("audit traces = %#v, want one durable deny matching response %#v", traces, result)
+	}
+
+	readyReq := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	readyRec := httptest.NewRecorder()
+	p.readyz(readyRec, readyReq)
+	if readyRec.Code != http.StatusOK {
+		t.Fatalf("readyz status = %d, want 200 after proven rollback and durable deny; body=%s", readyRec.Code, readyRec.Body.String())
+	}
+}
+
+func TestProxy_FullWriteRollbackFailurePoisonsAndFailsClosedWithoutRetry(t *testing.T) {
+	p := newOperationalTestProxy(t, []domain.Policy{
+		operationalPolicy("proceeding-flag", domain.PolicyModeEnforcement, domain.EffectFlag, "amount", 0),
+	}, false)
+	p.auditSyncMode = "every"
+	fault := &faultInjectAuditFile{
+		auditLogFile:          p.auditLog,
+		syncFailuresRemaining: 1,
+		failTruncate:          true,
+	}
+	p.auditLog = fault
+
+	_, result := evaluateOperational(t, p, "sync-rollback-uncertain", 100)
+	if result.ActionTaken != domain.ActionDenied {
+		t.Fatalf("action after uncertain full write = %q, want fail-closed deny", result.ActionTaken)
+	}
+	assertOperationalDenyHasNoPolicyAttribution(t, result)
 	if fault.writeCalls != 1 {
-		t.Fatalf("audit writes = %d, want exactly 1 without a contradictory fail-closed retry", fault.writeCalls)
+		t.Fatalf("audit writes = %d, want one write and no retry against poisoned tail", fault.writeCalls)
 	}
 	if !p.auditPoisoned || p.auditFailureCount.Load() != 1 {
 		t.Fatalf("audit state: poisoned=%v failures=%d, want true/1", p.auditPoisoned, p.auditFailureCount.Load())
 	}
 	traces := readOperationalTraces(t, p)
-	if len(traces) != 1 || traces[0].ActionTaken != result.ActionTaken || traces[0].Decision != result.Decision {
-		t.Fatalf("audit traces = %#v, want one trace matching response %#v", traces, result)
+	if len(traces) != 1 || traces[0].ActionTaken != domain.ActionFlagged {
+		t.Fatalf("uncertain on-disk trace = %#v, want the one possibly-written pre-deny trace", traces)
 	}
 
 	readyReq := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	readyRec := httptest.NewRecorder()
 	p.readyz(readyRec, readyReq)
 	if readyRec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("readyz status = %d, want 503 after uncertain durability; body=%s", readyRec.Code, readyRec.Body.String())
+		t.Fatalf("readyz status = %d, want 503 after unprovable rollback; body=%s", readyRec.Code, readyRec.Body.String())
 	}
 }
 

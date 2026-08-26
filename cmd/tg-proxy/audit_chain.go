@@ -26,7 +26,7 @@ var (
 	// errAuditRecordCommitted marks an uncertain durability-barrier error after
 	// the full record reached the file and the in-memory chain advanced. The
 	// writer is poisoned at the same time: callers must not append a conflicting
-	// retry, and state transitions that require durable audit must remain pending.
+	// retry, and state transitions that require durable audit are indeterminate.
 	errAuditRecordCommitted = errors.New("audit record committed")
 )
 
@@ -272,11 +272,26 @@ func (p *proxy) verifyFullAuditChain() error {
 //	lastHash carries across the rotation. `tg verify` walks the
 //	rotation set in chain order.
 func (p *proxy) appendTrace(t *domain.DecisionTrace) error {
+	return p.appendTraceWithDurability(t, false)
+}
+
+// appendTraceDurable performs the same append but always requires a successful
+// durability barrier, regardless of the proxy's throughput-oriented sync mode.
+// Human approval and denial use this path because a terminal authorization
+// must not be published before its audit transition is durable.
+func (p *proxy) appendTraceDurable(t *domain.DecisionTrace) error {
+	return p.appendTraceWithDurability(t, true)
+}
+
+func (p *proxy) appendTraceWithDurability(t *domain.DecisionTrace, forceDurable bool) error {
 	p.auditMu.Lock()
 	defer p.auditMu.Unlock()
 	if p.auditPoisoned {
 		return p.auditPoisonErrorLocked()
 	}
+	previousLastHash := p.lastHash
+	previousAppendSeq := p.auditAppendSeq
+	previousNeedsSeparator := p.auditNeedsSeparator
 	// Every new record carries its hash-schema version on disk. A missing
 	// marker is reserved for pre-v2 records and is interpreted as v1 by the
 	// verifier, which lets upgraded proxies continue an existing chain.
@@ -329,27 +344,29 @@ func (p *proxy) appendTrace(t *domain.DecisionTrace) error {
 	p.auditAppendSeq++
 	p.auditNeedsSeparator = false
 
-	// Advance lastHash NOW, before the durability barrier. The write
-	// has reached the OS buffer cache; subsequent appends must chain
-	// from this hash. If the Sync below errors the trace is still
-	// recoverable from the file (the write went through) and we want
-	// the next append to link to it, not to the previous tail —
-	// otherwise a Sync error forks the chain at the next append.
+	// Advance lastHash before the durability barrier so the successful path has
+	// one committed in-memory tail. If Sync fails, the rollback path below
+	// restores this value and every related counter before returning.
 	p.lastHash = t.TraceHash
 
-	switch p.auditSyncMode {
-	case "every":
-		if err := p.auditLog.Sync(); err != nil {
-			return p.poisonCommittedAuditLocked(err)
-		}
-	case "interval":
-		if p.auditAppendSeq%int64(p.auditSyncEvery) == 0 {
-			if err := p.auditLog.Sync(); err != nil {
-				return p.poisonCommittedAuditLocked(err)
+	shouldSync := forceDurable || p.auditSyncMode == "every"
+	if p.auditSyncMode == "interval" && p.auditAppendSeq%int64(p.auditSyncEvery) == 0 {
+		shouldSync = true
+	}
+	if shouldSync {
+		if syncErr := p.auditLog.Sync(); syncErr != nil {
+			if rollbackErr := p.rollbackAuditWriteLocked(preWriteSize); rollbackErr != nil {
+				return p.poisonCommittedAuditLocked(syncErr, rollbackErr)
 			}
+			p.lastHash = previousLastHash
+			p.auditCurrentBytes = preWriteSize
+			p.auditAppendSeq = previousAppendSeq
+			p.auditNeedsSeparator = previousNeedsSeparator
+			return fmt.Errorf(
+				"sync audit log: %w (full write rolled back durably to byte %d)",
+				syncErr, preWriteSize,
+			)
 		}
-	case "none":
-		// no-op
 	}
 
 	// Rotate AFTER the hash is committed so a crash during rotation
@@ -401,8 +418,11 @@ func (p *proxy) poisonAuditLocked(reason string) error {
 // the complete record may be present in the live file, but its durability is
 // uncertain and no further append is safe until an operator verifies the tail.
 // The caller must hold auditMu.
-func (p *proxy) poisonCommittedAuditLocked(syncErr error) error {
-	reason := fmt.Sprintf("full audit record write completed but durability sync failed: %v", syncErr)
+func (p *proxy) poisonCommittedAuditLocked(syncErr, rollbackErr error) error {
+	reason := fmt.Sprintf(
+		"full audit record write completed but durability sync failed (%v) and rollback could not be proven durable (%v)",
+		syncErr, rollbackErr,
+	)
 	poisonErr := p.poisonAuditLocked(reason)
 	return errors.Join(
 		fmt.Errorf("%w: %s", errAuditRecordCommitted, reason),

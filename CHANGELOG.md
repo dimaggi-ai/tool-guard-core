@@ -80,12 +80,13 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   pre-write size and durably verify that repair before another append. A
   rollback failure permanently poisons that process's writer, makes
   `/readyz` return 503, and suppresses fail-closed retry writes against the
-  ambiguous tail. A complete write followed by a failed durability sync also
-  poisons the writer: evaluation returns its single already-written result
-  without appending a contradictory fail-closed trace, while human approval
-  and denial return 503 and leave the escalation pending. Those lifecycle
-  endpoints append their record before committing terminal state, so no 200
-  approval is published without a durable audit transition.
+  ambiguous tail. A complete write followed by a failed durability sync is
+  also rolled back durably; the in-memory hash/counters are restored before a
+  fail-closed deny is recorded. Approval and denial force this barrier even
+  when ordinary evaluation logging uses `interval` or `none`, and publish
+  terminal state only after it succeeds. If rollback cannot be proven, the
+  writer is poisoned and the escalation becomes `indeterminate` for operator
+  reconciliation instead of claiming an ordinary pending or approved state.
 - Compile-only `js/wasm` and `wasip1/wasm` proxy builds no longer reference
   unavailable process-signal constants. Native SIGHUP reload and graceful
   shutdown behavior is unchanged.

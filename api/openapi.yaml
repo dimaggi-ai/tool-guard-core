@@ -278,7 +278,7 @@ components:
               error: {type: string, const: already resolved}
               escalation: {$ref: "#/components/schemas/Escalation"}
     AuditUnavailable:
-      description: Audit append failed; the escalation remains pending.
+      description: Audit append failed; the escalation remains pending after a proven rollback or becomes indeterminate when rollback cannot be proven durable.
       content:
         application/json:
           schema:
@@ -429,7 +429,7 @@ components:
       required: [id, state, created_at, expires_at, envelope, decision]
       properties:
         id: {type: string}
-        state: {type: string, enum: [pending, approved, denied, expired]}
+        state: {type: string, enum: [pending, approved, denied, expired, indeterminate]}
         created_at: {type: string, format: date-time}
         expires_at: {type: string, format: date-time}
         resolved_at: {type: string, format: date-time}

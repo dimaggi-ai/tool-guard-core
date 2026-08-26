@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -88,10 +89,18 @@ func (p *proxy) escalationByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if auditErr != nil {
+			message := "escalation resolution was not committed because its audit record could not be written durably"
+			hint := "repair the audit writer, then retry this pending escalation"
+			if errors.Is(auditErr, errAuditWriterPoisoned) {
+				hint = "stop processing approvals; preserve, repair, and verify the audit log, then restart the proxy and have the originating action resubmitted with a fresh envelope ID; do not retry this escalation ID"
+			}
+			if e.State == EscIndeterminate {
+				message = "escalation resolution is indeterminate because a terminal audit record may exist but its durability could not be proven; no authorization was granted"
+			}
 			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
 				"error":           "audit_append_failed",
-				"message":         "escalation resolution was not committed because its audit record could not be written",
-				"resolution_hint": "repair the audit writer, then retry; if /readyz reports audit poisoning, restart only after repairing and verifying the audit log; the escalation remains pending",
+				"message":         message,
+				"resolution_hint": hint,
 				"escalation":      e,
 			})
 			return
