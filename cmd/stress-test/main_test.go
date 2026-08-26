@@ -60,6 +60,29 @@ func TestFireRejectsEmpty204AndMalformedDecisionBodies(t *testing.T) {
 	}
 }
 
+func TestResponseIsWrongDistinguishesFailClosedFromMalformedSuccess(t *testing.T) {
+	tests := []struct {
+		name    string
+		outcome reqOutcome
+		want    bool
+	}{
+		{name: "503 is fail closed", outcome: reqOutcome{statusCode: http.StatusServiceUnavailable, mustNotAllow: true}},
+		{name: "429 is fail closed", outcome: reqOutcome{statusCode: http.StatusTooManyRequests, mustNotAllow: true}},
+		{name: "204 is malformed success", outcome: reqOutcome{statusCode: http.StatusNoContent, mustNotAllow: true}, want: true},
+		{name: "empty 200 is malformed success", outcome: reqOutcome{statusCode: http.StatusOK, mustNotAllow: true}, want: true},
+		{name: "valid deny is safe", outcome: reqOutcome{statusCode: http.StatusOK, contractValid: true, actionTaken: "denied", mustNotAllow: true}},
+		{name: "valid escalation is safe", outcome: reqOutcome{statusCode: http.StatusAccepted, contractValid: true, actionTaken: "escalated", mustNotAllow: true}},
+		{name: "valid allow is unsafe", outcome: reqOutcome{statusCode: http.StatusOK, contractValid: true, actionTaken: "allowed", mustNotAllow: true}, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := responseIsWrong(tt.outcome); got != tt.want {
+				t.Fatalf("responseIsWrong() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSuccessfulRPSUsesSuccessfulResponsesAndGuardsZeroDuration(t *testing.T) {
 	result := levelResult{latencies: []time.Duration{
 		time.Millisecond, 2 * time.Millisecond, 3 * time.Millisecond,

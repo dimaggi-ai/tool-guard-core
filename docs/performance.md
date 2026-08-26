@@ -30,8 +30,8 @@ Kubernetes pod.
 builds the candidate commit and the latest reachable release tag, starts both
 real `tg-proxy` binaries on the same GitHub runner, and drives them
 simultaneously at concurrency 50 for 15 seconds each. The gate fails when the
-candidate's successful-2xx throughput is **at least 10% lower than the release
-baseline**. An exact 10% regression fails.
+candidate's contract-valid 200/202 throughput is **at least 10% lower than the
+release baseline**. An exact 10% regression fails.
 
 Methodology, exactly as the workflow runs it:
 
@@ -41,8 +41,8 @@ Methodology, exactly as the workflow runs it:
   candidate and baseline concurrently before an overload phase (2,000
   in-flight) that must fail *closed* (clean rejections — never a 200 with the
   wrong decision, never a hang).
-- **Throughput denominator:** every completed HTTP 2xx response counts,
-  including HTTP 202 for a valid escalation. Earlier harness versions counted
+- **Throughput denominator:** every contract-valid HTTP 200/202 evaluation
+  response counts, including HTTP 202 for a valid escalation. Earlier harness versions counted
   only HTTP 200, so the reported rate changed with the random allow/deny/
   escalate mix even when the proxy handled the same number of requests.
 - **Correctness under load:** after the load and overload phases

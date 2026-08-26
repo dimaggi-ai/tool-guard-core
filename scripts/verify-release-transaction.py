@@ -31,6 +31,7 @@ checks = {
     "PyPI retries are idempotent": "          skip-existing: true" in workflow,
     "Python release builds pin source timestamps": "SOURCE_DATE_EPOCH" in workflow,
     "Python archives are clean-rebuild reproducible": "bash scripts/verify-python-reproducible.sh" in workflow,
+    "Python release build frontends are pinned": "build==1.5.0 twine==7.0.0" in workflow,
     "finalizer waits for artifacts and PyPI": "    needs: [release, publish-python]" in workflow,
     "checkout-free finalizer has repository context": "      GH_REPO: ${{ github.repository }}" in workflow,
     "first finalizer attempt rejects unexpected public state": "was already public on the first finalizer attempt" in workflow,

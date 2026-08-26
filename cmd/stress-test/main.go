@@ -322,13 +322,7 @@ func runLevel(target string, concurrency int, duration time.Duration, perReqTime
 				}
 				localStatus[out.statusCode]++
 				local = appendSuccessfulLatency(local, out)
-				if out.statusCode >= 200 && out.statusCode < 300 && !out.contractValid {
-					localWrong++
-				} else if out.mustNotAllow && out.actionTaken != "denied" && out.actionTaken != "escalated" {
-					// Over-cap refunds may be denied directly or remain pending
-					// escalation, but they must never proceed. The action, not the
-					// raw decision, is authoritative in shadow mode and after the
-					// proxy's escalate→deny overload downgrade.
+				if responseIsWrong(out) {
 					localWrong++
 				}
 			}
@@ -336,6 +330,23 @@ func runLevel(target string, concurrency int, duration time.Duration, perReqTime
 	}
 	wg.Wait()
 	return agg
+}
+
+func responseIsWrong(out reqOutcome) bool {
+	if out.statusCode >= 200 && out.statusCode < 300 && !out.contractValid {
+		return true
+	}
+	if !out.contractValid {
+		// Non-2xx responses are explicit rejection/failure and therefore
+		// fail closed. They still invalidate a relative throughput sample,
+		// but are not a corrupt or unsafe evaluation response.
+		return false
+	}
+	// Over-cap refunds may be denied directly or remain pending escalation,
+	// but they must never proceed. The action, not the raw decision, is
+	// authoritative in shadow mode and after the proxy's escalate→deny
+	// overload downgrade.
+	return out.mustNotAllow && out.actionTaken != "denied" && out.actionTaken != "escalated"
 }
 
 func runTargetComparison(candidateTarget, baselineTarget string, concurrency int, duration time.Duration) (levelResult, levelResult) {
