@@ -126,10 +126,14 @@ hook maps its standard write and HTTP tool names to `filesystem_writes` and
 
 ## Modes
 
-- `enforcement` - the decision returned to the agent is applied.
-- `shadow` - the decision is computed and audited but the agent is
-  always told `allowed`. Useful for rolling out a new rule and
-  watching how it would have behaved against real traffic.
+- `enforcement` - this policy's decision contributes to the action applied to
+  the agent.
+- `shadow` - this policy's decision is computed and audited, but does not
+  contribute a deny or escalation to the applied action. A shadow-only match
+  is operationally allowed and reported as `action_taken: allowed_shadow`,
+  while the raw `decision` preserves what the policy would have done. Shadow
+  applies to one policy's contribution: it cannot weaken a co-loaded
+  `enforcement` policy.
 
 A near-miss flag on the trace records which mode the rule was
 operating in and what the "would-be" decision would have been.

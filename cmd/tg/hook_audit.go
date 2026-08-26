@@ -122,25 +122,46 @@ func appendHookAuditBestEffort(stderr io.Writer, path string, env *domain.Action
 	}
 }
 
-// acquireAuditLock takes a portable advisory lock on <path>.lock so concurrent
-// hook processes serialize their read-tail-then-append and cannot fork the
-// chain. Bounded (~200ms) with a staleness steal — a crashed holder does not
-// wedge future appends. Returns an error (not a no-op unlock) on give-up so the
-// caller skips this record rather than appending unlocked.
+// acquireAuditLock takes an OS advisory lock on <path>.lock so concurrent hook
+// processes serialize their verify-then-append transaction and cannot fork the
+// chain. The kernel releases the lock when a holder exits, so crash recovery
+// never relies on an unsafe age-based lockfile steal. The lockfile itself is
+// intentionally persistent: removing it would let another process lock a new
+// inode while the old inode is still locked.
+//
+// Acquisition remains bounded so audit contention cannot indefinitely delay a
+// hook decision. Returns an error (not a no-op unlock) on give-up so the caller
+// skips this record rather than appending unlocked.
 func acquireAuditLock(path string) (func(), error) {
-	lock := path + ".lock"
-	for i := 0; i < 100; i++ {
-		f, err := os.OpenFile(lock, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err == nil {
-			return func() { _ = f.Close(); _ = os.Remove(lock) }, nil
-		}
-		if fi, statErr := os.Stat(lock); statErr == nil && time.Since(fi.ModTime()) > 10*time.Second {
-			_ = os.Remove(lock) // steal a stale lock (holder likely crashed)
-			continue
-		}
-		time.Sleep(2 * time.Millisecond)
+	const (
+		wait  = 200 * time.Millisecond
+		retry = 2 * time.Millisecond
+	)
+	lockPath := path + ".lock"
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("audit: open lock %s: %w", lockPath, err)
 	}
-	return nil, fmt.Errorf("audit: could not acquire lock %s", lock)
+
+	deadline := time.Now().Add(wait)
+	for {
+		locked, lockErr := tryAuditFileLock(f)
+		if lockErr != nil {
+			_ = f.Close()
+			return nil, fmt.Errorf("audit: lock %s: %w", lockPath, lockErr)
+		}
+		if locked {
+			return func() {
+				_ = unlockAuditFile(f)
+				_ = f.Close()
+			}, nil
+		}
+		if !time.Now().Before(deadline) {
+			_ = f.Close()
+			return nil, fmt.Errorf("audit: could not acquire lock %s within %s", lockPath, wait)
+		}
+		time.Sleep(retry)
+	}
 }
 
 func hookDecisionToDomain(decision string) (domain.Decision, domain.ActionTaken) {

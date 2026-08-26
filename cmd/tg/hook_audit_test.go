@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -174,6 +175,89 @@ func TestAppendHookAudit_ConcurrentNoFork(t *testing.T) {
 			t.Errorf("record %d prev %q links to no known record", i, rec[0])
 		}
 	}
+}
+
+func TestAcquireAuditLock_LiveHolderWithOldMtimeCannotBeStolen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	unlock, err := acquireAuditLock(path)
+	if err != nil {
+		t.Fatalf("acquire first lock: %v", err)
+	}
+	released := false
+	defer func() {
+		if !released {
+			unlock()
+		}
+	}()
+
+	// Reproduce the old failure without a 10-second sleep: an age-based lock
+	// implementation would treat this live holder as stale and unlink it.
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(path+".lock", old, old); err != nil {
+		t.Fatalf("age live lockfile: %v", err)
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestAcquireAuditLock_ContenderProcess$")
+	cmd.Env = append(os.Environ(), "TG_TEST_AUDIT_LOCK_PATH="+path)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("contender process: %v\n%s", err, output)
+	}
+
+	unlock()
+	released = true
+	nextUnlock, err := acquireAuditLock(path)
+	if err != nil {
+		t.Fatalf("acquire after live holder released: %v", err)
+	}
+	nextUnlock()
+}
+
+func TestAcquireAuditLock_ContenderProcess(t *testing.T) {
+	path := os.Getenv("TG_TEST_AUDIT_LOCK_PATH")
+	if path == "" {
+		t.Skip("helper process only")
+	}
+	unlock, err := acquireAuditLock(path)
+	if err == nil {
+		unlock()
+		t.Fatal("acquired a lock still held by the parent process")
+	}
+	if !strings.Contains(err.Error(), "could not acquire lock") {
+		t.Fatalf("unexpected contention error: %v", err)
+	}
+}
+
+func TestAcquireAuditLock_HolderExitReleasesLock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	cmd := exec.Command(os.Args[0], "-test.run=^TestAcquireAuditLock_ExitHolderProcess$")
+	cmd.Env = append(os.Environ(), "TG_TEST_AUDIT_LOCK_EXIT_PATH="+path)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("holder process: %v\n%s", err, output)
+	}
+
+	// The helper deliberately exits without calling its unlock closure. The OS
+	// must release the advisory lock even though the persistent lockfile remains.
+	unlock, err := acquireAuditLock(path)
+	if err != nil {
+		t.Fatalf("acquire after holder process exit: %v", err)
+	}
+	unlock()
+}
+
+var auditLockExitTestHold func()
+
+func TestAcquireAuditLock_ExitHolderProcess(t *testing.T) {
+	path := os.Getenv("TG_TEST_AUDIT_LOCK_EXIT_PATH")
+	if path == "" {
+		t.Skip("helper process only")
+	}
+	var err error
+	auditLockExitTestHold, err = acquireAuditLock(path)
+	if err != nil {
+		t.Fatalf("acquire holder lock: %v", err)
+	}
+	// Keep the descriptor reachable until the test process exits. Do not call
+	// the closure: the parent is testing kernel cleanup on process termination.
 }
 
 func TestAppendHookAudit_LargeRecordKeepsNextLink(t *testing.T) {

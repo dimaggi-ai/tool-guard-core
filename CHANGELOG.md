@@ -72,6 +72,10 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   canonical-version downgrade and surfaces the lost audit record on stderr.
   This intentionally replaces the historical O(1) tail-only recovery with an
   O(n) integrity check in the size of the active hook log.
+- Hook append serialization now uses an OS advisory lock, which the kernel
+  releases when a process exits. The persistent lockfile is never removed or
+  stolen based on its age, so verification that takes longer than ten seconds
+  cannot let another live process lock a different inode and fork the chain.
 - This intentionally supersedes the 0.7 documentation that described a future
   v2 writer as opt-in. Keeping v1 as the default would leave the new
   applied-action attribution outside the integrity commitment. Because Tool
