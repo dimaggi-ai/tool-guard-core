@@ -63,6 +63,8 @@ func TestReleaseWorkflowReusesFullCI(t *testing.T) {
 		"id-token":     "write",
 		"attestations": "write",
 	})
+	assertStableTagPreflight(t, release.Jobs["preflight"])
+	assertReleaseRefusesPublicState(t, release.Jobs["release"])
 	assertWorkflowPermissions(t, "publish-python", release.Jobs["publish-python"].Permissions, map[string]string{
 		"id-token": "write",
 	})
@@ -105,6 +107,40 @@ func TestReleaseWorkflowReusesFullCI(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func assertStableTagPreflight(t *testing.T, preflight workflowJobSpec) {
+	t.Helper()
+	if len(preflight.Steps) == 0 {
+		t.Fatal("release preflight has no steps")
+	}
+	first := preflight.Steps[0]
+	if first.Name != "Reject unsupported tag shapes" || !strings.Contains(first.Run, `^v[0-9]+\.[0-9]+\.[0-9]+$`) {
+		t.Errorf("first release preflight step does not reject tags outside stable vN.N.N semver")
+	}
+}
+
+func assertReleaseRefusesPublicState(t *testing.T, release workflowJobSpec) {
+	t.Helper()
+	stateCheckIndex, goreleaserIndex := -1, -1
+	for index, step := range release.Steps {
+		if strings.Contains(step.Run, "refusing to rebuild or push release artifacts") &&
+			strings.Contains(step.Run, `jq -r '.draft'`) {
+			stateCheckIndex = index
+		}
+		if strings.HasPrefix(step.Uses, "goreleaser/goreleaser-action@") {
+			goreleaserIndex = index
+		}
+	}
+	if stateCheckIndex < 0 {
+		t.Error("release job does not reject an already-public GitHub Release")
+	}
+	if goreleaserIndex < 0 {
+		t.Error("release job has no GoReleaser step")
+	}
+	if stateCheckIndex >= goreleaserIndex {
+		t.Errorf("public-release state check step %d must precede GoReleaser step %d", stateCheckIndex, goreleaserIndex)
 	}
 }
 

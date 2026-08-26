@@ -625,6 +625,13 @@ Comprehensive docs live in [`docs/`](docs/README.md):
 
 ## Known limitations
 
+> **New in 0.8.0 (breaking):** policy YAML `mode` is authoritative;
+> duplicate policy/rule identities are rejected; new audit writes use canonical
+> v2 and must not be resumed by a 0.7 writer; and direct access to
+> `engine.LLMClassifyHook` is replaced by its synchronized getter/setter.
+> Upgrade every writer and verifier that shares a chain together, run `tg lint`
+> and `tg simulate` before rollout, and follow the exact migration checklist in
+> [Release-Notes.md](Release-Notes.md).
 > **New in 0.7.0 (breaking):** policy loading is strict everywhere —
 > `schema_version: 1` declared (omitted still loads as v1), unknown or
 > misspelled fields are load errors, the no-op `deep_evaluation` field

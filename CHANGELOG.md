@@ -6,7 +6,9 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Breaking mode-precedence correction planned for 0.8.0
+## [0.8.0] — 2026-08-26
+
+### Breaking mode-precedence correction
 
 - A policy's YAML `mode` is now authoritative. In 0.7, the default
   enforcement call-site could override a `mode: shadow` policy and block its
@@ -22,7 +24,7 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   it in shadow only when observe-without-blocking is intentional. Test the
   resulting set with `tg simulate` before rollout.
 
-### Breaking policy-identity validation planned for 0.8.0
+### Breaking policy-identity validation
 
 - Loaded sets now reject duplicate `(policy_id, version)` identities, and each
   policy rejects duplicate `rule_id` values. Older releases accepted these
@@ -39,7 +41,7 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   retain `rule_id`, `fires`, and `effect` and add `policy_id` and
   `policy_version`; distinct policies no longer merge their counts or effects.
 
-### Breaking audit-format migration planned for 0.8.0
+### Breaking audit-format migration
 
 - New audit writers stamp canonical trace v2 so the raw decision and the
   applied-action provenance are both covered by the trace hash. Canonical v1
@@ -108,7 +110,7 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   Guard is pre-1.0, 0.8 carries this explicitly documented breaking migration
   in a minor release rather than weakening the audit guarantee.
 
-### Breaking Go API migration planned for 0.8.0
+### Breaking Go API migration
 
 - The exported mutable package variable `engine.LLMClassifyHook` has been
   removed. Direct writes raced with concurrent evaluations and bypassed the
@@ -1360,7 +1362,8 @@ Lint heuristics shipped (8):
   documented battle-test catalogue; the strict variants are for
   operators who already accept those build-time costs.
 
-[Unreleased]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.5.0...v0.5.2

@@ -104,6 +104,16 @@ func TestChangelogReleaseLinksReferenceExistingTags(t *testing.T) {
 	}
 
 	changelog := readRepoFile(t, "CHANGELOG.md")
+	releaseNotes := readRepoFile(t, "Release-Notes.md")
+	pending := regexp.MustCompile(`(?m)^## ([0-9]+\.[0-9]+\.[0-9]+) —`).FindStringSubmatch(releaseNotes)
+	if len(pending) != 2 {
+		t.Fatal("Release-Notes.md has no leading semver release section")
+	}
+	pendingLabel := pending[1]
+	pendingTag := "v" + pendingLabel
+	if !strings.Contains(changelog, "## ["+pendingLabel+"] —") {
+		t.Fatalf("CHANGELOG.md has no dated section for pending release %s", pendingLabel)
+	}
 	compareLines := regexp.MustCompile(`(?m)^\[[^]]+\]: .*?/compare/.*$`).FindAllString(changelog, -1)
 	links := regexp.MustCompile(`(?m)^\[([^]]+)\]: https://github\.com/dimaggi-ai/tool-guard-core/compare/([^\s]+)\.\.\.([^\s]+)$`).FindAllStringSubmatch(changelog, -1)
 	if len(links) == 0 {
@@ -112,8 +122,16 @@ func TestChangelogReleaseLinksReferenceExistingTags(t *testing.T) {
 	if len(links) != len(compareLines) {
 		t.Fatalf("CHANGELOG.md has %d compare links but only %d use the required shape", len(compareLines), len(links))
 	}
+	foundPendingLink := false
+	foundUnreleasedLink := false
 	for _, link := range links {
 		label, from, to := link[1], link[2], link[3]
+		if label == pendingLabel {
+			foundPendingLink = true
+		}
+		if label == "Unreleased" && from == pendingTag && to == "HEAD" {
+			foundUnreleasedLink = true
+		}
 		if label != "Unreleased" && to != "v"+label {
 			t.Errorf("CHANGELOG link [%s] ends at %s, want v%s", label, to, label)
 		}
@@ -121,10 +139,16 @@ func TestChangelogReleaseLinksReferenceExistingTags(t *testing.T) {
 			if ref == "HEAD" && label == "Unreleased" {
 				continue
 			}
-			if _, ok := tags[ref]; !ok {
+			if _, ok := tags[ref]; !ok && ref != pendingTag {
 				t.Errorf("CHANGELOG link [%s] references missing tag %s", label, ref)
 			}
 		}
+	}
+	if !foundPendingLink {
+		t.Errorf("CHANGELOG.md has no comparison link for pending release %s", pendingLabel)
+	}
+	if !foundUnreleasedLink {
+		t.Errorf("CHANGELOG.md [Unreleased] link must start at %s", pendingTag)
 	}
 
 	releaseLinks := regexp.MustCompile(`(?m)^\[([^]]+)\]: https://github\.com/dimaggi-ai/tool-guard-core/releases/tag/([^\s]+)$`).FindAllStringSubmatch(changelog, -1)
@@ -134,6 +158,21 @@ func TestChangelogReleaseLinksReferenceExistingTags(t *testing.T) {
 		}
 		if _, ok := tags[link[2]]; !ok {
 			t.Errorf("CHANGELOG link [%s] references missing tag %s", link[1], link[2])
+		}
+	}
+}
+
+func TestReleaseNotesMigrationCommandsUseSupportedFlags(t *testing.T) {
+	notes := readRepoFile(t, "Release-Notes.md")
+	if strings.Contains(notes, "tg lint -policy-dir") {
+		t.Error("Release-Notes.md documents unsupported tg lint -policy-dir")
+	}
+	for _, command := range []string{
+		`tg lint -policy "$policy"`,
+		`tg simulate -policy-dir ./policies -calls representative.jsonl`,
+	} {
+		if !strings.Contains(notes, command) {
+			t.Errorf("Release-Notes.md migration block is missing %q", command)
 		}
 	}
 }

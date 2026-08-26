@@ -38,7 +38,11 @@ separate release artifacts.
    calls before deployment:
 
    ```sh
-   tg lint -policy-dir ./policies
+   set -e
+   for policy in ./policies/*.yaml ./policies/*.yml; do
+     [ -e "$policy" ] || continue
+     tg lint -policy "$policy"
+   done
    tg simulate -policy-dir ./policies -calls representative.jsonl
    ```
 
@@ -100,7 +104,9 @@ the exact wheel and source archive produced by the release workflow before it
 promotes the GitHub Release.
 If a step fails before promotion, the GitHub Release remains a draft; inspect
 the failed workflow, preserve the same tag and artifacts, and rerun the
-idempotent publish path only after correcting the release infrastructure. A
+publish path only after correcting the release infrastructure. GoReleaser
+reuses that draft and replaces its uploaded assets with bytes rebuilt from the
+same immutable tag. A
 runner can lose its response after promotion succeeds; on that retry, the
 finalizer rechecks the registries, recognizes the already-public release, and
 verifies its final state instead of attempting to republish artifacts.

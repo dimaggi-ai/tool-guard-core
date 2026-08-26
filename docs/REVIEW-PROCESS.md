@@ -242,6 +242,18 @@ passes have real precedent instead of a starting from scratch.
   are now a load error. → pillar 2: a shape the loader does not
   recognize must fail safe, not fail open.
 
+- **2026-08 · v0.8.0 integrated release review.** Timeline and adversarial
+  release probes found that ordinary green tests did not prove a retry-safe
+  publication: the finalizer lacked explicit repository context, accepted any
+  successful PyPI version endpoint rather than the exact built filenames and
+  digests, and could not recover when promotion succeeded but its read-back
+  failed. A second pass found that GoReleaser did not reuse its staged draft,
+  prerelease-shaped tags could enter a workflow whose signature identity only
+  accepted stable semver, and the changelog still described 0.8 as planned.
+  The workflow now checks these state transitions explicitly, and mutation
+  probes plus exact-artifact tests guard their order and failure behavior. →
+  pillars 2, 4, and 6.
+
 ## Where this fits in the release checklist
 
 `RELEASING.md`'s "Before tagging at all" section should include running
