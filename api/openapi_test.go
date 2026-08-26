@@ -122,6 +122,70 @@ func TestEscalationResolutionDocumentsAuditFailure(t *testing.T) {
 	}
 }
 
+func TestEscalationResolutionDocumentsConflictVariants(t *testing.T) {
+	doc := loadContract(t)
+	paths := asMap(t, doc["paths"], "paths")
+	for _, path := range []string{"/escalations/{id}/approve", "/escalations/{id}/deny"} {
+		item := asMap(t, paths[path], "paths."+path)
+		post := asMap(t, item["post"], path+" post")
+		responses := asMap(t, post["responses"], path+" responses")
+		conflict := asMap(t, responses["409"], path+" responses.409")
+		if conflict["$ref"] != "#/components/responses/ResolutionConflict" {
+			t.Errorf("%s 409 response = %v, want ResolutionConflict ref", path, conflict)
+		}
+	}
+
+	components := asMap(t, doc["components"], "components")
+	responses := asMap(t, components["responses"], "components.responses")
+	conflict := asMap(t, responses["ResolutionConflict"], "components.responses.ResolutionConflict")
+	content := asMap(t, conflict["content"], "ResolutionConflict.content")
+	jsonContent := asMap(t, content["application/json"], "ResolutionConflict.content.application/json")
+	schema := asMap(t, jsonContent["schema"], "ResolutionConflict schema")
+	oneOf, ok := schema["oneOf"].([]any)
+	if !ok || len(oneOf) != 2 {
+		t.Fatalf("ResolutionConflict.oneOf = %T/%v, want two variants", schema["oneOf"], schema["oneOf"])
+	}
+	wantRefs := []string{
+		"#/components/schemas/AlreadyResolved",
+		"#/components/schemas/EscalationPastDue",
+	}
+	for i, want := range wantRefs {
+		variant := asMap(t, oneOf[i], "ResolutionConflict.oneOf")
+		if variant["$ref"] != want {
+			t.Errorf("ResolutionConflict.oneOf[%d] = %v, want %s", i, variant["$ref"], want)
+		}
+	}
+
+	schemas := asMap(t, components["schemas"], "components.schemas")
+	variants := []struct {
+		name     string
+		error    string
+		required []string
+	}{
+		{name: "AlreadyResolved", error: "already resolved", required: []string{"error", "escalation"}},
+		{name: "EscalationPastDue", error: "escalation_past_due", required: []string{"error", "message", "resolution_hint", "escalation"}},
+	}
+	for _, variant := range variants {
+		contract := asMap(t, schemas[variant.name], "components.schemas."+variant.name)
+		required, ok := contract["required"].([]any)
+		if !ok {
+			t.Fatalf("%s.required = %T, want array", variant.name, contract["required"])
+		}
+		gotRequired := make([]string, 0, len(required))
+		for _, field := range required {
+			gotRequired = append(gotRequired, field.(string))
+		}
+		if strings.Join(gotRequired, ",") != strings.Join(variant.required, ",") {
+			t.Errorf("%s.required = %v, want %v", variant.name, gotRequired, variant.required)
+		}
+		properties := asMap(t, contract["properties"], "components.schemas."+variant.name+".properties")
+		errorProperty := asMap(t, properties["error"], "components.schemas."+variant.name+".properties.error")
+		if errorProperty["const"] != variant.error {
+			t.Errorf("%s error const = %v, want %q", variant.name, errorProperty["const"], variant.error)
+		}
+	}
+}
+
 func TestEscalationSchemaIncludesIndeterminateAuditState(t *testing.T) {
 	doc := loadContract(t)
 	components := asMap(t, doc["components"], "components")

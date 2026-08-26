@@ -174,16 +174,16 @@ func (s *escalationStore) resolveAudited(
 		ec := *e
 		return &ec, false, nil // already resolved
 	}
+	now := time.Now().UTC()
 	// The reaper may leave a due entry pending when it can prove that the
 	// expiry audit record was not written. Pending is an audit-recovery state
 	// in that case, not a renewed authorization window: never let a late human
 	// resolution bypass the original expiry deadline.
-	if !time.Now().UTC().Before(e.ExpiresAt) {
+	if !now.Before(e.ExpiresAt) {
 		ec := *e
 		return &ec, false, errEscalationPastDue
 	}
 	candidate := *e
-	now := time.Now().UTC()
 	candidate.ResolvedAt = &now
 	candidate.Approver = approver
 	candidate.ApproverReason = reason

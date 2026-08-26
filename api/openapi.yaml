@@ -191,7 +191,7 @@ paths:
         "401": {$ref: "#/components/responses/Unauthorized"}
         "404": {$ref: "#/components/responses/NotFound"}
         "405": {$ref: "#/components/responses/PlainMethodNotAllowed"}
-        "409": {$ref: "#/components/responses/AlreadyResolved"}
+        "409": {$ref: "#/components/responses/ResolutionConflict"}
         "503": {$ref: "#/components/responses/AuditUnavailable"}
   /escalations/{id}/deny:
     parameters:
@@ -215,7 +215,7 @@ paths:
         "401": {$ref: "#/components/responses/Unauthorized"}
         "404": {$ref: "#/components/responses/NotFound"}
         "405": {$ref: "#/components/responses/PlainMethodNotAllowed"}
-        "409": {$ref: "#/components/responses/AlreadyResolved"}
+        "409": {$ref: "#/components/responses/ResolutionConflict"}
         "503": {$ref: "#/components/responses/AuditUnavailable"}
 components:
   securitySchemes:
@@ -267,16 +267,14 @@ components:
       content:
         text/plain:
           schema: {type: string}
-    AlreadyResolved:
-      description: Escalation was already resolved.
+    ResolutionConflict:
+      description: Escalation was already resolved or is past its approval deadline while expiry audit publication is pending.
       content:
         application/json:
           schema:
-            type: object
-            required: [error, escalation]
-            properties:
-              error: {type: string, const: already resolved}
-              escalation: {$ref: "#/components/schemas/Escalation"}
+            oneOf:
+              - {$ref: "#/components/schemas/AlreadyResolved"}
+              - {$ref: "#/components/schemas/EscalationPastDue"}
     AuditUnavailable:
       description: Audit append failed; the escalation remains pending after a proven rollback or becomes indeterminate when rollback cannot be proven durable.
       content:
@@ -295,6 +293,20 @@ components:
       required: [error]
       properties:
         error: {type: string}
+    AlreadyResolved:
+      type: object
+      required: [error, escalation]
+      properties:
+        error: {type: string, const: already resolved}
+        escalation: {$ref: "#/components/schemas/Escalation"}
+    EscalationPastDue:
+      type: object
+      required: [error, message, resolution_hint, escalation]
+      properties:
+        error: {type: string, const: escalation_past_due}
+        message: {type: string}
+        resolution_hint: {type: string}
+        escalation: {$ref: "#/components/schemas/Escalation"}
     Health:
       type: object
       required: [status, started_at, uptime_s]
