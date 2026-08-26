@@ -78,9 +78,13 @@ func TestEscalationApproval_AuditRollbackFailureLeavesPending(t *testing.T) {
 	if got := rec.Header().Get("Content-Type"); got != "application/json" {
 		t.Fatalf("content type = %q, want application/json", got)
 	}
-	if !strings.Contains(rec.Body.String(), `"error":"audit_append_failed"`) ||
-		!strings.Contains(rec.Body.String(), `"state":"pending"`) {
+	body := rec.Body.String()
+	if !strings.Contains(body, `"error":"audit_append_failed"`) ||
+		!strings.Contains(body, `"state":"pending"`) {
 		t.Fatalf("structured failure response missing error/pending state: %s", rec.Body.String())
+	}
+	if !strings.Contains(body, "repair the audit writer, then retry") || strings.Contains(body, "wait for /readyz") {
+		t.Fatalf("structured failure response has an inaccurate recovery hint: %s", body)
 	}
 	pending := p.escalations.get(id)
 	if pending == nil || pending.State != EscPending || pending.ResolvedAt != nil || pending.Approver != "" {
@@ -94,7 +98,7 @@ func TestEscalationApproval_AuditRollbackFailureLeavesPending(t *testing.T) {
 	}
 }
 
-func TestEscalationApproval_FullWriteSyncFailureKeepsAuditAndStateAligned(t *testing.T) {
+func TestEscalationApproval_FullWriteSyncFailureLeavesPendingAndPoisonsReadiness(t *testing.T) {
 	p := newOperationalTestProxy(t, nil, false)
 	p.approverToken = "secret"
 	p.auditSyncMode = "every"
@@ -109,21 +113,27 @@ func TestEscalationApproval_FullWriteSyncFailureKeepsAuditAndStateAligned(t *tes
 	p.auditLog = fault
 
 	rec := resolveEscalationRequest(t, p, id, "approve")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("resolution status = %d, want 200 for a fully written record; body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("resolution status = %d, want 503 for uncertain durability; body=%s", rec.Code, rec.Body.String())
 	}
-	approved := p.escalations.get(id)
-	if approved == nil || approved.State != EscApproved {
-		t.Fatalf("state after committed record sync warning = %#v, want approved", approved)
+	pending := p.escalations.get(id)
+	if pending == nil || pending.State != EscPending || pending.ResolvedAt != nil || pending.Approver != "" {
+		t.Fatalf("state after committed record sync failure = %#v, want unchanged pending escalation", pending)
 	}
-	if fault.writeCalls != 1 || p.auditPoisoned || p.auditFailureCount.Load() != 1 {
+	if fault.writeCalls != 1 || !p.auditPoisoned || p.auditFailureCount.Load() != 1 {
 		t.Fatalf(
-			"sync warning state: writes=%d poisoned=%v failures=%d, want 1/false/1",
+			"sync failure state: writes=%d poisoned=%v failures=%d, want 1/true/1",
 			fault.writeCalls, p.auditPoisoned, p.auditFailureCount.Load(),
 		)
 	}
+	readyReq := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	readyRec := httptest.NewRecorder()
+	p.readyz(readyRec, readyReq)
+	if readyRec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("readyz status = %d, want 503 after uncertain durability; body=%s", readyRec.Code, readyRec.Body.String())
+	}
 	traces := readOperationalTraces(t, p)
 	if len(traces) != 1 || traces[0].ActionTaken != domain.ActionAllowed {
-		t.Fatalf("committed approval trace = %#v, want one allowed record", traces)
+		t.Fatalf("uncertain approval trace = %#v, want exactly one possibly-written allowed record", traces)
 	}
 }

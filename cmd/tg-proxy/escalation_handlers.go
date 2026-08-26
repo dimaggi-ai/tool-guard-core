@@ -91,7 +91,7 @@ func (p *proxy) escalationByID(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
 				"error":           "audit_append_failed",
 				"message":         "escalation resolution was not committed because its audit record could not be written",
-				"resolution_hint": "repair the audit writer, wait for /readyz to return 200, then retry; the escalation remains pending",
+				"resolution_hint": "repair the audit writer, then retry; if /readyz reports audit poisoning, restart only after repairing and verifying the audit log; the escalation remains pending",
 				"escalation":      e,
 			})
 			return

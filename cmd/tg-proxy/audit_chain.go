@@ -23,10 +23,10 @@ import (
 
 var (
 	errAuditWriterPoisoned = errors.New("audit writer poisoned")
-	// errAuditRecordCommitted marks a durability-barrier error after the full
-	// record reached the file and the in-memory chain advanced. Callers that
-	// coordinate other state must commit that state too, or the audit record
-	// would claim a transition the application rolled back.
+	// errAuditRecordCommitted marks an uncertain durability-barrier error after
+	// the full record reached the file and the in-memory chain advanced. The
+	// writer is poisoned at the same time: callers must not append a conflicting
+	// retry, and state transitions that require durable audit must remain pending.
 	errAuditRecordCommitted = errors.New("audit record committed")
 )
 
@@ -340,12 +340,12 @@ func (p *proxy) appendTrace(t *domain.DecisionTrace) error {
 	switch p.auditSyncMode {
 	case "every":
 		if err := p.auditLog.Sync(); err != nil {
-			return fmt.Errorf("%w: sync audit log: %v", errAuditRecordCommitted, err)
+			return p.poisonCommittedAuditLocked(err)
 		}
 	case "interval":
 		if p.auditAppendSeq%int64(p.auditSyncEvery) == 0 {
 			if err := p.auditLog.Sync(); err != nil {
-				return fmt.Errorf("%w: sync audit log: %v", errAuditRecordCommitted, err)
+				return p.poisonCommittedAuditLocked(err)
 			}
 		}
 	case "none":
@@ -395,6 +395,19 @@ func (p *proxy) poisonAuditLocked(reason string) error {
 		p.auditPoisonReason = reason
 	}
 	return p.auditPoisonErrorLocked()
+}
+
+// poisonCommittedAuditLocked reports both facts a caller must distinguish:
+// the complete record may be present in the live file, but its durability is
+// uncertain and no further append is safe until an operator verifies the tail.
+// The caller must hold auditMu.
+func (p *proxy) poisonCommittedAuditLocked(syncErr error) error {
+	reason := fmt.Sprintf("full audit record write completed but durability sync failed: %v", syncErr)
+	poisonErr := p.poisonAuditLocked(reason)
+	return errors.Join(
+		fmt.Errorf("%w: %s", errAuditRecordCommitted, reason),
+		poisonErr,
+	)
 }
 
 func (p *proxy) auditPoisonErrorLocked() error {

@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -163,12 +162,6 @@ func (p *proxy) emitEscalationResolution(e *Escalation, approved bool) error {
 	if err := p.appendTrace(&trace); err != nil {
 		log.Printf("tg-proxy: emitEscalationResolution audit: %v", err)
 		p.auditFailureCount.Add(1)
-		if errors.Is(err, errAuditRecordCommitted) {
-			// The full record is part of the live chain; only its explicit
-			// durability barrier failed. Commit the matching in-memory state so
-			// the log and approval registry cannot contradict each other.
-			return nil
-		}
 		return err
 	}
 	return nil

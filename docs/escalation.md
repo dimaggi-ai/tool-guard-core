@@ -45,9 +45,10 @@ POST /escalations/<id>/deny
 Approval and denial are transactional with their audit record. If the record
 cannot be committed to the live chain, the endpoint returns HTTP 503 with a
 structured `audit_append_failed` response and the escalation remains
-`pending`. Repair
-the audit writer and wait for `/readyz` to return 200 before retrying. A 200
-approval therefore never authorizes execution without its linked audit entry.
+`pending`. Repair the audit writer, then retry. If `/readyz` reports audit
+poisoning, restart only after repairing and verifying the audit log. A 200
+approval therefore never authorizes execution without a durably linked audit
+entry.
 
 ## Token configuration
 

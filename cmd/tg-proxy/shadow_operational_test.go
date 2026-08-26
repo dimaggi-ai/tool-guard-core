@@ -352,6 +352,40 @@ func TestProxy_AuditRollbackFailurePoisonsReadinessAndSkipsRetry(t *testing.T) {
 	}
 }
 
+func TestProxy_FullWriteSyncFailurePreservesSingleTraceAndPoisonsReadiness(t *testing.T) {
+	p := newOperationalTestProxy(t, []domain.Policy{
+		operationalPolicy("proceeding-flag", domain.PolicyModeEnforcement, domain.EffectFlag, "amount", 0),
+	}, false)
+	p.auditSyncMode = "every"
+	fault := &faultInjectAuditFile{
+		auditLogFile:          p.auditLog,
+		syncFailuresRemaining: 1,
+	}
+	p.auditLog = fault
+
+	_, result := evaluateOperational(t, p, "sync-uncertain", 100)
+	if result.ActionTaken != domain.ActionFlagged {
+		t.Fatalf("action after full write and failed sync = %q, want original flagged result", result.ActionTaken)
+	}
+	if fault.writeCalls != 1 {
+		t.Fatalf("audit writes = %d, want exactly 1 without a contradictory fail-closed retry", fault.writeCalls)
+	}
+	if !p.auditPoisoned || p.auditFailureCount.Load() != 1 {
+		t.Fatalf("audit state: poisoned=%v failures=%d, want true/1", p.auditPoisoned, p.auditFailureCount.Load())
+	}
+	traces := readOperationalTraces(t, p)
+	if len(traces) != 1 || traces[0].ActionTaken != result.ActionTaken || traces[0].Decision != result.Decision {
+		t.Fatalf("audit traces = %#v, want one trace matching response %#v", traces, result)
+	}
+
+	readyReq := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	readyRec := httptest.NewRecorder()
+	p.readyz(readyRec, readyReq)
+	if readyRec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("readyz status = %d, want 503 after uncertain durability; body=%s", readyRec.Code, readyRec.Body.String())
+	}
+}
+
 func TestProxy_EscalationRegistrationFailureClearsPolicyAttribution(t *testing.T) {
 	tests := []struct {
 		name     string
