@@ -672,8 +672,9 @@ Features absent from this repo today:
   the operations. There is no hosted version.
 - **No gRPC variant.** REST `POST /evaluate` only.
 - **No Node client SDK.** A Python SDK ships at
-  [`sdk/python/`](sdk/python/README.md) (`pip install` from source —
-  not yet on PyPI) with adapters for LangChain, AutoGen, native
+  [`sdk/python/`](sdk/python/README.md) (PyPI distribution
+  `toolguard-core` beginning with v0.8.0; import name `toolguard`) with
+  adapters for LangChain, AutoGen, native
   OpenAI/Anthropic tool use, and MCP. For other languages, the
   `tg-proxy` HTTP surface is specified in
   [`api/openapi.yaml`](api/openapi.yaml) (with conformance tests) and

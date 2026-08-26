@@ -2,9 +2,10 @@
 
 ## What was built
 
-Full Python SDK (`toolguard` v0.1.0 — pre-1.0, never published; see
-`Development Status :: 4 - Beta` in `pyproject.toml`) for Tool Guard Core, shipped at
-`sdk/python/`.  Turns the doc-pattern-only LangChain/AutoGen/native
+Full Python SDK (`toolguard`, initially built as unpublished v0.1.0; PyPI
+distribution `toolguard-core` begins with the lockstep v0.8.0 release) for
+Tool Guard Core, shipped at `sdk/python/`. It turns the doc-pattern-only
+LangChain/AutoGen/native
 snippets in `docs/integration.md` into shipped, tested, importable code.
 
 ## File list
