@@ -166,6 +166,21 @@ func TestVerifyChainFromReader_RejectsDetachedSuffix(t *testing.T) {
 	}
 }
 
+func TestVerifyChainFromReader_RejectsV2OnlyAmountStatusOnV1(t *testing.T) {
+	trace := makeTrace("v1-status-injection", "env-v1-status", "", time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC))
+	// Simulate an attacker changing a display field after the markerless v1
+	// hash was computed. V1 cannot claim this v2 provenance because its
+	// historical canonical projection never committed to the field.
+	trace.AmountParseStatus = "invalid_fail_closed"
+	report, err := VerifyChainFromReader(bytes.NewReader(writeJSONL(t, []domain.DecisionTrace{trace})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Intact || report.FirstFailureAt != 1 || !strings.Contains(report.FailureReason, "v2-only provenance fields") {
+		t.Fatalf("v1 amount-status injection report = %#v, want canonical failure at line 1", report)
+	}
+}
+
 func TestVerifyChainFromReader_TamperedHash(t *testing.T) {
 	ts := time.Now().Truncate(time.Microsecond)
 	t1 := makeTrace("t1", "env-1", "", ts)

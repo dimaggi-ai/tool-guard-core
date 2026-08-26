@@ -279,11 +279,37 @@ func TestCanonicalTraceV2RuleOrderTamperFailsVerification(t *testing.T) {
 }
 
 func TestCanonicalTraceVersionSelection(t *testing.T) {
-	legacy := goldenTrace()
-	legacy.AppliedRuleResults = []domain.RuleResult{{RuleID: "forged"}}
-	if _, err := CanonicalTraceBytes(legacy); err == nil {
-		t.Fatal("v1 trace with injected v2-only provenance must be rejected")
-	}
+	t.Run("applied provenance", func(t *testing.T) {
+		legacy := goldenTrace()
+		legacy.AppliedRuleResults = []domain.RuleResult{{RuleID: "forged"}}
+		if _, err := CanonicalTraceBytes(legacy); err == nil {
+			t.Fatal("v1 trace with injected v2-only provenance must be rejected")
+		}
+	})
+
+	t.Run("amount parse status injection", func(t *testing.T) {
+		legacy := goldenTrace()
+		legacy.AmountParseStatus = "invalid_fail_closed"
+		if _, err := CanonicalTraceBytes(legacy); err == nil {
+			t.Fatal("v1 trace with injected v2-only amount provenance must be rejected")
+		}
+	})
+
+	t.Run("amount parse status post-hash mutation", func(t *testing.T) {
+		legacy := goldenTrace()
+		legacy.TraceHash = ""
+		hash, err := ComputeCanonicalTraceHash(legacy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		legacy.TraceHash = hash
+		legacy.AmountParseStatus = "invalid_fail_closed"
+		ok, err := VerifyCanonicalTraceHash(legacy)
+		if err == nil || ok {
+			t.Fatalf("v1 verification accepted unhashed amount status: ok=%v err=%v", ok, err)
+		}
+	})
+
 	unknown := goldenTrace()
 	unknown.CanonicalVersion = "v99"
 	if _, err := CanonicalTraceBytes(unknown); err == nil {

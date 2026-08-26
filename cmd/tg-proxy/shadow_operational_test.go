@@ -132,13 +132,16 @@ func assertOperationalDenyHasNoPolicyAttribution(t *testing.T, result domain.Eva
 
 func TestProxy_AuditBindsEvaluatedAmountProvenance(t *testing.T) {
 	tests := []struct {
-		name       string
-		parameters any
-		wantAmount float64
-		wantStatus string
+		name             string
+		parameters       any
+		wantAmount       float64
+		wantStatus       string
+		wantNegativeZero bool
 	}{
 		{name: "sub-cent", parameters: map[string]any{"amount": 1.001}, wantAmount: 1.001, wantStatus: engine.AmountParseOK},
 		{name: "malformed", parameters: map[string]any{"amount": map[string]any{"value": 100}}, wantAmount: 1e18, wantStatus: engine.AmountParseInvalidFailClosed},
+		{name: "negative-zero-number", parameters: map[string]any{"amount": math.Copysign(0, -1)}, wantAmount: math.Copysign(0, -1), wantStatus: engine.AmountParseOK, wantNegativeZero: true},
+		{name: "negative-zero-string", parameters: map[string]any{"amount": "-0"}, wantAmount: math.Copysign(0, -1), wantStatus: engine.AmountParseOK, wantNegativeZero: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -172,10 +175,36 @@ func TestProxy_AuditBindsEvaluatedAmountProvenance(t *testing.T) {
 			if trace.Amount != tt.wantAmount || trace.AmountParseStatus != tt.wantStatus {
 				t.Fatalf("amount provenance = (%v, %q), want (%v, %q)", trace.Amount, trace.AmountParseStatus, tt.wantAmount, tt.wantStatus)
 			}
+			if math.Signbit(trace.Amount) != tt.wantNegativeZero {
+				t.Fatalf("amount signbit = %v, want %v (amount=%v)", math.Signbit(trace.Amount), tt.wantNegativeZero, trace.Amount)
+			}
 			ok, err := audit.VerifyCanonicalTraceHash(&trace)
 			if err != nil || !ok {
 				t.Fatalf("canonical amount verification: ok=%v err=%v", ok, err)
 			}
+			raw, err := os.ReadFile(p.auditPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			report, err := audit.VerifyChainFromReader(bytes.NewReader(raw))
+			if err != nil || !report.Intact || report.Records != 1 {
+				t.Fatalf("amount audit chain verification = %#v, err=%v", report, err)
+			}
+
+			if err := p.auditLog.Close(); err != nil {
+				t.Fatal(err)
+			}
+			restarted := &proxy{auditPath: p.auditPath, auditSyncMode: "none"}
+			if err := restarted.openAuditLog(); err != nil {
+				t.Fatalf("proxy restart after amount %q: %v", tt.name, err)
+			}
+			if restarted.lastHash != trace.TraceHash {
+				t.Fatalf("recovered tail = %q, want %q", restarted.lastHash, trace.TraceHash)
+			}
+			if err := restarted.auditLog.Close(); err != nil {
+				t.Fatal(err)
+			}
+
 			trace.Amount = math.Nextafter(trace.Amount, math.Inf(1))
 			ok, err = audit.VerifyCanonicalTraceHash(&trace)
 			if err != nil {

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -309,6 +310,61 @@ func TestHook_AuditBindsMalformedAmountFailClosedValue(t *testing.T) {
 	}
 	if ok {
 		t.Fatal("changing malformed amount parse status did not break the hash")
+	}
+}
+
+func TestHook_AuditPreservesNegativeZeroAcrossRestart(t *testing.T) {
+	pol := writeHookPolicy(t, hookAmountPolicy)
+	for _, tt := range []struct {
+		name       string
+		amountJSON string
+	}{
+		{name: "number", amountJSON: `-0`},
+		{name: "string", amountJSON: `"-0"`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
+			stdin := `{"tool_name":"issue_refund","tool_input":{"amount":` + tt.amountJSON + `}}`
+			out, code := runHookStr(t, stdin, "-policy", pol, "-audit-log", auditPath)
+			if code != 0 || hookDecision(t, out) != "allow" {
+				t.Fatalf("negative-zero hook result: code=%d output=%s", code, out)
+			}
+
+			raw, err := os.ReadFile(auditPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Contains(raw, []byte(`"amount":-0`)) {
+				t.Fatalf("serialized trace did not preserve negative zero: %s", raw)
+			}
+			var trace domain.DecisionTrace
+			if err := json.Unmarshal(bytes.TrimSpace(raw), &trace); err != nil {
+				t.Fatal(err)
+			}
+			if !math.Signbit(trace.Amount) || trace.AmountParseStatus != engine.AmountParseOK {
+				t.Fatalf("negative-zero provenance = amount:%v signbit:%v status:%q", trace.Amount, math.Signbit(trace.Amount), trace.AmountParseStatus)
+			}
+			report, err := audit.VerifyChainFromReader(bytes.NewReader(raw))
+			if err != nil || !report.Intact || report.Records != 1 {
+				t.Fatalf("negative-zero audit verification = %#v, err=%v", report, err)
+			}
+
+			// A second hook process must recover the first record as its tail and
+			// append a linked record instead of rejecting the log as poisoned.
+			next := `{"tool_name":"issue_refund","tool_input":{"amount":1}}`
+			out, code = runHookStr(t, next, "-policy", pol, "-audit-log", auditPath)
+			if code != 0 || hookDecision(t, out) != "allow" {
+				t.Fatalf("hook restart result: code=%d output=%s", code, out)
+			}
+			raw, err = os.ReadFile(auditPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			report, err = audit.VerifyChainFromReader(bytes.NewReader(raw))
+			if err != nil || !report.Intact || report.Records != 2 {
+				t.Fatalf("negative-zero audit after restart = %#v, err=%v", report, err)
+			}
+		})
 	}
 }
 

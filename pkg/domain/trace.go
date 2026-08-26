@@ -36,13 +36,16 @@ type DecisionTrace struct {
 	EnvelopeID string    `json:"envelope_id"`
 
 	// Snapshot of the envelope (with redacted params only)
-	AgentID      string  `json:"agent_id"`
-	AgentVersion string  `json:"agent_version,omitempty"`
-	SessionID    string  `json:"session_id"`
-	TurnNumber   int     `json:"turn_number,omitempty"`
-	ToolName     string  `json:"tool_name"`
-	ToolGroup    string  `json:"tool_group"`
-	Amount       float64 `json:"amount,omitempty"`
+	AgentID      string `json:"agent_id"`
+	AgentVersion string `json:"agent_version,omitempty"`
+	SessionID    string `json:"session_id"`
+	TurnNumber   int    `json:"turn_number,omitempty"`
+	ToolName     string `json:"tool_name"`
+	ToolGroup    string `json:"tool_group"`
+	// Amount must always be serialized. Canonical v2 hashes the exact IEEE-754
+	// bits, including the sign bit on negative zero; omitting a zero value would
+	// make a freshly written -0 record deserialize as +0 and fail verification.
+	Amount float64 `json:"amount"`
 	// AmountParseStatus records whether Amount is the parsed envelope value or
 	// the fail-closed sentinel used when the input amount was malformed. v2
 	// binds both fields so an audit record matches the numeric value evaluated.

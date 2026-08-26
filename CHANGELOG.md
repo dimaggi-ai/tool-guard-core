@@ -58,6 +58,11 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   is not accepted as an intact chain merely because its remaining hashes link
   to one another. Preserve every rotated sibling; intentional suffix
   verification needs an explicit trusted anchor, which 0.8 does not provide.
+- Canonical v2 persists every evaluated `amount`, including IEEE-754 negative
+  zero, so a record cannot lose hash-bound numeric bits during JSON
+  serialization. Markerless v1 records now reject the v2-only
+  `amount_parse_status` field instead of displaying provenance that v1 does
+  not hash.
 - This intentionally supersedes the 0.7 documentation that described a future
   v2 writer as opt-in. Keeping v1 as the default would leave the new
   applied-action attribution outside the integrity commitment. Because Tool

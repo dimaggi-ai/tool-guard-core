@@ -283,8 +283,8 @@ func CanonicalTraceBytes(t *domain.DecisionTrace) ([]byte, error) {
 	version := effectiveCanonicalTraceVersion(t)
 	switch version {
 	case canonicalTraceVersionV1:
-		if len(t.AppliedRuleResults) > 0 || t.AppliedPrimaryCitation != nil {
-			return nil, fmt.Errorf("v1 trace contains v2-only applied provenance")
+		if len(t.AppliedRuleResults) > 0 || t.AppliedPrimaryCitation != nil || t.AmountParseStatus != "" {
+			return nil, fmt.Errorf("v1 trace contains v2-only provenance fields")
 		}
 		return canonicalTraceBytesV1(t)
 	case canonicalTraceVersionV2:
