@@ -313,12 +313,8 @@ func TestProxy_AuditRollbackFailurePoisonsReadinessAndSkipsRetry(t *testing.T) {
 	p := newOperationalTestProxy(t, []domain.Policy{
 		operationalPolicy("proceeding-flag", domain.PolicyModeEnforcement, domain.EffectFlag, "amount", 0),
 	}, false)
-	realFile, ok := p.auditLog.(*os.File)
-	if !ok {
-		t.Fatalf("audit log type = %T, want *os.File", p.auditLog)
-	}
 	fault := &faultInjectAuditFile{
-		File:                 realFile,
+		auditLogFile:         p.auditLog,
 		shortWritesRemaining: 1,
 		failTruncate:         true,
 	}

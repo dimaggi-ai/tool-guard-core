@@ -19,7 +19,7 @@ import (
 // file while retaining the rest of *os.File's behavior. Tests can separately
 // fail Truncate to exercise the sticky-poison path.
 type faultInjectAuditFile struct {
-	*os.File
+	auditLogFile
 	shortWritesRemaining int
 	failTruncate         bool
 	writeCalls           int
@@ -28,21 +28,21 @@ type faultInjectAuditFile struct {
 func (f *faultInjectAuditFile) Write(record []byte) (int, error) {
 	f.writeCalls++
 	if f.shortWritesRemaining == 0 {
-		return f.File.Write(record)
+		return f.auditLogFile.Write(record)
 	}
 	f.shortWritesRemaining--
 	n := len(record) / 2
 	if n == 0 {
 		n = 1
 	}
-	return f.File.Write(record[:n])
+	return f.auditLogFile.Write(record[:n])
 }
 
 func (f *faultInjectAuditFile) Truncate(size int64) error {
 	if f.failTruncate {
 		return errors.New("forced truncate failure")
 	}
-	return f.File.Truncate(size)
+	return f.auditLogFile.Truncate(size)
 }
 
 // makeValidTrace builds one trace whose TraceHash matches the canonical
@@ -72,11 +72,8 @@ func TestAppendTrace_ShortWriteRollsBackBeforeRetry(t *testing.T) {
 	if err := p.openAuditLog(); err != nil {
 		t.Fatalf("open audit log: %v", err)
 	}
-	realFile, ok := p.auditLog.(*os.File)
-	if !ok {
-		t.Fatalf("audit log type = %T, want *os.File", p.auditLog)
-	}
-	fault := &faultInjectAuditFile{File: realFile, shortWritesRemaining: 1}
+	realFile := p.auditLog
+	fault := &faultInjectAuditFile{auditLogFile: realFile, shortWritesRemaining: 1}
 	p.auditLog = fault
 	t.Cleanup(func() { _ = fault.Close() })
 
