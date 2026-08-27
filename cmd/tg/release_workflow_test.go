@@ -66,6 +66,7 @@ func TestReleaseWorkflowReusesFullCI(t *testing.T) {
 	assertStableTagPreflight(t, release.Jobs["preflight"])
 	assertReleaseRefusesPublicState(t, release.Jobs["release"])
 	assertWorkflowPermissions(t, "publish-python", release.Jobs["publish-python"].Permissions, map[string]string{
+		"contents": "read",
 		"id-token": "write",
 	})
 	finalizer, ok := release.Jobs["finalize-release"]
