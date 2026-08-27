@@ -56,7 +56,53 @@ class VerifyReleaseTransactionTests(unittest.TestCase):
         self.workflow_path.write_text(workflow, encoding="utf-8")
         result = self.run_guard()
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("preflight delegates release-state behavior", result.stderr)
+        self.assertIn("preflight verifier is an exact unguarded final command", result.stderr)
+
+    def test_masked_preflight_verifier_is_rejected(self) -> None:
+        workflow = self.workflow_path.read_text(encoding="utf-8")
+        workflow = workflow.replace(
+            '            refs/remotes/origin/release-preflight-tag',
+            '            refs/remotes/origin/release-preflight-tag || true',
+            1,
+        )
+        self.workflow_path.write_text(workflow, encoding="utf-8")
+        result = self.run_guard()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("preflight verifier is an exact unguarded final command", result.stderr)
+
+    def test_backgrounded_preflight_verifier_is_rejected(self) -> None:
+        workflow = self.workflow_path.read_text(encoding="utf-8")
+        workflow = workflow.replace(
+            '            refs/remotes/origin/release-preflight-tag',
+            '            refs/remotes/origin/release-preflight-tag &',
+            1,
+        )
+        self.workflow_path.write_text(workflow, encoding="utf-8")
+        result = self.run_guard()
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_replaced_preflight_tag_fetch_is_rejected(self) -> None:
+        workflow = self.workflow_path.read_text(encoding="utf-8")
+        workflow = workflow.replace(
+            '          git fetch origin "refs/tags/${GITHUB_REF_NAME}:refs/remotes/origin/release-preflight-tag" --force --quiet',
+            "          echo skipped-tag-fetch",
+            1,
+        )
+        self.workflow_path.write_text(workflow, encoding="utf-8")
+        result = self.run_guard()
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_replaced_release_draft_query_is_rejected(self) -> None:
+        workflow = self.workflow_path.read_text(encoding="utf-8")
+        workflow = workflow.replace(
+            '            if release_draft="$(gh release view "${GITHUB_REF_NAME}" --json isDraft --jq \'.isDraft\' 2>/dev/null)"; then',
+            "            if release_draft=true; then",
+            1,
+        )
+        self.workflow_path.write_text(workflow, encoding="utf-8")
+        result = self.run_guard()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("preflight resolves draft state from GitHub", result.stderr)
 
     def test_tag_check_after_publication_is_rejected(self) -> None:
         workflow = self.workflow_path.read_text(encoding="utf-8")
@@ -74,7 +120,38 @@ class VerifyReleaseTransactionTests(unittest.TestCase):
         self.workflow_path.write_text(workflow, encoding="utf-8")
         result = self.run_guard()
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("finalizer immutable-tag check occurs before publication", result.stderr)
+        self.assertIn("finalizer immutable-tag gate is unguarded and adjacent to publication", result.stderr)
+
+    def test_masked_final_tag_verifier_is_rejected(self) -> None:
+        workflow = self.workflow_path.read_text(encoding="utf-8")
+        workflow = workflow.replace(
+            '            "${GITHUB_SHA}" refs/remotes/origin/release-tag-check "${TAG}"',
+            '            "${GITHUB_SHA}" refs/remotes/origin/release-tag-check "${TAG}" || true',
+            1,
+        )
+        self.workflow_path.write_text(workflow, encoding="utf-8")
+        result = self.run_guard()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("finalizer immutable-tag gate is unguarded and adjacent to publication", result.stderr)
+
+    def test_replaced_final_tag_fetch_is_rejected(self) -> None:
+        workflow = self.workflow_path.read_text(encoding="utf-8")
+        workflow = workflow.replace(
+            '          git fetch origin "refs/tags/${TAG}:refs/remotes/origin/release-tag-check" --force --quiet',
+            "          echo skipped-tag-fetch",
+            1,
+        )
+        self.workflow_path.write_text(workflow, encoding="utf-8")
+        result = self.run_guard()
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_missing_job_boundary_is_rejected(self) -> None:
+        workflow = self.workflow_path.read_text(encoding="utf-8")
+        workflow = workflow.replace("\n  verify:\n", "\n  verify-ci:\n", 1)
+        self.workflow_path.write_text(workflow, encoding="utf-8")
+        result = self.run_guard()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("release workflow job boundaries are structurally present", result.stderr)
 
 
 if __name__ == "__main__":

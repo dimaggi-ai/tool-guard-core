@@ -10,27 +10,64 @@ goreleaser = (root / ".goreleaser.yaml").read_text(encoding="utf-8")
 workflow = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
 runbook = (root / "RELEASING.md").read_text(encoding="utf-8")
 action_refs = re.findall(r"^\s*uses:\s*([^\s#]+)", workflow, flags=re.MULTILINE)
-preflight = workflow.split("\n  preflight:\n", maxsplit=1)[-1].split(
-    "\n  verify:\n", maxsplit=1
-)[0]
-active_preflight = "\n".join(
-    line for line in preflight.splitlines() if not line.lstrip().startswith("#")
+
+
+def region(text: str, start: str, end: str | None = None) -> str:
+    """Return a required delimited region; never widen silently on a miss."""
+    if text.count(start) != 1:
+        return ""
+    value = text.split(start, maxsplit=1)[1]
+    if end is not None:
+        if value.count(end) != 1:
+            return ""
+        value = value.split(end, maxsplit=1)[0]
+    return value
+
+
+def step(job: str, name: str) -> str:
+    marker = f"      - name: {name}\n"
+    if job.count(marker) != 1:
+        return ""
+    value = job.split(marker, maxsplit=1)[1]
+    return re.split(r"\n      - |\n\n  ", value, maxsplit=1)[0]
+
+
+def active(text: str) -> str:
+    return "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("#")
+    )
+
+
+preflight = region(workflow, "\n  preflight:\n", "\n  verify:\n")
+release_job = region(workflow, "\n  release:\n", "\n  publish-python:\n")
+finalizer = region(workflow, "\n  finalize-release:\n")
+resolve_step = step(preflight, "Resolve release state")
+preflight_step = step(preflight, "Verify new tag or safe draft recovery")
+publish_step = step(finalizer, "Publish verified GitHub Release")
+active_finalizer = active(finalizer)
+
+state_query = (
+    '            if release_draft="$(gh release view "${GITHUB_REF_NAME}" '
+    "--json isDraft --jq '.isDraft' 2>/dev/null)\"; then"
 )
-release_job = workflow.split("\n  release:\n", maxsplit=1)[-1].split(
-    "\n  publish-python:\n", maxsplit=1
-)[0]
-finalizer = workflow.split("\n  finalize-release:\n", maxsplit=1)[-1]
-active_finalizer = "\n".join(
-    line for line in finalizer.splitlines() if not line.lstrip().startswith("#")
-)
-verify_index = active_finalizer.find("python3 scripts/verify_pypi_release.py")
+preflight_body = """        run: |
+          set -euo pipefail
+          git fetch origin main --quiet
+          git fetch origin "refs/tags/${GITHUB_REF_NAME}:refs/remotes/origin/release-preflight-tag" --force --quiet
+          bash scripts/verify-release-workflow-state.sh \\
+            "${GITHUB_SHA}" origin/main "${GITHUB_REF_NAME}" \\
+            "${GITHUB_RUN_ATTEMPT}" "${{ steps.release-state.outputs.state }}" \\
+            refs/remotes/origin/release-preflight-tag
+"""
+final_tag_gate = """          set -euo pipefail
+          git fetch origin "refs/tags/${TAG}:refs/remotes/origin/release-tag-check" --force --quiet
+          bash scripts/verify-release-tag-immutable.sh \\
+            "${GITHUB_SHA}" refs/remotes/origin/release-tag-check "${TAG}"
+"""
 promote_command = 'gh release edit "${TAG}" --draft=false'
+verify_index = active_finalizer.find("python3 scripts/verify_pypi_release.py")
 promote_index = active_finalizer.find(promote_command)
-immutable_command = "bash scripts/verify-release-tag-immutable.sh"
-immutable_index = active_finalizer.find(immutable_command)
-state_command = "bash scripts/verify-release-workflow-state.sh"
-state_index = active_preflight.find(state_command)
-public_state_index = active_preflight.find("release_state=public")
+immutable_index = publish_step.find(final_tag_gate)
 final_state_command = 'test "$(gh release view "${TAG}" --json isDraft --jq \'.isDraft\')" = "false"'
 final_state_index = active_finalizer.find(final_state_command)
 local_tag_index = runbook.find('git tag -a vX.Y.Z -m "Tool Guard Core vX.Y.Z"')
@@ -40,20 +77,26 @@ local_version_check_index = runbook.find(
 tag_push_index = runbook.find("git push origin vX.Y.Z")
 
 checks = {
+    "release workflow job boundaries are structurally present": bool(
+        preflight and release_job and finalizer
+    ),
     "GoReleaser stages a draft": "  draft: true" in goreleaser,
     "GoReleaser reruns reuse the staged draft": "  use_existing_draft: true" in goreleaser,
     "GoReleaser reruns replace existing release assets": "  replace_existing_artifacts: true" in goreleaser,
     "preflight rejects tags unsupported by signature verification": "Release tags must be stable semver (vN.N.N)" in workflow,
-    "preflight delegates release-state behavior to tested script": (
-        active_preflight.count(state_command) == 1
-        and 'release_state=missing' in active_preflight
-        and 'release_state=draft' in active_preflight
-        and 0 <= public_state_index < state_index
-        and "exit 0" not in active_preflight
+    "preflight resolves draft state from GitHub": (
+        resolve_step.count(state_query) == 1
+        and resolve_step.count('echo "state=${release_state}" >> "${GITHUB_OUTPUT}"') == 1
+        and "release_draft=true" not in resolve_step
     ),
-    "finalizer immutable-tag check occurs before publication": (
-        0 <= immutable_index < promote_index
-        and 'refs/remotes/origin/release-tag-check' in active_finalizer
+    "preflight verifier is an exact unguarded final command": (
+        preflight_step.rstrip() == preflight_body.rstrip()
+    ),
+    "finalizer immutable-tag gate is unguarded and adjacent to publication": (
+        publish_step.count(final_tag_gate) == 1
+        and publish_step.startswith("        env:\n")
+        and publish_step.split("        run: |\n", maxsplit=1)[-1].startswith(final_tag_gate)
+        and 0 <= immutable_index < publish_step.find(promote_command)
     ),
     "release refuses to mutate an already-public release": "refusing to rebuild or push release artifacts" in release_job,
     "PyPI retries are idempotent": "          skip-existing: true" in workflow,

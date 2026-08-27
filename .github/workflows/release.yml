@@ -29,25 +29,33 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - name: Verify new tag or safe draft recovery
+      - name: Resolve release state
+        id: release-state
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          git fetch origin main --quiet
           release_state=missing
           if [ "${GITHUB_RUN_ATTEMPT}" -gt 1 ]; then
-            release_draft="$(gh release view "${GITHUB_REF_NAME}" --json isDraft --jq '.isDraft' 2>/dev/null || true)"
-            if [ "${release_draft}" = "true" ]; then
-              release_state=draft
-            elif [ "${release_draft}" = "false" ]; then
-              release_state=public
+            if release_draft="$(gh release view "${GITHUB_REF_NAME}" --json isDraft --jq '.isDraft' 2>/dev/null)"; then
+              if [ "${release_draft}" = "true" ]; then
+                release_state=draft
+              elif [ "${release_draft}" = "false" ]; then
+                release_state=public
+              fi
             fi
           fi
+          echo "state=${release_state}" >> "${GITHUB_OUTPUT}"
+      - name: Verify new tag or safe draft recovery
+        run: |
+          set -euo pipefail
+          git fetch origin main --quiet
+          git fetch origin "refs/tags/${GITHUB_REF_NAME}:refs/remotes/origin/release-preflight-tag" --force --quiet
           bash scripts/verify-release-workflow-state.sh \
             "${GITHUB_SHA}" origin/main "${GITHUB_REF_NAME}" \
-            "${GITHUB_RUN_ATTEMPT}" "${release_state}"
+            "${GITHUB_RUN_ATTEMPT}" "${{ steps.release-state.outputs.state }}" \
+            refs/remotes/origin/release-preflight-tag
 
   # Execute the exact workflow used as the merge gate at this tag. Keeping
   # verification in ci.yml means tag releases cannot silently omit a race,
@@ -269,14 +277,6 @@ jobs:
         with:
           name: python-dist
           path: dist/python
-      - name: Verify release tag has not moved
-        env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          git fetch origin "refs/tags/${TAG}:refs/remotes/origin/release-tag-check" --force --quiet
-          bash scripts/verify-release-tag-immutable.sh \
-            "${GITHUB_SHA}" refs/remotes/origin/release-tag-check "${TAG}"
       - name: Verify staged release and PyPI package
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -320,6 +320,9 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
+          git fetch origin "refs/tags/${TAG}:refs/remotes/origin/release-tag-check" --force --quiet
+          bash scripts/verify-release-tag-immutable.sh \
+            "${GITHUB_SHA}" refs/remotes/origin/release-tag-check "${TAG}"
           if [ "$(gh release view "${TAG}" --json isDraft --jq '.isDraft')" = "true" ]; then
             gh release edit "${TAG}" --draft=false
           else

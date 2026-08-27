@@ -22,7 +22,7 @@ func createAuditSnapshotFile() (*os.File, string, error) {
 	}
 	handle, err := windows.CreateFile(
 		pathUTF16,
-		windows.GENERIC_READ|windows.GENERIC_WRITE,
+		windows.GENERIC_READ|windows.GENERIC_WRITE|windows.DELETE,
 		windows.FILE_SHARE_READ|windows.FILE_SHARE_DELETE,
 		nil,
 		windows.CREATE_NEW,

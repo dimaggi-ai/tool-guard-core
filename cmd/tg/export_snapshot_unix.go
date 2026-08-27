@@ -13,7 +13,6 @@ func createAuditSnapshotFile() (*os.File, string, error) {
 	// forced termination cannot leave sensitive audit bytes in the temp dir.
 	if err := os.Remove(snapshot.Name()); err != nil {
 		_ = snapshot.Close()
-		_ = os.Remove(snapshot.Name())
 		return nil, "", err
 	}
 	return snapshot, "", nil

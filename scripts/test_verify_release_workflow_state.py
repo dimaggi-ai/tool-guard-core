@@ -28,9 +28,9 @@ class VerifyReleaseWorkflowStateTests(unittest.TestCase):
         git(self.repo, "config", "user.email", "release-state@example.invalid")
         scripts = self.repo / "scripts"
         scripts.mkdir()
-        (scripts / "verify-release-tag-head.sh").write_bytes(
-            (ROOT / "scripts" / "verify-release-tag-head.sh").read_bytes()
-        )
+        for source in (STATE, ROOT / "scripts" / "verify-release-tag-head.sh"):
+            (scripts / source.name).write_bytes(source.read_bytes())
+        self.state = scripts / STATE.name
         self.first = self.commit("first")
         git(self.repo, "tag", "-a", "v1.2.3", "-m", "v1.2.3")
 
@@ -44,11 +44,17 @@ class VerifyReleaseWorkflowStateTests(unittest.TestCase):
         return git(self.repo, "rev-parse", "HEAD")
 
     def verify_state(
-        self, event_ref: str, attempt: str, state: str
+        self, event_ref: str, attempt: str, state: str, tag_ref: str | None = None,
+        cwd: Path | None = None,
     ) -> subprocess.CompletedProcess[str]:
+        command = [
+            "bash", str(self.state), event_ref, "HEAD", "v1.2.3", attempt, state
+        ]
+        if tag_ref is not None:
+            command.append(tag_ref)
         return subprocess.run(
-            ["bash", str(STATE), event_ref, "HEAD", "v1.2.3", attempt, state],
-            cwd=self.repo,
+            command,
+            cwd=cwd or self.repo,
             capture_output=True,
             text=True,
         )
@@ -105,6 +111,21 @@ class VerifyReleaseWorkflowStateTests(unittest.TestCase):
 
     def test_finalizer_accepts_unchanged_tag(self) -> None:
         result = self.verify_immutable(self.first)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_preflight_checks_explicit_fetched_tag_ref(self) -> None:
+        fetched = "refs/remotes/origin/release-preflight-tag"
+        git(self.repo, "update-ref", fetched, self.first)
+        second = self.commit("second")
+        git(self.repo, "update-ref", fetched, second)
+        result = self.verify_state(self.first, "2", "draft", fetched)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("moved from workflow commit", result.stderr)
+
+    def test_helper_resolution_does_not_depend_on_cwd(self) -> None:
+        nested = self.repo / "nested"
+        nested.mkdir()
+        result = self.verify_state(self.first, "1", "missing", cwd=nested)
         self.assertEqual(result.returncode, 0, result.stderr)
 
 
