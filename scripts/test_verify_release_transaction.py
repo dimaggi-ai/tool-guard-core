@@ -57,7 +57,6 @@ class VerifyReleaseTransactionTests(unittest.TestCase):
         result = self.run_guard()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("preflight verifier is an exact unguarded final command", result.stderr)
-        self.assertIn("preflight verifier is an exact unguarded final command", result.stderr)
 
     def test_masked_preflight_verifier_is_rejected(self) -> None:
         workflow = self.workflow_path.read_text(encoding="utf-8")
@@ -70,7 +69,6 @@ class VerifyReleaseTransactionTests(unittest.TestCase):
         result = self.run_guard()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("preflight verifier is an exact unguarded final command", result.stderr)
-        self.assertIn("preflight verifier is an exact unguarded final command", result.stderr)
 
     def test_backgrounded_preflight_verifier_is_rejected(self) -> None:
         workflow = self.workflow_path.read_text(encoding="utf-8")
@@ -82,6 +80,7 @@ class VerifyReleaseTransactionTests(unittest.TestCase):
         self.workflow_path.write_text(workflow, encoding="utf-8")
         result = self.run_guard()
         self.assertNotEqual(result.returncode, 0)
+        self.assertIn("preflight verifier is an exact unguarded final command", result.stderr)
 
     def test_replaced_preflight_tag_fetch_is_rejected(self) -> None:
         workflow = self.workflow_path.read_text(encoding="utf-8")
@@ -93,6 +92,7 @@ class VerifyReleaseTransactionTests(unittest.TestCase):
         self.workflow_path.write_text(workflow, encoding="utf-8")
         result = self.run_guard()
         self.assertNotEqual(result.returncode, 0)
+        self.assertIn("preflight verifier is an exact unguarded final command", result.stderr)
 
     def test_replaced_release_draft_query_is_rejected(self) -> None:
         workflow = self.workflow_path.read_text(encoding="utf-8")
@@ -185,6 +185,61 @@ class VerifyReleaseTransactionTests(unittest.TestCase):
         result = self.run_guard()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("PyPI publication has an exact adjacent immutable-tag gate", result.stderr)
+
+    def test_intervening_step_before_pypi_publication_is_rejected(self) -> None:
+        workflow = self.workflow_path.read_text(encoding="utf-8")
+        publisher = "      - name: Publish with PyPI trusted publishing\n"
+        workflow = workflow.replace(
+            publisher,
+            "      - name: Intervening mutation\n"
+            "        run: echo changed-after-verification\n"
+            + publisher,
+            1,
+        )
+        self.workflow_path.write_text(workflow, encoding="utf-8")
+        result = self.run_guard()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("PyPI publication has an exact adjacent immutable-tag gate", result.stderr)
+
+    def test_second_pypi_publisher_is_rejected(self) -> None:
+        workflow = self.workflow_path.read_text(encoding="utf-8")
+        marker = "      - name: Verify release tag before PyPI publication\n"
+        bypass = (
+            "      - name: Bypassing PyPI publisher\n"
+            "        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33\n"
+        )
+        workflow = workflow.replace(marker, bypass + marker, 1)
+        self.workflow_path.write_text(workflow, encoding="utf-8")
+        result = self.run_guard()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("PyPI publication has an exact adjacent immutable-tag gate", result.stderr)
+
+    def test_masked_artifact_tag_verifier_is_rejected(self) -> None:
+        workflow = self.workflow_path.read_text(encoding="utf-8")
+        workflow = workflow.replace(
+            '            "${GITHUB_SHA}" refs/remotes/origin/release-artifact-tag-check "${TAG}"',
+            '            "${GITHUB_SHA}" refs/remotes/origin/release-artifact-tag-check "${TAG}" || true',
+            1,
+        )
+        self.workflow_path.write_text(workflow, encoding="utf-8")
+        result = self.run_guard()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("GoReleaser publication has an exact adjacent immutable-tag gate", result.stderr)
+
+    def test_intervening_step_before_goreleaser_is_rejected(self) -> None:
+        workflow = self.workflow_path.read_text(encoding="utf-8")
+        publisher = "      - name: Run GoReleaser\n"
+        workflow = workflow.replace(
+            publisher,
+            "      - name: Intervening artifact mutation\n"
+            "        run: echo changed-after-verification\n"
+            + publisher,
+            1,
+        )
+        self.workflow_path.write_text(workflow, encoding="utf-8")
+        result = self.run_guard()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("GoReleaser publication has an exact adjacent immutable-tag gate", result.stderr)
 
     def test_pypi_tag_gate_after_publication_is_rejected(self) -> None:
         workflow = self.workflow_path.read_text(encoding="utf-8")

@@ -32,6 +32,11 @@ def step(job: str, name: str) -> str:
     return re.split(r"\n      - |\n\n  ", value, maxsplit=1)[0]
 
 
+def steps(job: str) -> list[str]:
+    """Return every YAML step block, including unnamed action steps."""
+    return [part for part in re.split(r"(?=^      - )", job, flags=re.MULTILINE) if part.startswith("      - ")]
+
+
 def active(text: str) -> str:
     return "\n".join(
         line for line in text.splitlines() if not line.lstrip().startswith("#")
@@ -46,8 +51,11 @@ python_publish_job = region(
 finalizer = region(workflow, "\n  finalize-release:\n")
 resolve_step = step(preflight, "Resolve release state")
 preflight_step = step(preflight, "Verify new tag or safe draft recovery")
+release_tag_step = step(release_job, "Verify release tag before artifact publication")
 publish_step = step(finalizer, "Publish verified GitHub Release")
 python_tag_step = step(python_publish_job, "Verify release tag before PyPI publication")
+release_steps = steps(release_job)
+python_publish_steps = steps(python_publish_job)
 active_finalizer = active(finalizer)
 
 resolve_body = """        id: release-state
@@ -90,6 +98,14 @@ pypi_tag_gate = """        env:
           bash scripts/verify-release-tag-immutable.sh \\
             "${GITHUB_SHA}" refs/remotes/origin/release-pypi-tag-check "${TAG}"
 """
+artifact_tag_gate = """        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git fetch origin "refs/tags/${TAG}:refs/remotes/origin/release-artifact-tag-check" --force --quiet
+          bash scripts/verify-release-tag-immutable.sh \\
+            "${GITHUB_SHA}" refs/remotes/origin/release-artifact-tag-check "${TAG}"
+"""
 promote_command = 'gh release edit "${TAG}" --draft=false'
 verify_index = active_finalizer.find("python3 scripts/verify_pypi_release.py")
 promote_index = active_finalizer.find(promote_command)
@@ -122,10 +138,29 @@ checks = {
         and publish_step.split("        run: |\n", maxsplit=1)[-1].startswith(final_tag_gate)
         and 0 <= immutable_index < publish_step.find(promote_command)
     ),
+    "GoReleaser publication has an exact adjacent immutable-tag gate": (
+        release_tag_step.rstrip() == artifact_tag_gate.rstrip()
+        and sum("goreleaser/goreleaser-action@" in item for item in release_steps) == 1
+        and any(
+            release_steps[index].startswith(
+                "      - name: Verify release tag before artifact publication\n"
+            )
+            and "goreleaser/goreleaser-action@" in release_steps[index + 1]
+            for index in range(len(release_steps) - 1)
+        )
+    ),
     "PyPI publication has an exact adjacent immutable-tag gate": (
         python_tag_step.rstrip() == pypi_tag_gate.rstrip()
-        and python_publish_job.find("      - name: Verify release tag before PyPI publication")
-        < python_publish_job.find("      - name: Publish with PyPI trusted publishing")
+        and sum(
+            "pypa/gh-action-pypi-publish@" in item for item in python_publish_steps
+        ) == 1
+        and any(
+            python_publish_steps[index].startswith(
+                "      - name: Verify release tag before PyPI publication\n"
+            )
+            and "pypa/gh-action-pypi-publish@" in python_publish_steps[index + 1]
+            for index in range(len(python_publish_steps) - 1)
+        )
         and "      contents: read" in python_publish_job
     ),
     "release refuses to mutate an already-public release": "refusing to rebuild or push release artifacts" in release_job,
@@ -148,7 +183,7 @@ checks = {
     "finalizer verifies PyPI filenames and digests": "python3 scripts/verify_pypi_release.py" in active_finalizer,
     "only finalizer actively promotes the release": (
         active(workflow).count(promote_command) == 1
-        and publish_step.count(promote_command) == 1
+        and active(publish_step).count(promote_command) == 1
     ),
     "promotion occurs after PyPI verification": 0 <= verify_index < promote_index,
     "final public-state check occurs after promotion": 0 <= promote_index < final_state_index,

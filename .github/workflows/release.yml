@@ -164,6 +164,14 @@ jobs:
       - name: Install syft (for SBOM)
         uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
 
+      - name: Verify release tag before artifact publication
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git fetch origin "refs/tags/${TAG}:refs/remotes/origin/release-artifact-tag-check" --force --quiet
+          bash scripts/verify-release-tag-immutable.sh \
+            "${GITHUB_SHA}" refs/remotes/origin/release-artifact-tag-check "${TAG}"
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
         with:
