@@ -10,6 +10,12 @@ goreleaser = (root / ".goreleaser.yaml").read_text(encoding="utf-8")
 workflow = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
 runbook = (root / "RELEASING.md").read_text(encoding="utf-8")
 action_refs = re.findall(r"^\s*uses:\s*([^\s#]+)", workflow, flags=re.MULTILINE)
+preflight = workflow.split("\n  preflight:\n", maxsplit=1)[-1].split(
+    "\n  verify:\n", maxsplit=1
+)[0]
+active_preflight = "\n".join(
+    line for line in preflight.splitlines() if not line.lstrip().startswith("#")
+)
 release_job = workflow.split("\n  release:\n", maxsplit=1)[-1].split(
     "\n  publish-python:\n", maxsplit=1
 )[0]
@@ -20,6 +26,11 @@ active_finalizer = "\n".join(
 verify_index = active_finalizer.find("python3 scripts/verify_pypi_release.py")
 promote_command = 'gh release edit "${TAG}" --draft=false'
 promote_index = active_finalizer.find(promote_command)
+immutable_command = "bash scripts/verify-release-tag-immutable.sh"
+immutable_index = active_finalizer.find(immutable_command)
+state_command = "bash scripts/verify-release-workflow-state.sh"
+state_index = active_preflight.find(state_command)
+public_state_index = active_preflight.find("release_state=public")
 final_state_command = 'test "$(gh release view "${TAG}" --json isDraft --jq \'.isDraft\')" = "false"'
 final_state_index = active_finalizer.find(final_state_command)
 local_tag_index = runbook.find('git tag -a vX.Y.Z -m "Tool Guard Core vX.Y.Z"')
@@ -33,19 +44,16 @@ checks = {
     "GoReleaser reruns reuse the staged draft": "  use_existing_draft: true" in goreleaser,
     "GoReleaser reruns replace existing release assets": "  replace_existing_artifacts: true" in goreleaser,
     "preflight rejects tags unsupported by signature verification": "Release tags must be stable semver (vN.N.N)" in workflow,
-    "preflight requires a new tag to equal main's exact head": (
-        'mode=exact' in workflow
-        and 'bash scripts/verify-release-tag-head.sh "${tag_ref}" origin/main "${GITHUB_REF_NAME}" "${mode}"' in workflow
+    "preflight delegates release-state behavior to tested script": (
+        active_preflight.count(state_command) == 1
+        and 'release_state=missing' in active_preflight
+        and 'release_state=draft' in active_preflight
+        and 0 <= public_state_index < state_index
+        and "exit 0" not in active_preflight
     ),
-    "draft recovery requires an existing draft and immutable tag": (
-        'GITHUB_RUN_ATTEMPT' in workflow
-        and 'release_draft' in workflow
-        and 'mode=allow-main-advance' in workflow
-        and '${GITHUB_REF_NAME} moved from workflow commit' in workflow
-    ),
-    "finalizer rechecks immutable tag before publication": (
-        'refs/remotes/origin/release-tag-check' in finalizer
-        and 'refusing publication' in finalizer
+    "finalizer immutable-tag check occurs before publication": (
+        0 <= immutable_index < promote_index
+        and 'refs/remotes/origin/release-tag-check' in active_finalizer
     ),
     "release refuses to mutate an already-public release": "refusing to rebuild or push release artifacts" in release_job,
     "PyPI retries are idempotent": "          skip-existing: true" in workflow,

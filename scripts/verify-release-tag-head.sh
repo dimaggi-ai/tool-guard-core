@@ -6,6 +6,11 @@ main_ref="${2:-origin/main}"
 tag_name="${3:-$tag_ref}"
 mode="${4:-exact}"
 
+if [[ "${mode}" != "exact" && "${mode}" != "allow-main-advance" ]]; then
+  echo "::error::Unknown release tag-head verification mode ${mode}." >&2
+  exit 2
+fi
+
 # Peel either an annotated-tag object or a direct commit SHA. GitHub normally
 # supplies the commit for a tag push, but accepting both shapes keeps the
 # invariant explicit and independently testable.
@@ -20,11 +25,6 @@ fi
 if [[ "${mode}" == "allow-main-advance" ]] && git merge-base --is-ancestor "${tag_commit}" "${main_commit}"; then
   echo "OK: ${tag_name} remains at ${tag_commit}; ${main_ref} advanced to descendant ${main_commit} during draft recovery."
   exit 0
-fi
-
-if [[ "${mode}" != "exact" && "${mode}" != "allow-main-advance" ]]; then
-  echo "::error::Unknown release tag-head verification mode ${mode}." >&2
-  exit 2
 fi
 
 if [[ "${tag_commit}" != "${main_commit}" ]]; then

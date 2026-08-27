@@ -46,10 +46,10 @@ type auditExportView struct {
 }
 
 type auditFileSnapshot struct {
-	path        string
-	file        *os.File
-	size        int64
-	cleanupPath string
+	path       string
+	file       *os.File
+	size       int64
+	cleanupDir string
 }
 
 type verifiedAuditFileSet struct {
@@ -60,8 +60,8 @@ type verifiedAuditFileSet struct {
 func (s *verifiedAuditFileSet) close() {
 	for _, snapshot := range s.files {
 		_ = snapshot.file.Close()
-		if snapshot.cleanupPath != "" {
-			_ = os.Remove(snapshot.cleanupPath)
+		if snapshot.cleanupDir != "" {
+			_ = os.Remove(snapshot.cleanupDir)
 		}
 	}
 }
@@ -232,13 +232,15 @@ func snapshotAuditFile(path string) (auditFileSnapshot, error) {
 		return auditFileSnapshot{}, fmt.Errorf("stat %s: %w", path, err)
 	}
 
-	snapshot, err := os.CreateTemp("", "toolguard-audit-export-*")
+	snapshot, cleanupDir, err := createAuditSnapshotFile()
 	if err != nil {
 		return auditFileSnapshot{}, fmt.Errorf("create snapshot for %s: %w", path, err)
 	}
 	cleanup := func() {
 		_ = snapshot.Close()
-		_ = os.Remove(snapshot.Name())
+		if cleanupDir != "" {
+			_ = os.Remove(cleanupDir)
+		}
 	}
 	if _, err := io.CopyN(snapshot, source, info.Size()); err != nil {
 		cleanup()
@@ -249,7 +251,7 @@ func snapshotAuditFile(path string) (auditFileSnapshot, error) {
 		return auditFileSnapshot{}, fmt.Errorf("rewind snapshot for %s: %w", path, err)
 	}
 	return auditFileSnapshot{
-		path: path, file: snapshot, size: info.Size(), cleanupPath: snapshot.Name(),
+		path: path, file: snapshot, size: info.Size(), cleanupDir: cleanupDir,
 	}, nil
 }
 

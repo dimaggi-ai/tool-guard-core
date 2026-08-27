@@ -36,26 +36,18 @@ jobs:
         run: |
           set -euo pipefail
           git fetch origin main --quiet
-          tag_ref="refs/tags/${GITHUB_REF_NAME}"
-          tag_commit="$(git rev-parse "${tag_ref}^{commit}")"
-          event_commit="$(git rev-parse "${GITHUB_SHA}^{commit}")"
-          if [ "${tag_commit}" != "${event_commit}" ]; then
-            echo "::error::${GITHUB_REF_NAME} moved from workflow commit ${event_commit} to ${tag_commit}." >&2
-            exit 1
-          fi
-
-          mode=exact
+          release_state=missing
           if [ "${GITHUB_RUN_ATTEMPT}" -gt 1 ]; then
             release_draft="$(gh release view "${GITHUB_REF_NAME}" --json isDraft --jq '.isDraft' 2>/dev/null || true)"
             if [ "${release_draft}" = "true" ]; then
-              mode=allow-main-advance
-              echo "Resuming existing draft for immutable tag ${GITHUB_REF_NAME}"
+              release_state=draft
             elif [ "${release_draft}" = "false" ]; then
-              echo "::error::${GITHUB_REF_NAME} is already public; refusing release-workflow recovery." >&2
-              exit 1
+              release_state=public
             fi
           fi
-          bash scripts/verify-release-tag-head.sh "${tag_ref}" origin/main "${GITHUB_REF_NAME}" "${mode}"
+          bash scripts/verify-release-workflow-state.sh \
+            "${GITHUB_SHA}" origin/main "${GITHUB_REF_NAME}" \
+            "${GITHUB_RUN_ATTEMPT}" "${release_state}"
 
   # Execute the exact workflow used as the merge gate at this tag. Keeping
   # verification in ci.yml means tag releases cannot silently omit a race,
@@ -283,12 +275,8 @@ jobs:
         run: |
           set -euo pipefail
           git fetch origin "refs/tags/${TAG}:refs/remotes/origin/release-tag-check" --force --quiet
-          remote_tag_commit="$(git rev-parse refs/remotes/origin/release-tag-check^{commit})"
-          event_commit="$(git rev-parse "${GITHUB_SHA}^{commit}")"
-          if [ "${remote_tag_commit}" != "${event_commit}" ]; then
-            echo "::error::${TAG} moved from workflow commit ${event_commit} to ${remote_tag_commit}; refusing publication." >&2
-            exit 1
-          fi
+          bash scripts/verify-release-tag-immutable.sh \
+            "${GITHUB_SHA}" refs/remotes/origin/release-tag-check "${TAG}"
       - name: Verify staged release and PyPI package
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

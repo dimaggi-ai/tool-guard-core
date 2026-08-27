@@ -62,6 +62,11 @@ class VerifyReleaseTagHeadTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("must be main's exact HEAD", result.stderr)
 
+    def test_rejects_unknown_mode_even_when_commits_match(self) -> None:
+        result = self.verify(self.annotated_tag_object, mode="bogus")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("Unknown release tag-head verification mode", result.stderr)
+
     def test_draft_recovery_accepts_immutable_ancestor_after_main_advances(self) -> None:
         (self.repo / "payload.txt").write_text("second\n", encoding="utf-8")
         git(self.repo, "add", "payload.txt")
