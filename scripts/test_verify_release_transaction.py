@@ -57,6 +57,7 @@ class VerifyReleaseTransactionTests(unittest.TestCase):
         result = self.run_guard()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("preflight verifier is an exact unguarded final command", result.stderr)
+        self.assertIn("preflight verifier is an exact unguarded final command", result.stderr)
 
     def test_masked_preflight_verifier_is_rejected(self) -> None:
         workflow = self.workflow_path.read_text(encoding="utf-8")
@@ -68,6 +69,7 @@ class VerifyReleaseTransactionTests(unittest.TestCase):
         self.workflow_path.write_text(workflow, encoding="utf-8")
         result = self.run_guard()
         self.assertNotEqual(result.returncode, 0)
+        self.assertIn("preflight verifier is an exact unguarded final command", result.stderr)
         self.assertIn("preflight verifier is an exact unguarded final command", result.stderr)
 
     def test_backgrounded_preflight_verifier_is_rejected(self) -> None:
@@ -102,12 +104,26 @@ class VerifyReleaseTransactionTests(unittest.TestCase):
         self.workflow_path.write_text(workflow, encoding="utf-8")
         result = self.run_guard()
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("preflight resolves draft state from GitHub", result.stderr)
+        self.assertIn("preflight resolves draft state in an exact guarded step", result.stderr)
+
+    def test_release_state_override_is_rejected(self) -> None:
+        workflow = self.workflow_path.read_text(encoding="utf-8")
+        workflow = workflow.replace(
+            '          echo "state=${release_state}" >> "${GITHUB_OUTPUT}"',
+            '          release_state=draft\n'
+            '          echo "state=${release_state}" >> "${GITHUB_OUTPUT}"',
+            1,
+        )
+        self.workflow_path.write_text(workflow, encoding="utf-8")
+        result = self.run_guard()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("preflight resolves draft state in an exact guarded step", result.stderr)
 
     def test_tag_check_after_publication_is_rejected(self) -> None:
         workflow = self.workflow_path.read_text(encoding="utf-8")
         workflow = workflow.replace(
-            "          bash scripts/verify-release-tag-immutable.sh",
+            '          bash scripts/verify-release-tag-immutable.sh \\\n'
+            '            "${GITHUB_SHA}" refs/remotes/origin/release-tag-check "${TAG}"',
             "          echo deferred-tag-check",
             1,
         )
@@ -144,6 +160,45 @@ class VerifyReleaseTransactionTests(unittest.TestCase):
         self.workflow_path.write_text(workflow, encoding="utf-8")
         result = self.run_guard()
         self.assertNotEqual(result.returncode, 0)
+        self.assertIn("finalizer immutable-tag gate is unguarded", result.stderr)
+
+    def test_promotion_outside_finalizer_is_rejected(self) -> None:
+        workflow = self.workflow_path.read_text(encoding="utf-8")
+        workflow = workflow.replace(
+            "  publish-python:\n",
+            '          gh release edit "${TAG}" --draft=false\n\n  publish-python:\n',
+            1,
+        )
+        self.workflow_path.write_text(workflow, encoding="utf-8")
+        result = self.run_guard()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("only finalizer actively promotes the release", result.stderr)
+
+    def test_masked_pypi_tag_verifier_is_rejected(self) -> None:
+        workflow = self.workflow_path.read_text(encoding="utf-8")
+        workflow = workflow.replace(
+            '            "${GITHUB_SHA}" refs/remotes/origin/release-pypi-tag-check "${TAG}"',
+            '            "${GITHUB_SHA}" refs/remotes/origin/release-pypi-tag-check "${TAG}" || true',
+            1,
+        )
+        self.workflow_path.write_text(workflow, encoding="utf-8")
+        result = self.run_guard()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("PyPI publication has an exact adjacent immutable-tag gate", result.stderr)
+
+    def test_pypi_tag_gate_after_publication_is_rejected(self) -> None:
+        workflow = self.workflow_path.read_text(encoding="utf-8")
+        marker = "      - name: Verify release tag before PyPI publication\n"
+        start = workflow.index(marker)
+        end = workflow.index("      - name: Publish with PyPI trusted publishing\n", start)
+        gate = workflow[start:end]
+        workflow = workflow[:start] + workflow[end:]
+        insert = workflow.index("  finalize-release:\n")
+        workflow = workflow[:insert] + gate + workflow[insert:]
+        self.workflow_path.write_text(workflow, encoding="utf-8")
+        result = self.run_guard()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("PyPI publication has an exact adjacent immutable-tag gate", result.stderr)
 
     def test_missing_job_boundary_is_rejected(self) -> None:
         workflow = self.workflow_path.read_text(encoding="utf-8")

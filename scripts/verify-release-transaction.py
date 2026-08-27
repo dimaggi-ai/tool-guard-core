@@ -40,16 +40,34 @@ def active(text: str) -> str:
 
 preflight = region(workflow, "\n  preflight:\n", "\n  verify:\n")
 release_job = region(workflow, "\n  release:\n", "\n  publish-python:\n")
+python_publish_job = region(
+    workflow, "\n  publish-python:\n", "\n  finalize-release:\n"
+)
 finalizer = region(workflow, "\n  finalize-release:\n")
 resolve_step = step(preflight, "Resolve release state")
 preflight_step = step(preflight, "Verify new tag or safe draft recovery")
 publish_step = step(finalizer, "Publish verified GitHub Release")
+python_tag_step = step(python_publish_job, "Verify release tag before PyPI publication")
 active_finalizer = active(finalizer)
 
-state_query = (
-    '            if release_draft="$(gh release view "${GITHUB_REF_NAME}" '
-    "--json isDraft --jq '.isDraft' 2>/dev/null)\"; then"
-)
+resolve_body = """        id: release-state
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          release_state=missing
+          if [ "${GITHUB_RUN_ATTEMPT}" -gt 1 ]; then
+            if release_draft="$(gh release view "${GITHUB_REF_NAME}" --json isDraft --jq '.isDraft' 2>/dev/null)"; then
+              if [ "${release_draft}" = "true" ]; then
+                release_state=draft
+              elif [ "${release_draft}" = "false" ]; then
+                release_state=public
+              fi
+            fi
+          fi
+          echo "state=${release_state}" >> "${GITHUB_OUTPUT}"
+"""
 preflight_body = """        run: |
           set -euo pipefail
           git fetch origin main --quiet
@@ -63,6 +81,14 @@ final_tag_gate = """          set -euo pipefail
           git fetch origin "refs/tags/${TAG}:refs/remotes/origin/release-tag-check" --force --quiet
           bash scripts/verify-release-tag-immutable.sh \\
             "${GITHUB_SHA}" refs/remotes/origin/release-tag-check "${TAG}"
+"""
+pypi_tag_gate = """        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git fetch origin "refs/tags/${TAG}:refs/remotes/origin/release-pypi-tag-check" --force --quiet
+          bash scripts/verify-release-tag-immutable.sh \\
+            "${GITHUB_SHA}" refs/remotes/origin/release-pypi-tag-check "${TAG}"
 """
 promote_command = 'gh release edit "${TAG}" --draft=false'
 verify_index = active_finalizer.find("python3 scripts/verify_pypi_release.py")
@@ -78,16 +104,14 @@ tag_push_index = runbook.find("git push origin vX.Y.Z")
 
 checks = {
     "release workflow job boundaries are structurally present": bool(
-        preflight and release_job and finalizer
+        preflight and release_job and python_publish_job and finalizer
     ),
     "GoReleaser stages a draft": "  draft: true" in goreleaser,
     "GoReleaser reruns reuse the staged draft": "  use_existing_draft: true" in goreleaser,
     "GoReleaser reruns replace existing release assets": "  replace_existing_artifacts: true" in goreleaser,
     "preflight rejects tags unsupported by signature verification": "Release tags must be stable semver (vN.N.N)" in workflow,
-    "preflight resolves draft state from GitHub": (
-        resolve_step.count(state_query) == 1
-        and resolve_step.count('echo "state=${release_state}" >> "${GITHUB_OUTPUT}"') == 1
-        and "release_draft=true" not in resolve_step
+    "preflight resolves draft state in an exact guarded step": (
+        resolve_step.rstrip() == resolve_body.rstrip()
     ),
     "preflight verifier is an exact unguarded final command": (
         preflight_step.rstrip() == preflight_body.rstrip()
@@ -97,6 +121,12 @@ checks = {
         and publish_step.startswith("        env:\n")
         and publish_step.split("        run: |\n", maxsplit=1)[-1].startswith(final_tag_gate)
         and 0 <= immutable_index < publish_step.find(promote_command)
+    ),
+    "PyPI publication has an exact adjacent immutable-tag gate": (
+        python_tag_step.rstrip() == pypi_tag_gate.rstrip()
+        and python_publish_job.find("      - name: Verify release tag before PyPI publication")
+        < python_publish_job.find("      - name: Publish with PyPI trusted publishing")
+        and "      contents: read" in python_publish_job
     ),
     "release refuses to mutate an already-public release": "refusing to rebuild or push release artifacts" in release_job,
     "PyPI retries are idempotent": "          skip-existing: true" in workflow,
@@ -116,7 +146,10 @@ checks = {
         and "          path: dist/python" in finalizer
     ),
     "finalizer verifies PyPI filenames and digests": "python3 scripts/verify_pypi_release.py" in active_finalizer,
-    "only finalizer actively promotes the release": active_finalizer.count(promote_command) == 1,
+    "only finalizer actively promotes the release": (
+        active(workflow).count(promote_command) == 1
+        and publish_step.count(promote_command) == 1
+    ),
     "promotion occurs after PyPI verification": 0 <= verify_index < promote_index,
     "final public-state check occurs after promotion": 0 <= promote_index < final_state_index,
     "OIDC download action is SHA-pinned": "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093" in workflow,
