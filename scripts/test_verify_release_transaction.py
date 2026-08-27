@@ -227,6 +227,32 @@ class VerifyReleaseTransactionTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("PyPI publication has an exact adjacent immutable-tag gate", result.stderr)
 
+    def test_pypi_publisher_quoted_if_is_rejected(self) -> None:
+        workflow = self.workflow_path.read_text(encoding="utf-8")
+        workflow = workflow.replace(
+            "      - name: Publish with PyPI trusted publishing\n",
+            '      - name: Publish with PyPI trusted publishing\n'
+            '        "if": ${{ always() }}\n',
+            1,
+        )
+        self.workflow_path.write_text(workflow, encoding="utf-8")
+        result = self.run_guard()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("PyPI publication has an exact adjacent immutable-tag gate", result.stderr)
+
+    def test_pypi_publisher_continue_on_error_is_rejected(self) -> None:
+        workflow = self.workflow_path.read_text(encoding="utf-8")
+        workflow = workflow.replace(
+            "      - name: Publish with PyPI trusted publishing\n",
+            "      - name: Publish with PyPI trusted publishing\n"
+            "        continue-on-error: true\n",
+            1,
+        )
+        self.workflow_path.write_text(workflow, encoding="utf-8")
+        result = self.run_guard()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("PyPI publication has an exact adjacent immutable-tag gate", result.stderr)
+
     def test_duplicate_pypi_verifier_is_rejected(self) -> None:
         workflow = self.workflow_path.read_text(encoding="utf-8")
         publisher = "      - name: Publish with PyPI trusted publishing\n"
@@ -272,6 +298,18 @@ class VerifyReleaseTransactionTests(unittest.TestCase):
         workflow = workflow.replace(
             "      - name: Run GoReleaser\n",
             "      - name: Run GoReleaser\n        if: ${{ always() }}\n",
+            1,
+        )
+        self.workflow_path.write_text(workflow, encoding="utf-8")
+        result = self.run_guard()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("GoReleaser publication has an exact adjacent immutable-tag gate", result.stderr)
+
+    def test_goreleaser_quoted_continue_on_error_is_rejected(self) -> None:
+        workflow = self.workflow_path.read_text(encoding="utf-8")
+        workflow = workflow.replace(
+            "      - name: Run GoReleaser\n",
+            '      - name: Run GoReleaser\n        "continue-on-error": true\n',
             1,
         )
         self.workflow_path.write_text(workflow, encoding="utf-8")

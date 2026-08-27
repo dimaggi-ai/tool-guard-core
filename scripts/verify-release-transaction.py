@@ -45,12 +45,6 @@ def matching_step_indices(items: list[str], needle: str) -> list[int]:
     return [index for index, item in enumerate(items) if needle in item]
 
 
-def publisher_preserves_success_gate(item: str) -> bool:
-    return not re.search(
-        r"^        (?:if|continue-on-error):", item, flags=re.MULTILINE
-    )
-
-
 def active(text: str) -> str:
     return "\n".join(
         line for line in text.splitlines() if not line.lstrip().startswith("#")
@@ -134,6 +128,19 @@ artifact_tag_gate = """        env:
           bash scripts/verify-release-tag-immutable.sh \\
             "${GITHUB_SHA}" refs/remotes/origin/release-artifact-tag-check "${TAG}"
 """
+goreleaser_publisher = """- name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}"""
+pypi_publisher = """- name: Publish with PyPI trusted publishing
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1, reviewed 2026-08-26
+        with:
+          packages-dir: dist/python/
+          skip-existing: true"""
 promote_command = 'gh release edit "${TAG}" --draft=false'
 verify_index = active_finalizer.find("python3 scripts/verify_pypi_release.py")
 promote_index = active_finalizer.find(promote_command)
@@ -173,7 +180,8 @@ checks = {
         and release_steps[artifact_verifier_indices[0]].split(
             artifact_verifier_name, maxsplit=1
         )[-1].rstrip() == artifact_tag_gate.rstrip()
-        and publisher_preserves_success_gate(release_steps[goreleaser_indices[0]])
+        and active(release_steps[goreleaser_indices[0]]).strip()
+        == goreleaser_publisher
         and active(workflow).count("goreleaser/goreleaser-action@") == 1
     ),
     "PyPI publication has an exact adjacent immutable-tag gate": (
@@ -183,9 +191,8 @@ checks = {
         and python_publish_steps[pypi_verifier_indices[0]].split(
             pypi_verifier_name, maxsplit=1
         )[-1].rstrip() == pypi_tag_gate.rstrip()
-        and publisher_preserves_success_gate(
-            python_publish_steps[pypi_publisher_indices[0]]
-        )
+        and active(python_publish_steps[pypi_publisher_indices[0]]).strip()
+        == pypi_publisher
         and active(workflow).count("pypa/gh-action-pypi-publish@") == 1
         and "      contents: read" in python_publish_job
     ),
