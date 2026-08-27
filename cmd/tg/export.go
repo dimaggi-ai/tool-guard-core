@@ -46,9 +46,10 @@ type auditExportView struct {
 }
 
 type auditFileSnapshot struct {
-	path string
-	file *os.File
-	size int64
+	path        string
+	file        *os.File
+	size        int64
+	cleanupPath string
 }
 
 type verifiedAuditFileSet struct {
@@ -59,6 +60,9 @@ type verifiedAuditFileSet struct {
 func (s *verifiedAuditFileSet) close() {
 	for _, snapshot := range s.files {
 		_ = snapshot.file.Close()
+		if snapshot.cleanupPath != "" {
+			_ = os.Remove(snapshot.cleanupPath)
+		}
 	}
 }
 
@@ -193,18 +197,12 @@ func openVerifiedAuditFileSet(activePath string) (*verifiedAuditFileSet, error) 
 	}
 	fileSet := &verifiedAuditFileSet{files: make([]auditFileSnapshot, 0, len(paths))}
 	for _, path := range paths {
-		f, err := os.Open(path)
+		snapshot, err := snapshotAuditFile(path)
 		if err != nil {
 			fileSet.close()
-			return nil, fmt.Errorf("open %s: %w", path, err)
+			return nil, err
 		}
-		info, err := f.Stat()
-		if err != nil {
-			_ = f.Close()
-			fileSet.close()
-			return nil, fmt.Errorf("stat %s: %w", path, err)
-		}
-		fileSet.files = append(fileSet.files, auditFileSnapshot{path: path, file: f, size: info.Size()})
+		fileSet.files = append(fileSet.files, snapshot)
 	}
 
 	readers := make([]io.Reader, 0, len(fileSet.files))
@@ -216,24 +214,43 @@ func openVerifiedAuditFileSet(activePath string) (*verifiedAuditFileSet, error) 
 		fileSet.close()
 		return nil, err
 	}
-	// Appends beyond the captured size are deliberately outside this export
-	// snapshot. A shrink means the verified byte range no longer exists.
-	for _, snapshot := range fileSet.files {
-		info, err := snapshot.file.Stat()
-		if err != nil {
-			fileSet.close()
-			return nil, fmt.Errorf("restat %s: %w", snapshot.path, err)
-		}
-		if info.Size() < snapshot.size {
-			fileSet.close()
-			return nil, fmt.Errorf("audit file %s shrank during verification", snapshot.path)
-		}
-	}
 	if len(paths) > 1 {
 		report.Note = fmt.Sprintf("walked %d files (rotation set): %v", len(paths), paths)
 	}
 	fileSet.report = report
 	return fileSet, nil
+}
+
+func snapshotAuditFile(path string) (auditFileSnapshot, error) {
+	source, err := os.Open(path)
+	if err != nil {
+		return auditFileSnapshot{}, fmt.Errorf("open %s: %w", path, err)
+	}
+	defer source.Close()
+	info, err := source.Stat()
+	if err != nil {
+		return auditFileSnapshot{}, fmt.Errorf("stat %s: %w", path, err)
+	}
+
+	snapshot, err := os.CreateTemp("", "toolguard-audit-export-*")
+	if err != nil {
+		return auditFileSnapshot{}, fmt.Errorf("create snapshot for %s: %w", path, err)
+	}
+	cleanup := func() {
+		_ = snapshot.Close()
+		_ = os.Remove(snapshot.Name())
+	}
+	if _, err := io.CopyN(snapshot, source, info.Size()); err != nil {
+		cleanup()
+		return auditFileSnapshot{}, fmt.Errorf("snapshot %s: %w", path, err)
+	}
+	if _, err := snapshot.Seek(0, io.SeekStart); err != nil {
+		cleanup()
+		return auditFileSnapshot{}, fmt.Errorf("rewind snapshot for %s: %w", path, err)
+	}
+	return auditFileSnapshot{
+		path: path, file: snapshot, size: info.Size(), cleanupPath: snapshot.Name(),
+	}, nil
 }
 
 func streamAuditExport(files []auditFileSnapshot, filter auditExportFilter, stdout io.Writer) error {

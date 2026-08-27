@@ -10,7 +10,7 @@ reference changing in the same pull request.
 
 | Command | Purpose |
 |---|---|
-| `tg evaluate` | Evaluate one JSON tool call against one YAML policy. |
+| `tg evaluate` | Evaluate one JSON tool call against one YAML policy or a policy directory/set. |
 | `tg simulate` | Replay JSONL tool calls against one policy or a policy directory. |
 | `tg coverage` | Report which policy rules a JSONL call set exercises. |
 | `tg hook` | Enforce policies as a coding-agent pre-tool hook. |

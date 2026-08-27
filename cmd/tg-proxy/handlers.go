@@ -454,7 +454,11 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 	// there are no underflow / double-count races.
 	auditErr := provenanceErr
 	if auditErr == nil {
-		auditErr = p.appendTrace(&trace)
+		if escalationReservation != nil {
+			auditErr = p.appendTraceDurable(&trace)
+		} else {
+			auditErr = p.appendTrace(&trace)
+		}
 	}
 	var receipt *audit.DecisionReceipt
 	if auditErr != nil {
@@ -469,7 +473,7 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 			// fail-open for ordinary actions. When the failed write was proven
 			// rolled back, make one best-effort durable record of the deny.
 			if !errors.Is(auditErr, errAuditWriterPoisoned) {
-				if retryErr := p.appendTrace(&trace); retryErr == nil {
+				if retryErr := p.appendTraceDurable(&trace); retryErr == nil {
 					receipt = receiptForAppendedTrace(&trace)
 				}
 			}

@@ -344,6 +344,55 @@ func TestProxy_UnauditedEscalationIsDiscardedEvenInFailOpenMode(t *testing.T) {
 	}
 }
 
+func TestProxy_InitialEscalationIsDurableBeforePublication(t *testing.T) {
+	for _, syncMode := range []string{"none", "interval"} {
+		t.Run(syncMode, func(t *testing.T) {
+			p := newOperationalTestProxy(t, []domain.Policy{
+				operationalPolicy("durable-escalation", domain.PolicyModeEnforcement, domain.EffectEscalate, "amount", 0),
+			}, false)
+			p.auditSyncMode = syncMode
+			p.auditSyncEvery = 10
+			fault := &faultInjectAuditFile{auditLogFile: p.auditLog}
+			p.auditLog = fault
+
+			status, result := evaluateOperational(t, p, "durable-escalation-"+syncMode, 100)
+			if status != http.StatusAccepted || result.ActionTaken != domain.ActionEscalated {
+				t.Fatalf("status/action = %d/%q, want 202/escalated", status, result.ActionTaken)
+			}
+			if fault.syncCalls != 1 {
+				t.Fatalf("sync calls = %d, want one forced barrier before publication", fault.syncCalls)
+			}
+			if got := p.escalations.get("durable-escalation-" + syncMode); got == nil || got.State != EscPending {
+				t.Fatalf("published escalation = %#v, want pending", got)
+			}
+		})
+	}
+}
+
+func TestProxy_InitialEscalationSyncFailureDurablyRecordsDeny(t *testing.T) {
+	p := newOperationalTestProxy(t, []domain.Policy{
+		operationalPolicy("failed-escalation-sync", domain.PolicyModeEnforcement, domain.EffectEscalate, "amount", 0),
+	}, false)
+	p.auditSyncMode = "none"
+	fault := &faultInjectAuditFile{auditLogFile: p.auditLog, syncFailuresRemaining: 1}
+	p.auditLog = fault
+
+	status, result := evaluateOperational(t, p, "failed-escalation-sync", 100)
+	if status != http.StatusOK || result.ActionTaken != domain.ActionDenied {
+		t.Fatalf("status/action = %d/%q, want 200/denied", status, result.ActionTaken)
+	}
+	if got := p.escalations.get("failed-escalation-sync"); got != nil {
+		t.Fatalf("failed escalation became approvable: %#v", got)
+	}
+	if fault.writeCalls != 2 || fault.syncCalls != 3 {
+		t.Fatalf("writes/syncs = %d/%d, want original+deny writes and failed+rollback+deny syncs", fault.writeCalls, fault.syncCalls)
+	}
+	traces := readOperationalTraces(t, p)
+	if len(traces) != 1 || traces[0].ActionTaken != domain.ActionDenied {
+		t.Fatalf("audit traces = %#v, want one durable deny", traces)
+	}
+}
+
 func TestProxy_AuditRollbackFailurePoisonsReadinessAndSkipsRetry(t *testing.T) {
 	p := newOperationalTestProxy(t, []domain.Policy{
 		operationalPolicy("proceeding-flag", domain.PolicyModeEnforcement, domain.EffectFlag, "amount", 0),

@@ -273,6 +273,35 @@ func TestExportSnapshotExcludesLaterAppends(t *testing.T) {
 	}
 }
 
+func TestExportSnapshotIgnoresSameSizeSourceRewrite(t *testing.T) {
+	base := time.Date(2026, 8, 25, 10, 0, 0, 0, time.UTC)
+	verified := makeExportTrace(t, "t1", base, domain.ActionAllowed, nil, "")
+	replacement := makeExportTrace(t, "x1", base, domain.ActionAllowed, nil, "")
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	verifiedRaw := marshalExportTrace(t, verified)
+	replacementRaw := marshalExportTrace(t, replacement)
+	if len(verifiedRaw) != len(replacementRaw) {
+		t.Fatalf("test fixture lengths differ: verified=%d replacement=%d", len(verifiedRaw), len(replacementRaw))
+	}
+	writeExportFile(t, path, verifiedRaw)
+
+	fileSet, err := openVerifiedAuditFileSet(path)
+	if err != nil {
+		t.Fatalf("openVerifiedAuditFileSet: %v", err)
+	}
+	defer fileSet.close()
+	writeExportFile(t, path, replacementRaw)
+
+	var output bytes.Buffer
+	if err := streamAuditExport(fileSet.files, auditExportFilter{}, &output); err != nil {
+		t.Fatalf("streamAuditExport: %v", err)
+	}
+	ids := exportedTraceIDs(t, output.String())
+	if len(ids) != 1 || ids[0] != "t1" {
+		t.Fatalf("snapshot exported IDs = %v, want immutable verified record t1", ids)
+	}
+}
+
 func TestExportNoMatchesIsSuccessfulEmptyStream(t *testing.T) {
 	trace := makeExportTrace(t, "t1", time.Now().UTC(), domain.ActionAllowed, []string{"policy-a"}, "")
 	path := filepath.Join(t.TempDir(), "audit.jsonl")

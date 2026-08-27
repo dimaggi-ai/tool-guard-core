@@ -41,7 +41,7 @@ jobs:
 
       - name: Build latest release baseline
         run: |
-          baseline_ref="$(git describe --tags --abbrev=0)"
+          baseline_ref="$(bash scripts/select-stress-baseline.sh "${GITHUB_SHA}")"
           baseline_dir="${RUNNER_TEMP}/tool-guard-baseline"
           git worktree add --detach "${baseline_dir}" "${baseline_ref}"
           (

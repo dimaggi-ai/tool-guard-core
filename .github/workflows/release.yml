@@ -9,9 +9,10 @@ permissions:
   contents: read
 
 jobs:
-  # Guards against the v0.3.0 failure mode and stale reviewed heads: the tag
+  # Guards against the v0.3.0 failure mode and stale reviewed heads: a new tag
   # must point at main's exact current commit, not merely an ancestor of main.
-  # Refuse any other shape before spending time on CI or building artifacts.
+  # A rerun may resume the same immutable tag only when a draft already exists
+  # and main advanced normally as its descendant.
   preflight:
     name: Verify tag is releasable
     runs-on: ubuntu-latest
@@ -28,10 +29,33 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - name: Verify this tag is main's exact head
+      - name: Verify new tag or safe draft recovery
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
+          set -euo pipefail
           git fetch origin main --quiet
-          bash scripts/verify-release-tag-head.sh "${GITHUB_SHA}" origin/main "${GITHUB_REF_NAME}"
+          tag_ref="refs/tags/${GITHUB_REF_NAME}"
+          tag_commit="$(git rev-parse "${tag_ref}^{commit}")"
+          event_commit="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          if [ "${tag_commit}" != "${event_commit}" ]; then
+            echo "::error::${GITHUB_REF_NAME} moved from workflow commit ${event_commit} to ${tag_commit}." >&2
+            exit 1
+          fi
+
+          mode=exact
+          if [ "${GITHUB_RUN_ATTEMPT}" -gt 1 ]; then
+            release_draft="$(gh release view "${GITHUB_REF_NAME}" --json isDraft --jq '.isDraft' 2>/dev/null || true)"
+            if [ "${release_draft}" = "true" ]; then
+              mode=allow-main-advance
+              echo "Resuming existing draft for immutable tag ${GITHUB_REF_NAME}"
+            elif [ "${release_draft}" = "false" ]; then
+              echo "::error::${GITHUB_REF_NAME} is already public; refusing release-workflow recovery." >&2
+              exit 1
+            fi
+          fi
+          bash scripts/verify-release-tag-head.sh "${tag_ref}" origin/main "${GITHUB_REF_NAME}" "${mode}"
 
   # Execute the exact workflow used as the merge gate at this tag. Keeping
   # verification in ci.yml means tag releases cannot silently omit a race,
@@ -253,6 +277,18 @@ jobs:
         with:
           name: python-dist
           path: dist/python
+      - name: Verify release tag has not moved
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git fetch origin "refs/tags/${TAG}:refs/remotes/origin/release-tag-check" --force --quiet
+          remote_tag_commit="$(git rev-parse refs/remotes/origin/release-tag-check^{commit})"
+          event_commit="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          if [ "${remote_tag_commit}" != "${event_commit}" ]; then
+            echo "::error::${TAG} moved from workflow commit ${event_commit} to ${remote_tag_commit}; refusing publication." >&2
+            exit 1
+          fi
       - name: Verify staged release and PyPI package
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -236,5 +236,6 @@ jobs:
         run: |
           python3 scripts/verify-release-transaction.py
           python3 -m unittest discover -s scripts -p 'test_verify_release_tag_head.py'
+          python3 -m unittest discover -s scripts -p 'test_select_stress_baseline.py'
           python3 -m unittest discover -s scripts -p 'test_*python_dist.py'
           python3 -m unittest discover -s scripts -p 'test_verify_pypi_release.py'

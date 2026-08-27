@@ -33,9 +33,19 @@ checks = {
     "GoReleaser reruns reuse the staged draft": "  use_existing_draft: true" in goreleaser,
     "GoReleaser reruns replace existing release assets": "  replace_existing_artifacts: true" in goreleaser,
     "preflight rejects tags unsupported by signature verification": "Release tags must be stable semver (vN.N.N)" in workflow,
-    "preflight requires the tag to equal main's exact head": (
-        'bash scripts/verify-release-tag-head.sh "${GITHUB_SHA}" origin/main "${GITHUB_REF_NAME}"' in workflow
-        and "git merge-base --is-ancestor" not in workflow
+    "preflight requires a new tag to equal main's exact head": (
+        'mode=exact' in workflow
+        and 'bash scripts/verify-release-tag-head.sh "${tag_ref}" origin/main "${GITHUB_REF_NAME}" "${mode}"' in workflow
+    ),
+    "draft recovery requires an existing draft and immutable tag": (
+        'GITHUB_RUN_ATTEMPT' in workflow
+        and 'release_draft' in workflow
+        and 'mode=allow-main-advance' in workflow
+        and '${GITHUB_REF_NAME} moved from workflow commit' in workflow
+    ),
+    "finalizer rechecks immutable tag before publication": (
+        'refs/remotes/origin/release-tag-check' in finalizer
+        and 'refusing publication' in finalizer
     ),
     "release refuses to mutate an already-public release": "refusing to rebuild or push release artifacts" in release_job,
     "PyPI retries are idempotent": "          skip-existing: true" in workflow,
