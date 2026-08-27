@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +14,132 @@ import (
 	"github.com/dimaggi-ai/tool-guard-core/pkg/audit"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 )
+
+// faultInjectAuditFile produces a genuine short write against the underlying
+// production file while delegating all behavior that is not under test. Tests
+// can separately fail Stat, Sync, or Truncate to exercise recovery boundaries.
+type faultInjectAuditFile struct {
+	auditLogFile
+	shortWritesRemaining     int
+	fullWriteErrorsRemaining int
+	statFailuresRemaining    int
+	syncFailuresRemaining    int
+	closeFailuresRemaining   int
+	failTruncate             bool
+	writeCalls               int
+	statCalls                int
+	syncCalls                int
+}
+
+func TestAppendTrace_PreRotationPreservesEOFTailDelimiter(t *testing.T) {
+	dir := t.TempDir()
+	active := filepath.Join(dir, "decisions.jsonl")
+	first := makeValidTrace("eof-before-rotation", "", time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC))
+	firstLine, err := json.Marshal(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(active, firstLine, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	p := &proxy{
+		auditPath:     active,
+		auditSyncMode: "none",
+		auditRotation: platformAuditRotationOps(),
+	}
+	if err := p.openAuditLog(); err != nil {
+		t.Fatalf("open EOF tail: %v", err)
+	}
+	if !p.auditNeedsSeparator {
+		t.Fatal("EOF tail did not request cross-file separator")
+	}
+	p.auditRotateBytes = 1
+	second := domain.DecisionTrace{
+		TraceID:     "after-eof-prerotation",
+		Timestamp:   time.Date(2026, 8, 25, 12, 0, 1, 0, time.UTC),
+		Decision:    domain.DecisionDenied,
+		ActionTaken: domain.ActionDenied,
+	}
+	if err := p.appendTrace(&second); err != nil {
+		t.Fatalf("append after EOF pre-rotation: %v", err)
+	}
+	activeRaw, err := os.ReadFile(active)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(activeRaw) == 0 || activeRaw[0] != '\n' {
+		t.Fatalf("new active file missing cross-rotation LF: %q", activeRaw)
+	}
+	if err := p.verifyFullAuditChain(); err != nil {
+		t.Fatalf("full chain after EOF pre-rotation: %v", err)
+	}
+	if err := p.auditLog.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted := &proxy{auditPath: active, auditSyncMode: "none"}
+	if err := restarted.openAuditLog(); err != nil {
+		t.Fatalf("restart after EOF pre-rotation: %v", err)
+	}
+	defer restarted.auditLog.Close()
+	if restarted.lastHash != second.TraceHash {
+		t.Fatalf("restart tail = %q, want %q", restarted.lastHash, second.TraceHash)
+	}
+}
+
+func (f *faultInjectAuditFile) Close() error {
+	if f.closeFailuresRemaining > 0 {
+		f.closeFailuresRemaining--
+		return errors.New("forced close failure")
+	}
+	return f.auditLogFile.Close()
+}
+
+func (f *faultInjectAuditFile) Sync() error {
+	f.syncCalls++
+	if f.syncFailuresRemaining > 0 {
+		f.syncFailuresRemaining--
+		return errors.New("forced sync failure")
+	}
+	return f.auditLogFile.Sync()
+}
+
+func (f *faultInjectAuditFile) Stat() (os.FileInfo, error) {
+	f.statCalls++
+	if f.statFailuresRemaining > 0 {
+		f.statFailuresRemaining--
+		return nil, errors.New("forced transient stat failure")
+	}
+	return f.auditLogFile.Stat()
+}
+
+func (f *faultInjectAuditFile) Write(record []byte) (int, error) {
+	f.writeCalls++
+	if f.fullWriteErrorsRemaining > 0 {
+		f.fullWriteErrorsRemaining--
+		n, err := f.auditLogFile.Write(record)
+		if err != nil {
+			return n, err
+		}
+		return n, errors.New("forced error after full write")
+	}
+	if f.shortWritesRemaining == 0 {
+		return f.auditLogFile.Write(record)
+	}
+	f.shortWritesRemaining--
+	n := len(record) / 2
+	if n == 0 {
+		n = 1
+	}
+	return f.auditLogFile.Write(record[:n])
+}
+
+func (f *faultInjectAuditFile) Truncate(size int64) error {
+	if f.failTruncate {
+		return errors.New("forced truncate failure")
+	}
+	return f.auditLogFile.Truncate(size)
+}
 
 // makeValidTrace builds one trace whose TraceHash matches the canonical
 // recomputation and whose PreviousTraceHash links to prevHash — mirrors
@@ -31,6 +159,142 @@ func makeValidTrace(traceID, prevHash string, ts time.Time) domain.DecisionTrace
 		panic("makeValidTrace: " + err.Error())
 	}
 	tr.TraceHash = h
+	return tr
+}
+
+func TestAppendTrace_ShortWriteRollsBackBeforeRetry(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "decisions.jsonl")
+	p := &proxy{auditPath: path, auditSyncMode: "none"}
+	if err := p.openAuditLog(); err != nil {
+		t.Fatalf("open audit log: %v", err)
+	}
+	realFile := p.auditLog
+	fault := &faultInjectAuditFile{auditLogFile: realFile, shortWritesRemaining: 1}
+	p.auditLog = fault
+	t.Cleanup(func() { _ = fault.Close() })
+
+	failed := domain.DecisionTrace{
+		TraceID:     "short-write",
+		Timestamp:   time.Date(2026, 8, 26, 1, 2, 3, 0, time.UTC),
+		Decision:    domain.DecisionAllowed,
+		ActionTaken: domain.ActionAllowed,
+	}
+	err := p.appendTrace(&failed)
+	if !errors.Is(err, io.ErrShortWrite) || !strings.Contains(err.Error(), "partial write rolled back") {
+		t.Fatalf("short-write error = %v, want wrapped io.ErrShortWrite with rollback confirmation", err)
+	}
+	st, statErr := realFile.Stat()
+	if statErr != nil {
+		t.Fatal(statErr)
+	}
+	if st.Size() != 0 || p.auditCurrentBytes != 0 || p.auditAppendSeq != 0 || p.lastHash != "" || p.auditPoisoned {
+		t.Fatalf(
+			"state after rollback: size=%d bytes=%d seq=%d last_hash=%q poisoned=%v",
+			st.Size(), p.auditCurrentBytes, p.auditAppendSeq, p.lastHash, p.auditPoisoned,
+		)
+	}
+
+	retry := domain.DecisionTrace{
+		TraceID:     "after-short-write",
+		Timestamp:   time.Date(2026, 8, 26, 1, 2, 4, 0, time.UTC),
+		Decision:    domain.DecisionDenied,
+		ActionTaken: domain.ActionDenied,
+	}
+	if err := p.appendTrace(&retry); err != nil {
+		t.Fatalf("append after successful rollback: %v", err)
+	}
+	if err := p.auditLog.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	verifyFile, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := audit.VerifyChainFromReader(verifyFile)
+	_ = verifyFile.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Intact || report.Records != 1 {
+		t.Fatalf("chain after retry = %#v, want intact with one record", report)
+	}
+}
+
+func TestAppendTrace_PreWriteStatFailureCanRecover(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "decisions.jsonl")
+	p := &proxy{auditPath: path, auditSyncMode: "none"}
+	if err := p.openAuditLog(); err != nil {
+		t.Fatalf("open audit log: %v", err)
+	}
+	fault := &faultInjectAuditFile{auditLogFile: p.auditLog, statFailuresRemaining: 1}
+	p.auditLog = fault
+	t.Cleanup(func() { _ = fault.Close() })
+
+	first := domain.DecisionTrace{
+		TraceID:     "stat-failure",
+		Timestamp:   time.Date(2026, 8, 26, 1, 3, 3, 0, time.UTC),
+		Decision:    domain.DecisionAllowed,
+		ActionTaken: domain.ActionAllowed,
+	}
+	err := p.appendTrace(&first)
+	if err == nil || !strings.Contains(err.Error(), "stat audit log before append") {
+		t.Fatalf("first append error = %v, want pre-write stat failure", err)
+	}
+	if p.auditPoisoned || fault.writeCalls != 0 {
+		t.Fatalf("pre-write stat failure poisoned=%v writes=%d, want false/0", p.auditPoisoned, fault.writeCalls)
+	}
+
+	second := domain.DecisionTrace{
+		TraceID:     "after-stat-failure",
+		Timestamp:   time.Date(2026, 8, 26, 1, 3, 4, 0, time.UTC),
+		Decision:    domain.DecisionDenied,
+		ActionTaken: domain.ActionDenied,
+	}
+	if err := p.appendTrace(&second); err != nil {
+		t.Fatalf("append after transient stat failure: %v", err)
+	}
+	if fault.statCalls != 2 || fault.writeCalls != 1 || p.auditPoisoned {
+		t.Fatalf("recovery state: stats=%d writes=%d poisoned=%v, want 2/1/false", fault.statCalls, fault.writeCalls, p.auditPoisoned)
+	}
+}
+
+func makeSizedProxyTrace(t *testing.T, target int) domain.DecisionTrace {
+	t.Helper()
+	tr := domain.DecisionTrace{
+		TraceID:        "trc-size-boundary",
+		EnvelopeID:     "env-size-boundary",
+		Timestamp:      time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC),
+		ToolName:       "bash",
+		Decision:       domain.DecisionAllowed,
+		ActionTaken:    domain.ActionAllowed,
+		DecisionReason: "x",
+	}
+	if err := audit.StampProvenance(&tr, "v0.8.0-test", "sha256:"+strings.Repeat("a", 64)); err != nil {
+		t.Fatal(err)
+	}
+
+	marshalRehashed := func() []byte {
+		tr.TraceHash = ""
+		h, err := audit.ComputeCanonicalTraceHash(&tr)
+		if err != nil {
+			t.Fatalf("canonical hash: %v", err)
+		}
+		tr.TraceHash = h
+		b, err := json.Marshal(tr)
+		if err != nil {
+			t.Fatalf("marshal trace: %v", err)
+		}
+		return b
+	}
+
+	base := marshalRehashed()
+	if target < len(base) {
+		t.Fatalf("target %d is smaller than base trace %d", target, len(base))
+	}
+	tr.DecisionReason += strings.Repeat("x", target-len(base))
+	if got := len(marshalRehashed()); got != target {
+		t.Fatalf("sized trace length = %d, want %d", got, target)
+	}
 	return tr
 }
 
@@ -107,6 +371,37 @@ func TestOpenAuditLog_MiddleRecordBrokenLink_RefusesToStart(t *testing.T) {
 	}
 }
 
+func TestOpenAuditLog_DetachedSuffix_RefusesToStart(t *testing.T) {
+	dir := t.TempDir()
+	active := filepath.Join(dir, "decisions.jsonl")
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "pkg", "audit", "testdata", "v2-then-v070-hook.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := bytes.Split(bytes.TrimSpace(fixture), []byte{'\n'})
+	if len(lines) != 2 {
+		t.Fatalf("fixture lines = %d, want 2", len(lines))
+	}
+	if err := os.WriteFile(active, append(lines[1], '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	p := &proxy{auditPath: active, lastHash: "sha256:stale-from-prior-attempt"}
+	err = p.openAuditLog()
+	if err == nil {
+		if p.auditLog != nil {
+			_ = p.auditLog.Close()
+		}
+		t.Fatal("openAuditLog must refuse a detached suffix with a dangling previous hash")
+	}
+	if !strings.Contains(err.Error(), "genesis previous_trace_hash") {
+		t.Fatalf("detached-suffix error = %v, want genesis failure", err)
+	}
+	if p.lastHash != "" {
+		t.Fatalf("failed open retained untrusted lastHash %q", p.lastHash)
+	}
+}
+
 // TestOpenAuditLog_BrokenLinkAcrossRotationBoundary_RefusesToStart proves
 // the full-chain check walks the WHOLE rotation set (not just the active
 // file) — a break at the seam between a rotated sibling and the active
@@ -148,4 +443,201 @@ func TestOpenAuditLog_NoExistingFile_Starts(t *testing.T) {
 	if p.auditLog != nil {
 		_ = p.auditLog.Close()
 	}
+}
+
+func TestAppendTrace_ContinuesEOFTerminatedTail(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		useRotated bool
+	}{
+		{name: "active file"},
+		{name: "rotated tail with empty active", useRotated: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			active := filepath.Join(dir, "decisions.jsonl")
+			first := makeValidTrace("eof-tail", "", time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC))
+			firstLine, err := json.Marshal(first)
+			if err != nil {
+				t.Fatal(err)
+			}
+			seedPath := active
+			if tt.useRotated {
+				seedPath = active + ".1"
+				if err := os.WriteFile(active, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// The verifier accepts EOF as the final record terminator.
+			if err := os.WriteFile(seedPath, firstLine, 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			p := &proxy{auditPath: active, auditSyncMode: "none"}
+			if err := p.openAuditLog(); err != nil {
+				t.Fatalf("restart from EOF-terminated tail: %v", err)
+			}
+			if !p.auditNeedsSeparator {
+				t.Fatal("recovered EOF-terminated tail did not request a separator")
+			}
+			second := domain.DecisionTrace{
+				TraceID:     "after-restart",
+				EnvelopeID:  "env-after-restart",
+				Timestamp:   time.Date(2026, 8, 25, 12, 0, 1, 0, time.UTC),
+				Decision:    domain.DecisionAllowed,
+				ActionTaken: domain.ActionAllowed,
+			}
+			if err := p.appendTrace(&second); err != nil {
+				t.Fatalf("append after EOF-terminated tail: %v", err)
+			}
+			if p.auditNeedsSeparator {
+				t.Fatal("successful append did not clear separator state")
+			}
+			if err := p.auditLog.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			activeRaw, err := os.ReadFile(active)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p.auditCurrentBytes != int64(len(activeRaw)) {
+				t.Fatalf("audit byte accounting = %d, want active file size %d", p.auditCurrentBytes, len(activeRaw))
+			}
+			if tt.useRotated {
+				if len(activeRaw) == 0 || activeRaw[0] != '\n' {
+					t.Fatalf("active file does not begin with cross-rotation delimiter: %q", activeRaw)
+				}
+			} else if !bytes.Contains(activeRaw, []byte("}\n{")) {
+				t.Fatalf("active file has concatenated records: %q", activeRaw)
+			}
+
+			files, err := audit.RotationSetOldestFirst(active)
+			if err != nil {
+				t.Fatal(err)
+			}
+			readers := make([]io.Reader, 0, len(files))
+			var opened []*os.File
+			for _, path := range files {
+				f, err := os.Open(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				opened = append(opened, f)
+				readers = append(readers, f)
+			}
+			report, err := audit.VerifyChainFromReader(io.MultiReader(readers...))
+			for _, f := range opened {
+				_ = f.Close()
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !report.Intact || report.Records != 2 {
+				t.Fatalf("EOF-resumed proxy chain = %#v, want intact with 2 records", report)
+			}
+		})
+	}
+}
+
+func TestAppendTrace_RecordSizeBoundaryVerifyAndRestart(t *testing.T) {
+	t.Run("exact max", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "decisions.jsonl")
+		p := &proxy{auditPath: path, auditSyncMode: "none"}
+		if err := p.openAuditLog(); err != nil {
+			t.Fatalf("open audit log: %v", err)
+		}
+		trace := makeSizedProxyTrace(t, audit.MaxTraceRecordBytes)
+		if err := p.appendTrace(&trace); err != nil {
+			t.Fatalf("append exact-max record: %v", err)
+		}
+		if err := p.auditLog.Close(); err != nil {
+			t.Fatalf("close audit log: %v", err)
+		}
+		st, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.Size() != int64(audit.MaxTraceRecordBytes+1) {
+			t.Fatalf("audit file size = %d, want record plus LF = %d", st.Size(), audit.MaxTraceRecordBytes+1)
+		}
+
+		f, err := os.Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		report, verifyErr := audit.VerifyChainFromReader(f)
+		_ = f.Close()
+		if verifyErr != nil {
+			t.Fatalf("verify exact-max record: %v", verifyErr)
+		}
+		if !report.Intact || report.Records != 1 {
+			t.Fatalf("exact-max report = %#v, want intact one-record chain", report)
+		}
+
+		restarted := &proxy{auditPath: path, auditSyncMode: "none"}
+		if err := restarted.openAuditLog(); err != nil {
+			t.Fatalf("restart after exact-max record: %v", err)
+		}
+		defer restarted.auditLog.Close()
+		if restarted.lastHash != trace.TraceHash {
+			t.Fatalf("recovered tail = %q, want %q", restarted.lastHash, trace.TraceHash)
+		}
+	})
+
+	t.Run("max plus one is rejected without poisoning the chain", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "decisions.jsonl")
+		p := &proxy{auditPath: path, auditSyncMode: "none"}
+		if err := p.openAuditLog(); err != nil {
+			t.Fatalf("open audit log: %v", err)
+		}
+		tooLarge := makeSizedProxyTrace(t, audit.MaxTraceRecordBytes+1)
+		if err := p.appendTrace(&tooLarge); err == nil || !strings.Contains(err.Error(), "maximum") {
+			t.Fatalf("append max+1 error = %v, want record-size rejection", err)
+		}
+		st, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.Size() != 0 || p.lastHash != "" || p.auditCurrentBytes != 0 {
+			t.Fatalf("rejected append mutated chain: size=%d lastHash=%q currentBytes=%d", st.Size(), p.lastHash, p.auditCurrentBytes)
+		}
+
+		small := domain.DecisionTrace{
+			TraceID:     "trc-after-rejection",
+			EnvelopeID:  "env-after-rejection",
+			Timestamp:   time.Date(2026, 8, 25, 0, 0, 1, 0, time.UTC),
+			ToolName:    "bash",
+			Decision:    domain.DecisionAllowed,
+			ActionTaken: domain.ActionAllowed,
+		}
+		if err := p.appendTrace(&small); err != nil {
+			t.Fatalf("append after rejected oversized record: %v", err)
+		}
+		if err := p.auditLog.Close(); err != nil {
+			t.Fatalf("close audit log: %v", err)
+		}
+
+		f, err := os.Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		report, verifyErr := audit.VerifyChainFromReader(f)
+		_ = f.Close()
+		if verifyErr != nil {
+			t.Fatalf("verify chain after rejection: %v", verifyErr)
+		}
+		if !report.Intact || report.Records != 1 {
+			t.Fatalf("post-rejection report = %#v, want intact one-record chain", report)
+		}
+
+		restarted := &proxy{auditPath: path, auditSyncMode: "none"}
+		if err := restarted.openAuditLog(); err != nil {
+			t.Fatalf("restart after rejected oversized record: %v", err)
+		}
+		defer restarted.auditLog.Close()
+		if restarted.lastHash != small.TraceHash {
+			t.Fatalf("recovered tail = %q, want %q", restarted.lastHash, small.TraceHash)
+		}
+	})
 }

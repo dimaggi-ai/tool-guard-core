@@ -54,7 +54,25 @@ func (v *ChainVerifier) VerifySession(ctx context.Context, sessionID string) (*V
 	}
 
 	previousHash := ""
+	highestVersionRank := 0
+	highestVersion := ""
 	for i, trace := range traces {
+		version := effectiveCanonicalTraceVersion(trace)
+		if rank, known := canonicalTraceVersionRank(version); known {
+			if rank < highestVersionRank {
+				result.Valid = false
+				result.Errors = append(result.Errors, VerifyError{
+					TraceID: trace.TraceID,
+					Index:   i,
+					Message: fmt.Sprintf("canonical version downgrade from %s to %s", highestVersion, version),
+				})
+			}
+			if rank > highestVersionRank {
+				highestVersionRank = rank
+				highestVersion = version
+			}
+		}
+
 		// Recompute the canonical hash (covers every decision field).
 		// Single-path verification: no legacy-hash fallback because
 		// that would let an attacker forge decision_reason /

@@ -3,10 +3,15 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/dimaggi-ai/tool-guard-core/pkg/audit"
+	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
+	"github.com/dimaggi-ai/tool-guard-core/pkg/engine"
 )
 
 // hookDecision decodes the JSON written to stdout by runHook and returns
@@ -98,6 +103,23 @@ rules:
     citation: {document_id: d, excerpt: "unreachable"}
 `
 
+const hookAmountPolicy = `policy_id: hook-amount-test
+name: hook-amount-test
+version: 1
+status: approved
+mode: enforcement
+scope:
+  tool_names: [issue_refund]
+rules:
+  - rule_id: deny-over-cap
+    conditions:
+      field: amount
+      operator: gt
+      value: 500
+    effect: deny
+    citation: {document_id: d, excerpt: "refund cap"}
+`
+
 func writeHookPolicy(t *testing.T, content string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -167,6 +189,213 @@ func TestHook_ShadowMode_ObservesDoesNotEnforce(t *testing.T) {
 	}
 	if d := hookDecision(t, out); d != "allow" {
 		t.Errorf("shadow mode must never block — expected allow (near-miss observed, not enforced), got %q; output=%s", d, out)
+	}
+}
+
+func TestHook_ShadowPolicyAuditPreservesEvaluation(t *testing.T) {
+	shadowDenyPolicy := strings.Replace(hookDenyPolicy, "mode: enforcement", "mode: shadow", 1)
+	pol := writeHookPolicy(t, shadowDenyPolicy)
+	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
+	stdin := `{"tool_name":"bash","tool_input":{"command":"rm -rf /tmp/x"}}`
+	out, code := runHookStr(t, stdin, "-policy", pol, "-audit-log", auditPath)
+	if code != 0 {
+		t.Fatalf("hook must always exit 0, got %d", code)
+	}
+	if d := hookDecision(t, out); d != "allow" {
+		t.Fatalf("shadow policy must not block; permission decision = %q, output=%s", d, out)
+	}
+
+	raw, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatalf("read hook audit: %v", err)
+	}
+	var trace domain.DecisionTrace
+	if err := json.Unmarshal(bytes.TrimSpace(raw), &trace); err != nil {
+		t.Fatalf("decode hook audit: %v\n%s", err, raw)
+	}
+	if trace.Decision != domain.DecisionDenied || trace.ActionTaken != domain.ActionAllowedShadow {
+		t.Fatalf("audit outcome = decision %q action %q, want denied/allowed_shadow", trace.Decision, trace.ActionTaken)
+	}
+	if trace.Mode != domain.PolicyModeShadow {
+		t.Errorf("audit mode = %q, want shadow", trace.Mode)
+	}
+	if trace.PoliciesMatched != 1 || trace.RulesEvaluated != 1 || trace.RulesTriggered != 1 {
+		t.Errorf("audit counts = policies:%d evaluated:%d triggered:%d, want 1/1/1", trace.PoliciesMatched, trace.RulesEvaluated, trace.RulesTriggered)
+	}
+	if len(trace.RuleResults) != 1 || !trace.RuleResults[0].Matched || trace.RuleResults[0].Effect != domain.EffectDeny {
+		t.Fatalf("audit rule results did not preserve shadow deny: %#v", trace.RuleResults)
+	}
+	if trace.PrimaryCitation == nil || trace.PrimaryCitation.Excerpt != "no rm" {
+		t.Fatalf("audit primary citation = %#v, want shadow rule citation", trace.PrimaryCitation)
+	}
+	if len(trace.AppliedRuleResults) != 0 || trace.AppliedPrimaryCitation != nil {
+		t.Fatalf("shadow-only audit must not claim applied rule provenance: rules=%#v citation=%#v", trace.AppliedRuleResults, trace.AppliedPrimaryCitation)
+	}
+	if !trace.IsNearMiss {
+		t.Error("shadow deny audit must retain is_near_miss=true")
+	}
+	if ok, err := audit.VerifyCanonicalTraceHash(&trace); err != nil || !ok {
+		t.Fatalf("hook audit hash invalid: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestHook_AuditPreservesHashBoundAmount(t *testing.T) {
+	pol := writeHookPolicy(t, hookAmountPolicy)
+	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
+	stdin := `{"tool_name":"issue_refund","tool_input":{"amount":750}}`
+	out, code := runHookStr(t, stdin, "-policy", pol, "-audit-log", auditPath)
+	if code != 0 || hookDecision(t, out) != "deny" {
+		t.Fatalf("amount hook result: code=%d output=%s", code, out)
+	}
+
+	raw, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var trace domain.DecisionTrace
+	if err := json.Unmarshal(bytes.TrimSpace(raw), &trace); err != nil {
+		t.Fatalf("decode hook audit: %v", err)
+	}
+	if trace.Amount != 750 {
+		t.Fatalf("audit amount = %v, want 750", trace.Amount)
+	}
+	if trace.AmountParseStatus != engine.AmountParseOK {
+		t.Fatalf("audit amount status = %q, want %q", trace.AmountParseStatus, engine.AmountParseOK)
+	}
+	report, err := audit.VerifyChainFromReader(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Intact || report.Records != 1 {
+		t.Fatalf("amount audit verification = %#v", report)
+	}
+	trace.Amount = 751
+	ok, err := audit.VerifyCanonicalTraceHash(&trace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("changing the evaluated amount did not break the canonical hash")
+	}
+}
+
+func TestHook_AuditBindsMalformedAmountFailClosedValue(t *testing.T) {
+	pol := writeHookPolicy(t, hookAmountPolicy)
+	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
+	stdin := `{"tool_name":"issue_refund","tool_input":{"amount":{"not":"a number"}}}`
+	out, code := runHookStr(t, stdin, "-policy", pol, "-audit-log", auditPath)
+	if code != 0 || hookDecision(t, out) != "deny" {
+		t.Fatalf("malformed amount hook result: code=%d output=%s", code, out)
+	}
+
+	raw, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var trace domain.DecisionTrace
+	if err := json.Unmarshal(bytes.TrimSpace(raw), &trace); err != nil {
+		t.Fatal(err)
+	}
+	if trace.Amount != 1e18 || trace.AmountParseStatus != engine.AmountParseInvalidFailClosed {
+		t.Fatalf("malformed amount provenance = amount:%v status:%q", trace.Amount, trace.AmountParseStatus)
+	}
+	ok, err := audit.VerifyCanonicalTraceHash(&trace)
+	if err != nil || !ok {
+		t.Fatalf("malformed amount trace verification: ok=%v err=%v", ok, err)
+	}
+	trace.AmountParseStatus = engine.AmountParseOK
+	ok, err = audit.VerifyCanonicalTraceHash(&trace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("changing malformed amount parse status did not break the hash")
+	}
+}
+
+func TestHook_AuditPreservesNegativeZeroAcrossRestart(t *testing.T) {
+	pol := writeHookPolicy(t, hookAmountPolicy)
+	for _, tt := range []struct {
+		name       string
+		amountJSON string
+	}{
+		{name: "number", amountJSON: `-0`},
+		{name: "string", amountJSON: `"-0"`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
+			stdin := `{"tool_name":"issue_refund","tool_input":{"amount":` + tt.amountJSON + `}}`
+			out, code := runHookStr(t, stdin, "-policy", pol, "-audit-log", auditPath)
+			if code != 0 || hookDecision(t, out) != "allow" {
+				t.Fatalf("negative-zero hook result: code=%d output=%s", code, out)
+			}
+
+			raw, err := os.ReadFile(auditPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Contains(raw, []byte(`"amount":-0`)) {
+				t.Fatalf("serialized trace did not preserve negative zero: %s", raw)
+			}
+			var trace domain.DecisionTrace
+			if err := json.Unmarshal(bytes.TrimSpace(raw), &trace); err != nil {
+				t.Fatal(err)
+			}
+			if !math.Signbit(trace.Amount) || trace.AmountParseStatus != engine.AmountParseOK {
+				t.Fatalf("negative-zero provenance = amount:%v signbit:%v status:%q", trace.Amount, math.Signbit(trace.Amount), trace.AmountParseStatus)
+			}
+			report, err := audit.VerifyChainFromReader(bytes.NewReader(raw))
+			if err != nil || !report.Intact || report.Records != 1 {
+				t.Fatalf("negative-zero audit verification = %#v, err=%v", report, err)
+			}
+
+			// A second hook process must recover the first record as its tail and
+			// append a linked record instead of rejecting the log as poisoned.
+			next := `{"tool_name":"issue_refund","tool_input":{"amount":1}}`
+			out, code = runHookStr(t, next, "-policy", pol, "-audit-log", auditPath)
+			if code != 0 || hookDecision(t, out) != "allow" {
+				t.Fatalf("hook restart result: code=%d output=%s", code, out)
+			}
+			raw, err = os.ReadFile(auditPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			report, err = audit.VerifyChainFromReader(bytes.NewReader(raw))
+			if err != nil || !report.Intact || report.Records != 2 {
+				t.Fatalf("negative-zero audit after restart = %#v, err=%v", report, err)
+			}
+		})
+	}
+}
+
+func TestHook_MixedModeReasonUsesAppliedEnforcementCitation(t *testing.T) {
+	policyDir := t.TempDir()
+	shadow := strings.Replace(hookDenyPolicy, "policy_id: hook-deny-test", "policy_id: hook-shadow-deny", 1)
+	shadow = strings.Replace(shadow, "version: 1", "version: 1\npriority: 1", 1)
+	shadow = strings.Replace(shadow, "mode: enforcement", "mode: shadow", 1)
+	shadow = strings.Replace(shadow, `excerpt: "no rm"`, `excerpt: "shadow telemetry"`, 1)
+	enforced := strings.Replace(hookAskPolicy, "policy_id: hook-ask-test", "policy_id: hook-enforced-escalate", 1)
+	enforced = strings.Replace(enforced, "version: 1", "version: 1\npriority: 2", 1)
+	enforced = strings.Replace(enforced, "value: 'git'", "value: 'rm'", 1)
+	enforced = strings.Replace(enforced, `excerpt: "git needs review"`, `excerpt: "enforcement approval"`, 1)
+	if err := os.WriteFile(filepath.Join(policyDir, "00-shadow.yaml"), []byte(shadow), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(policyDir, "10-enforcement.yaml"), []byte(enforced), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stdin := `{"tool_name":"bash","tool_input":{"command":"rm -rf /tmp/x"}}`
+	out, code := runHookStr(t, stdin, "-policy-dir", policyDir)
+	if code != 0 {
+		t.Fatalf("hook must always exit 0, got %d", code)
+	}
+	decision, reason := hookDecisionReason(t, out)
+	if decision != "ask" {
+		t.Fatalf("permission decision = %q, want ask; output=%s", decision, out)
+	}
+	if reason != "enforcement approval" {
+		t.Fatalf("permission reason = %q, want applied enforcement citation; output=%s", reason, out)
 	}
 }
 

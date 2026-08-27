@@ -1,0 +1,16 @@
+{
+  "name": "shadow_policy_under_enforcement_callsite",
+  "description": "A policy staged in YAML shadow mode remains telemetry under the default enforcement call site.",
+  "policy_file": "fixtures/refund_cap_shadow.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "issue_refund",
+    "tool_group": "monetary_outflow",
+    "parameters": {"amount": 750}
+  },
+  "expect": {
+    "decision": "denied",
+    "action_taken": "allowed_shadow",
+    "matched_rule_ids": ["rule-amount-cap"]
+  }
+}

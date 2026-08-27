@@ -40,15 +40,23 @@ func (p *proxy) reload() error {
 		}
 		loaded = append(loaded, pol)
 	}
+	if err := engine.ValidatePolicySet(loaded); err != nil {
+		return fmt.Errorf("validate policy set: %w", err)
+	}
 	// Pre-warm the regex compile cache so the first /evaluate call
 	// for any newly-loaded policy doesn't pay compile latency. This
 	// also surfaces a regex that ValidatePolicy accepted but Go's
 	// regexp.Compile would have rejected (shouldn't happen — they
 	// share the same engine — but defence in depth).
 	engine.PrewarmRegexCache(loaded)
+	policySetHash, err := policyload.PolicySetHash(loaded)
+	if err != nil {
+		return fmt.Errorf("hash loaded policy set: %w", err)
+	}
 
 	p.mu.Lock()
 	p.policies = loaded
+	p.policySetHash = policySetHash
 	p.mu.Unlock()
 	p.loadCount.Add(1)
 	return nil

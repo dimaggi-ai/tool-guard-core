@@ -3,6 +3,7 @@ package audit
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -165,6 +166,48 @@ func TestChainVerifier_BrokenChainLink(t *testing.T) {
 	}
 	if !foundChainBreak {
 		t.Error("should report chain link broken error")
+	}
+}
+
+func TestChainVerifier_RejectsCanonicalVersionDowngrade(t *testing.T) {
+	store := newMockChainStore()
+	base := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	v2 := makeTrace("v2", "env-v2", "", base)
+	v2.SessionID = "downgrade"
+	if err := StampProvenance(&v2, "v0.8.0-test", "sha256:"+strings.Repeat("a", 64)); err != nil {
+		t.Fatal(err)
+	}
+	v2Hash, err := ComputeCanonicalTraceHash(&v2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2.TraceHash = v2Hash
+
+	v1 := makeTrace("v1", "env-v1", v2.TraceHash, base.Add(time.Second))
+	v1.SessionID = "downgrade"
+	v1Hash, err := ComputeCanonicalTraceHash(&v1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v1.TraceHash = v1Hash
+	store.addTrace("downgrade", &v2)
+	store.addTrace("downgrade", &v1)
+
+	result, err := NewChainVerifier(store).VerifySession(context.Background(), "downgrade")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Valid {
+		t.Fatal("v2-to-v1 downgrade reported as valid")
+	}
+	found := false
+	for _, verifyErr := range result.Errors {
+		if verifyErr.Index == 1 && verifyErr.Message == "canonical version downgrade from v2 to v1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("verification errors = %#v, want version downgrade at index 1", result.Errors)
 	}
 }
 

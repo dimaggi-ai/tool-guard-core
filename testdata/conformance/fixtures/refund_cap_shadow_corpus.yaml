@@ -1,0 +1,24 @@
+schema_version: 1
+policy_id: conformance-refund-shadow
+name: conformance-refund-shadow
+description: Shadow policy used to pin decision versus action behavior in the public corpus.
+version: 1
+status: approved
+mode: shadow
+
+scope:
+  tool_names: [issue_refund]
+
+rules:
+  - rule_id: shadow-amount-cap
+    name: shadow refund amount cap
+    rule_type: conformance
+    conditions:
+      field: amount
+      operator: gt
+      value: 500
+    effect: deny
+    citation:
+      document_id: CONFORMANCE-SHADOW
+      section: "1"
+      excerpt: "A matched shadow deny records a denied decision while allowing the action."

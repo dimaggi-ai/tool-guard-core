@@ -5,9 +5,53 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 )
+
+// MaxTraceRecordBytes is the largest JSONL decision-trace record accepted by
+// the streaming verifier. Writers that recover a chain tail should use the
+// same bound so they never append after a record the verifier cannot replay.
+const MaxTraceRecordBytes = 4 * 1024 * 1024
+
+// MaxTraceRecordScanBytes includes delimiter headroom for scanners. Two bytes
+// cover both the LF emitted by Tool Guard and CRLF input produced by Windows
+// tooling; callers still enforce MaxTraceRecordBytes on the logical record.
+const MaxTraceRecordScanBytes = MaxTraceRecordBytes + 2
+
+// NeedsRecordSeparator reports whether a JSONL writer must prefix its next
+// record with LF. VerifyChainFromReader accepts a final record terminated by
+// EOF, so a writer that resumes such a valid chain must add the missing
+// delimiter before appending another object. ReadAt preserves the file offset.
+func NeedsRecordSeparator(f *os.File) (bool, error) {
+	st, err := f.Stat()
+	if err != nil {
+		return false, err
+	}
+	if st.Size() == 0 {
+		return false, nil
+	}
+	var last [1]byte
+	if _, err := f.ReadAt(last[:], st.Size()-1); err != nil {
+		return false, err
+	}
+	return last[0] != '\n', nil
+}
+
+// MarshalTraceRecord serializes one JSONL record and enforces the same logical
+// record ceiling as VerifyChainFromReader. All audit writers use this helper so
+// none can create a chain that the verifier cannot replay.
+func MarshalTraceRecord(trace *domain.DecisionTrace) ([]byte, error) {
+	raw, err := json.Marshal(trace)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > MaxTraceRecordBytes {
+		return nil, fmt.Errorf("audit record is %d bytes; maximum is %d", len(raw), MaxTraceRecordBytes)
+	}
+	return raw, nil
+}
 
 // StreamReport is the result of a streaming chain verification.
 //
@@ -33,9 +77,12 @@ type StreamReport struct {
 //
 // Verification rules:
 //   - Each line must be a valid JSON DecisionTrace.
-//   - For line N>1, trace.PreviousTraceHash must equal line N-1's TraceHash.
-//   - trace.TraceHash must equal ComputeCanonicalTraceHash(...) with the canonical
-//     fields of this record.
+//   - The first record must be a genesis record with an empty
+//     PreviousTraceHash. Verifying an intentionally detached suffix requires
+//     a separate trusted-anchor protocol; this verifier never assumes one.
+//   - For record N>1, trace.PreviousTraceHash must equal record N-1's TraceHash.
+//   - trace.TraceHash must equal ComputeCanonicalTraceHash(...) with this
+//     record version's canonical field projection.
 //
 // On the first violation the report's Intact is false, FirstFailureAt
 // pins the line, and FailureReason explains why. The function still
@@ -46,14 +93,19 @@ func VerifyChainFromReader(r io.Reader) (*StreamReport, error) {
 	// the scanner's per-line ceiling so big-but-valid records are not
 	// silently truncated. 4 MiB is comfortably above a realistic trace.
 	buf := make([]byte, 0, 1<<20)
-	sc.Buffer(buf, 4*1024*1024)
+	sc.Buffer(buf, MaxTraceRecordScanBytes)
 
 	rep := &StreamReport{Intact: true}
 	var prevHash string
+	highestVersionRank := 0
+	highestVersion := ""
 	line := 0
 	for sc.Scan() {
 		line++
 		raw := sc.Bytes()
+		if len(raw) > MaxTraceRecordBytes {
+			return failAt(rep, line, fmt.Sprintf("record exceeds %d bytes", MaxTraceRecordBytes)), nil
+		}
 		if len(raw) == 0 {
 			continue
 		}
@@ -63,14 +115,29 @@ func VerifyChainFromReader(r io.Reader) (*StreamReport, error) {
 			return failAt(rep, line, fmt.Sprintf("parse JSON: %v", err)), nil
 		}
 
+		version := effectiveCanonicalTraceVersion(&t)
+		if rank, known := canonicalTraceVersionRank(version); known {
+			if rank < highestVersionRank {
+				return failAt(rep, line, fmt.Sprintf("canonical version downgrade from %s to %s", highestVersion, version)), nil
+			}
+			if rank > highestVersionRank {
+				highestVersionRank = rank
+				highestVersion = version
+			}
+		}
+
 		if rep.Records == 0 {
 			rep.FirstTraceID = t.TraceID
+			if t.PreviousTraceHash != "" {
+				return failAt(rep, line, fmt.Sprintf("genesis previous_trace_hash must be empty, got %q", t.PreviousTraceHash)), nil
+			}
 		} else if t.PreviousTraceHash != prevHash {
 			return failAt(rep, line, fmt.Sprintf("previous_trace_hash %q does not match prior tail %q", t.PreviousTraceHash, prevHash)), nil
 		}
 
-		// Recompute the canonical hash over the WHOLE trace (rule
-		// results, decision_reason, agent identity, amount). No
+		// Recompute the canonical hash over the versioned projection (rule
+		// results, decision_reason, agent identity, amount, and v2 applied
+		// provenance). No
 		// legacy-hash fallback: a 6-field hash covers only identity
 		// + decision, so an attacker who knows the verifier accepts
 		// legacy could forge decision_reason / rule_results /

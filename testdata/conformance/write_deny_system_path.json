@@ -7,5 +7,5 @@
     "tool_name": "write",
     "parameters": {"path": "/etc/passwd", "content": "malicious content"}
   },
-  "expect": {"decision": "denied", "action_taken": "denied"}
+  "expect": {"decision": "denied", "action_taken": "denied", "matched_rule_ids": ["rule-write-surface"]}
 }

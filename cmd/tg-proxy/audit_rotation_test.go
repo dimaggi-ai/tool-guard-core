@@ -44,12 +44,15 @@ func TestRecoverAuditTail_AfterRotation(t *testing.T) {
 		}
 	}
 
-	last, sawAny, err := p.recoverAuditTail()
+	last, sawAny, needsSeparator, err := p.recoverAuditTail()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !sawAny {
 		t.Fatal("recoverAuditTail found nothing; should have read the rotated tail")
+	}
+	if needsSeparator {
+		t.Fatal("newline-terminated rotated tail unexpectedly needs a separator")
 	}
 	if last.TraceID != "trc-3" {
 		t.Fatalf("recovered tail = %q, want trc-3 (last record of newest non-empty file)", last.TraceID)
@@ -61,11 +64,14 @@ func TestRecoverAuditTail_AfterRotation(t *testing.T) {
 func TestRecoverAuditTail_NoFiles(t *testing.T) {
 	dir := t.TempDir()
 	p := &proxy{auditPath: filepath.Join(dir, "decisions.jsonl")}
-	_, sawAny, err := p.recoverAuditTail()
+	_, sawAny, needsSeparator, err := p.recoverAuditTail()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if sawAny {
 		t.Fatal("recoverAuditTail should find nothing on a fresh install")
+	}
+	if needsSeparator {
+		t.Fatal("fresh install unexpectedly needs a separator")
 	}
 }

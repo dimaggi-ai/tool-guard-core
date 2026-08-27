@@ -1,0 +1,18 @@
+{
+  "name": "refund_cap_strict_allow_process_return",
+  "description": "The strict policy's sibling process_return tool remains allowed below the cap with a consistent reason.",
+  "policy_file": "../../policies/refund_cap_strict.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "process_return",
+    "tool_group": "monetary_outflow",
+    "parameters": {
+      "amount": 250,
+      "reason": "standard return"
+    }
+  },
+  "expect": {
+    "decision": "allowed",
+    "action_taken": "allowed"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "name": "floor_irreversible_cannot_be_overridden",
+  "description": "An explicit allow policy matches the same irreversible wire, but max-severity composition preserves the floor escalation.",
+  "policy_files": [
+    "../../policies/irreversibility_floor.yaml",
+    "fixtures/allow_all.yaml"
+  ],
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "wire_funds",
+    "tool_group": "monetary_outflow",
+    "parameters": {
+      "amount": 100
+    }
+  },
+  "expect": {
+    "decision": "escalated",
+    "action_taken": "escalated",
+    "matched_rule_ids": [
+      "fixture-allow-all",
+      "rule-irreversible-escalate"
+    ]
+  }
+}

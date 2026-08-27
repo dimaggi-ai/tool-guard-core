@@ -9,5 +9,5 @@
     "parameters": {"amount": 50},
     "context": {"verified": {"agent_velocity": {"monetary_sum_1h": 100, "monetary_count_24h": 101}}}
   },
-  "expect": {"decision": "escalated", "action_taken": "escalated"}
+  "expect": {"decision": "escalated", "action_taken": "escalated", "matched_rule_ids": ["rule-refund-24h-count"]}
 }

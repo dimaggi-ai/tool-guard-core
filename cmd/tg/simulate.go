@@ -17,8 +17,8 @@ import (
 )
 
 // cmdSimulate is the batch dry-run: evaluate a whole policy set against a
-// JSONL stream of envelopes and report the decision breakdown plus a
-// per-rule fire count. It lets a policy author answer "what would this
+// JSONL stream of envelopes and report both raw decisions and applied actions,
+// plus a per-rule fire count. It lets a policy author answer "what would this
 // policy set do to yesterday's traffic?" BEFORE deploying — the same
 // question the internal simulator answers, minus any product coupling.
 //
@@ -28,9 +28,10 @@ import (
 // Exit codes:
 //
 //	0  simulation ran (default)
-//	3  simulation ran AND at least one call denied, with -fail-on-deny set
+//	3  simulation ran AND at least one applied action was denied, with -fail-on-deny set
 //	   (lets CI gate a policy change that would start denying real traffic)
-//	1  internal error   2  usage error
+//	1  internal/input error (including an empty or malformed corpus under -fail-on-deny)
+//	2  usage error
 func cmdSimulate(args []string) int {
 	fs := flag.NewFlagSet("simulate", flag.ExitOnError)
 	policyDir := fs.String("policy-dir", "", "directory of *.yaml/*.yml policies to load (mutually exclusive with -policy)")
@@ -39,7 +40,7 @@ func cmdSimulate(args []string) int {
 	modeStr := fs.String("mode", "enforcement", "shadow | enforcement")
 	asJSON := fs.Bool("json", false, "emit the summary as JSON instead of a table")
 	examples := fs.Int("examples", 3, "show up to N example envelope_ids per non-allow decision (table mode)")
-	failOnDeny := fs.Bool("fail-on-deny", false, "exit 3 if any call is denied (useful in CI)")
+	failOnDeny := fs.Bool("fail-on-deny", false, "fail on an empty or malformed corpus, or exit 3 if any applied action is denied (shadow-only denies do not fail; useful in CI)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -86,8 +87,9 @@ func cmdSimulate(args []string) int {
 	ev := engine.NewEvaluator()
 	sum := simSummary{
 		decisions: map[domain.Decision]int{},
-		ruleFires: map[string]int{},
-		byRuleEff: map[string]domain.Effect{},
+		actions:   map[domain.ActionTaken]int{},
+		ruleFires: map[simRuleKey]int{},
+		byRuleEff: map[simRuleKey]domain.Effect{},
 		examples:  map[domain.Decision][]string{},
 	}
 
@@ -100,7 +102,7 @@ func cmdSimulate(args []string) int {
 		if raw == "" {
 			continue
 		}
-		var env domain.ActionEnvelope
+		var env *domain.ActionEnvelope
 		if err := json.Unmarshal([]byte(raw), &env); err != nil {
 			sum.malformed++
 			if sum.firstErr == "" {
@@ -108,12 +110,20 @@ func cmdSimulate(args []string) int {
 			}
 			continue
 		}
+		if env == nil || strings.TrimSpace(env.ToolName) == "" {
+			sum.malformed++
+			if sum.firstErr == "" {
+				sum.firstErr = fmt.Sprintf("line %d: action envelope must be a non-null JSON object with a non-empty tool_name", line)
+			}
+			continue
+		}
 		if env.Timestamp.IsZero() {
 			env.Timestamp = time.Now().UTC()
 		}
-		res := ev.Evaluate(&env, policies, mode)
+		res := ev.Evaluate(env, policies, mode)
 		sum.total++
 		sum.decisions[res.Decision]++
+		sum.actions[res.ActionTaken]++
 		if res.Decision != domain.DecisionAllowed && len(sum.examples[res.Decision]) < *examples {
 			id := env.EnvelopeID
 			if id == "" {
@@ -123,8 +133,9 @@ func cmdSimulate(args []string) int {
 		}
 		for _, rr := range res.RuleResults {
 			if rr.Matched {
-				sum.ruleFires[rr.RuleID]++
-				sum.byRuleEff[rr.RuleID] = rr.Effect
+				key := simRuleKey{PolicyID: rr.PolicyID, PolicyVersion: rr.PolicyVersion, RuleID: rr.RuleID}
+				sum.ruleFires[key]++
+				sum.byRuleEff[key] = rr.Effect
 			}
 		}
 	}
@@ -139,8 +150,16 @@ func cmdSimulate(args []string) int {
 		sum.printTable(len(policies), *examples)
 	}
 
-	if *failOnDeny && sum.decisions[domain.DecisionDenied] > 0 {
-		return 3
+	if *failOnDeny {
+		if sum.malformed > 0 {
+			return 1
+		}
+		if sum.total == 0 {
+			return 1
+		}
+		if sum.actions[domain.ActionDenied] > 0 {
+			return 3
+		}
 	}
 	return 0
 }
@@ -172,7 +191,20 @@ func loadPolicySet(dir, file string) ([]domain.Policy, error) {
 		}
 		out = append(out, pol)
 	}
+	if err := engine.ValidatePolicySet(out); err != nil {
+		return nil, fmt.Errorf("validate policy set: %w", err)
+	}
 	return out, nil
+}
+
+type simRuleKey struct {
+	PolicyID      string
+	PolicyVersion int
+	RuleID        string
+}
+
+func (k simRuleKey) label() string {
+	return fmt.Sprintf("%s@v%d/%s", k.PolicyID, k.PolicyVersion, k.RuleID)
 }
 
 type simSummary struct {
@@ -180,14 +212,20 @@ type simSummary struct {
 	malformed int
 	firstErr  string
 	decisions map[domain.Decision]int
-	ruleFires map[string]int
-	byRuleEff map[string]domain.Effect
+	actions   map[domain.ActionTaken]int
+	ruleFires map[simRuleKey]int
+	byRuleEff map[simRuleKey]domain.Effect
 	examples  map[domain.Decision][]string
 }
 
 var simDecisionOrder = []domain.Decision{
 	domain.DecisionAllowed, domain.DecisionFlagged,
 	domain.DecisionEscalated, domain.DecisionDenied,
+}
+
+var simActionOrder = []domain.ActionTaken{
+	domain.ActionAllowed, domain.ActionAllowedShadow, domain.ActionFlagged,
+	domain.ActionEscalated, domain.ActionDenied,
 }
 
 func (s *simSummary) printTable(policyCount, exampleN int) {
@@ -197,6 +235,7 @@ func (s *simSummary) printTable(policyCount, exampleN int) {
 	}
 	fmt.Println()
 	fmt.Println(strings.Repeat("─", 48))
+	fmt.Println("  rule decisions (what policy logic concluded):")
 	for _, d := range simDecisionOrder {
 		n := s.decisions[d]
 		pct := 0.0
@@ -210,26 +249,36 @@ func (s *simSummary) printTable(policyCount, exampleN int) {
 			}
 		}
 	}
+	fmt.Println(strings.Repeat("─", 48))
+	fmt.Println("  applied actions (what would execute):")
+	for _, action := range simActionOrder {
+		n := s.actions[action]
+		pct := 0.0
+		if s.total > 0 {
+			pct = 100 * float64(n) / float64(s.total)
+		}
+		fmt.Printf("  %-14s %6d  %5.1f%%\n", action, n, pct)
+	}
 	if len(s.ruleFires) > 0 {
 		fmt.Println(strings.Repeat("─", 48))
-		fmt.Println("  rule fires (by rule_id):")
+		fmt.Println("  rule fires (by policy_id@version/rule_id):")
 		type rf struct {
-			id  string
+			key simRuleKey
 			n   int
 			eff domain.Effect
 		}
 		rows := make([]rf, 0, len(s.ruleFires))
-		for id, n := range s.ruleFires {
-			rows = append(rows, rf{id, n, s.byRuleEff[id]})
+		for key, n := range s.ruleFires {
+			rows = append(rows, rf{key, n, s.byRuleEff[key]})
 		}
 		sort.Slice(rows, func(i, j int) bool {
 			if rows[i].n != rows[j].n {
 				return rows[i].n > rows[j].n
 			}
-			return rows[i].id < rows[j].id
+			return rows[i].key.label() < rows[j].key.label()
 		})
 		for _, r := range rows {
-			fmt.Printf("    %-28s %6d  [%s]\n", r.id, r.n, r.eff)
+			fmt.Printf("    %-40s %6d  [%s]\n", r.key.label(), r.n, r.eff)
 		}
 	}
 	if s.firstErr != "" {
@@ -243,18 +292,45 @@ func (s *simSummary) printJSON(policyCount int) {
 	for d, n := range s.decisions {
 		decisions[string(d)] = n
 	}
-	rules := make([]map[string]any, 0, len(s.ruleFires))
-	for id, n := range s.ruleFires {
-		rules = append(rules, map[string]any{"rule_id": id, "fires": n, "effect": string(s.byRuleEff[id])})
+	actions := map[string]int{}
+	for action, n := range s.actions {
+		actions[string(action)] = n
+	}
+	type ruleFire struct {
+		PolicyID      string `json:"policy_id"`
+		PolicyVersion int    `json:"policy_version"`
+		RuleID        string `json:"rule_id"`
+		Fires         int    `json:"fires"`
+		Effect        string `json:"effect"`
+	}
+	rules := make([]ruleFire, 0, len(s.ruleFires))
+	for key, n := range s.ruleFires {
+		rules = append(rules, ruleFire{
+			PolicyID:      key.PolicyID,
+			PolicyVersion: key.PolicyVersion,
+			RuleID:        key.RuleID,
+			Fires:         n,
+			Effect:        string(s.byRuleEff[key]),
+		})
 	}
 	sort.Slice(rules, func(i, j int) bool {
-		return rules[i]["fires"].(int) > rules[j]["fires"].(int)
+		if rules[i].Fires != rules[j].Fires {
+			return rules[i].Fires > rules[j].Fires
+		}
+		if rules[i].PolicyID != rules[j].PolicyID {
+			return rules[i].PolicyID < rules[j].PolicyID
+		}
+		if rules[i].PolicyVersion != rules[j].PolicyVersion {
+			return rules[i].PolicyVersion < rules[j].PolicyVersion
+		}
+		return rules[i].RuleID < rules[j].RuleID
 	})
 	out := map[string]any{
 		"policies":   policyCount,
 		"total":      s.total,
 		"malformed":  s.malformed,
 		"decisions":  decisions,
+		"actions":    actions,
 		"rule_fires": rules,
 	}
 	if s.firstErr != "" {

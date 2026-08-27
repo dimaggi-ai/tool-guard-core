@@ -32,9 +32,9 @@ Requires **Go 1.25+**. No external services. No database.
 
 ## What we don't accept
 
-- Changes that loosen `pkg/audit/canonical.go` without bumping
-  `CanonicalTraceVersion`. Doing so silently breaks every evidence pack
-  produced under the old version.
+- Changes that edit an existing `canonicalTraceV<N>` shape or add canonical
+  fields without a new version and `CanonicalTraceVersion` bump. Doing so
+  silently breaks every evidence pack produced under the old version.
 - Refactors that drop existing tests. If a test is wrong, change the
   expectation and explain why in the commit message. Don't delete.
 - New operators in `pkg/domain/policy.go` without updating
@@ -57,7 +57,9 @@ Requires **Go 1.25+**. No external services. No database.
    triggering the new rule and asserts the finding.
 4. Add an entry in `cmd/tg/golden_test.go:TestGolden_AllLintRulesHaveStableNames`
    so the rule name is pinned against drift.
-5. Add the rule name to the README's lint section.
+5. Add the rule name to the table in `docs/creating-policies.md`. The
+   `TestDocsLintChecksMatchImplementation` drift guard checks the table and
+   stated count against the finding literals in `cmdLint` and `lintPolicy`.
 6. If the rule has `severity: error`, document the exit code (6)
    implication.
 

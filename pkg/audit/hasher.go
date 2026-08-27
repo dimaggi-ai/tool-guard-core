@@ -46,10 +46,9 @@ func VerifyTraceHash(traceID, envelopeID, decision, actionTaken string, timestam
 // is the integrity commitment the README and CHANGELOG promise.
 //
 // The canonical encoder includes the schema version (_canonical_v)
-// as the first hashed byte string, so a future v2 record replayed by
-// a v1 verifier hashes the v1 encoder's "v1" against the stored
-// "v2" — the explicit version check below produces a clearer error
-// than the resulting raw hash mismatch.
+// as the first hashed byte string. New records also persist that marker;
+// records without it are interpreted as historical v1. Unknown versions
+// fail explicitly instead of silently falling back to another hash shape.
 //
 // To compute the trace's own hash, set t.TraceHash to "" before
 // calling — the canonical encoder will then emit "" for that field,

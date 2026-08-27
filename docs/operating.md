@@ -162,7 +162,7 @@ The full flag list, copied from `tg-proxy -help`:
 -audit-sync-every int
     when audit-sync-mode=interval, fsync once every N appends (default 100)
 -audit-rotate-bytes int
-    rotate audit log when active file exceeds this many bytes
+    rotate a non-empty audit log before the next record would meet or exceed this many bytes
     (0 = never rotate)
 -rate-limit-rps float
     per-agent steady-state limit (req/s); 0 disables
@@ -243,7 +243,7 @@ boundary-deny trace in the audit chain so `tg verify` remains intact.
 | Endpoint | Returns |
 |---|---|
 | `GET /healthz` | 200 OK if the process is alive |
-| `GET /readyz` | 200 OK if at least one policy is loaded |
+| `GET /readyz` | 200 OK if policy requirements are met and the audit writer has not been poisoned |
 | `GET /policies` | JSON snapshot of loaded policy IDs (debugging) |
 | `GET /escalations` | JSON snapshot of pending+resolved escalations |
 
@@ -296,6 +296,19 @@ unreachable) log to stderr and increment the corresponding
    behaves as intended.
 5. Promote to enforcement (`mode: enforcement`).
 
+Policy mode is authoritative for that policy's contribution. This makes step 4
+safe under the proxy's default call-site mode:
+
+| Policy YAML | Call-site mode | Matching deny/escalate |
+|---|---|---|
+| `shadow` | `shadow` | observed as `allowed_shadow` |
+| `shadow` | `enforcement` | observed as `allowed_shadow` |
+| `enforcement` | `shadow` | enforced |
+| `enforcement` | `enforcement` | enforced |
+
+With multiple policies, enforcement-policy effects are resolved separately and
+still apply. A shadow policy can never cancel an enforcement policy's gate.
+
 ### Deploying
 
 Drop the new file into `-policy-dir` and either restart the proxy
@@ -322,9 +335,17 @@ append-only ledger:
   (ext4, xfs, zfs, btrfs all fine). The proxy uses `O_APPEND`
   which is atomic at the page level.
 - **Rotation** - `-audit-rotate-bytes` rotates the active file
-  when it crosses the cap. Rotated files are named
+  before the next trace would make a non-empty active file meet or exceed the
+  cap. A single record larger than the cap remains intact and rotates before
+  the following append. Rotated files are named
   `<auditPath>.1`, `<auditPath>.2`, ... `tg verify` reads the
-  rotation set in order.
+  rotation set in order. Rotation durably flushes the rename and replacement
+  active-file metadata before completing. If that barrier fails after the
+  on-disk topology changes, the writer is poisoned and `/readyz` remains 503
+  until an operator preserves, repairs, and verifies the complete set before
+  restarting. Retain the complete set: its oldest record must be the genesis
+  record with an empty `previous_trace_hash`. A detached suffix is rejected
+  unless a future trusted-anchor protocol explicitly validates its predecessor.
 - **Off-host backup** - `cron` an rsync to a separate host every
   hour. The hash chain links across rotations, so `tg verify` on
   the backup is the same operation as on the live host.
@@ -332,6 +353,10 @@ append-only ledger:
   it returns `intact: false` with `exit 5`, you have an
   on-disk-tamper or a corrupted write. Stop the proxy (`tg-proxy`
   refuses to start with a tampered tail anyway) and triage.
+- **External pipelines** - use `tg export -file <audit-path> --format
+  jsonl` to stream an integrity-checked snapshot, including rotated
+  siblings, into a standard JSONL consumer. Time, policy, and action
+  filters are documented in [Exporting audit records](audit-export.md).
 
 ### Disaster recovery
 
@@ -351,10 +376,53 @@ hashed and chained correctly), not fail-recoverable.
 
 ## Upgrade path
 
-Tool Guard follows semver. Between minor versions the canonical
-trace schema is locked at `CanonicalTraceVersion = v1`. A future
-v2 schema bump will be opt-in via build flag; existing v1 chains
-will remain `tg verify`-able forever.
+Tool Guard follows semver and is still pre-1.0. Version 0.8.0 contains
+explicitly documented mode-precedence, policy-identity, Go API, and
+audit-format migrations. For the Go API change, replace direct reads or writes
+of the removed mutable `engine.LLMClassifyHook` variable with
+`engine.GetLLMClassifyHook()` or `engine.SetLLMClassifyHook()`; the synchronized
+accessors preserve the hook signature and avoid races with concurrent
+evaluation. For the audit migration, new writers stamp
+`CanonicalTraceVersion = v2` so the raw decision and applied-action provenance
+are both bound by the canonical hash. V2 also binds `engine_version`, a
+deterministic `policy_set_hash`, and `schema_version`. The policy digest is
+computed from strictly decoded, defaulted policy objects; YAML comments,
+whitespace, filenames, and file order do not change it. Canonical v1 remains
+byte-identical;
+records written before the on-record `_canonical_v` marker are interpreted by
+the v1 encoder, and the 0.8 verifier accepts mixed v1/v2 chains.
+
+Canonical versions are monotonic within a chain: v1 to v2 is accepted, while
+v2 to v1 is rejected. A 0.7 verifier cannot read a v2 record, so a 0.7 proxy
+cannot resume a chain whose tail is v2. The 0.7 hook does not verify the tail
+before writing and can physically append a markerless v1 record after v2; the
+0.8 verifier rejects that downgrade, so the append does not constitute valid
+resumption. This intentionally supersedes the 0.7 documentation that described
+a future v2 writer as opt-in. Defaulting to v1 would either omit the
+applied-action attribution or record it outside the integrity commitment,
+which is not a safe default.
+
+The 0.8 verifier also requires the first record across the complete active
+file and rotation set to have an empty `previous_trace_hash`. This detects
+prefix truncation instead of treating the surviving suffix as a new intact
+chain. Keep every rotated sibling when moving or restoring a chain; 0.8 has no
+trusted-anchor option for intentionally verifying a detached suffix.
+
+Before the first 0.8 writer appends to an existing chain:
+
+1. Quiesce every writer that shares the chain and back up the complete active
+   file plus its rotated siblings.
+2. Verify the backup with the existing 0.7 `tg verify` binary, then verify the
+   same bytes with the 0.8 binary. Both checks must pass before proceeding.
+3. Deploy the 0.8 verifier to every audit consumer, then upgrade every writer
+   for that chain as one coordinated change. Do not run mixed 0.7/0.8 writers.
+4. Resume traffic. The first new record is v2 and links to the existing v1
+   tail; subsequent `tg verify` runs must use 0.8 or newer.
+
+After a v2 record exists, do not roll a writer back to 0.7 against that log. An
+emergency downgrade requires either restoring the verified v1-only backup or
+starting a clearly documented new chain while preserving the v2 files as
+evidence; never truncate the original chain to make an old binary start.
 
 To upgrade:
 
@@ -371,6 +439,11 @@ To upgrade:
 3. Stop the old proxy.
 4. Start the new proxy. It resumes the chain from the same tail.
 
+After the first post-upgrade decision, inspect that record in isolation: its
+`engine_version` identifies the binary, `policy_set_hash` identifies the
+normalized set used for evaluation, and `schema_version` is `v2`. Removing or
+changing any of these values makes `tg verify` fail at that record.
+
 Migration steps for 0.6.0 → 0.7.0: remove any `deep_evaluation` block
 (move semantic checks to a rule with an `llm_classify` condition), split
 multi-document files into one file per policy, correct every
@@ -385,6 +458,7 @@ load.
 | Symptom | Likely cause | Action |
 |---|---|---|
 | Proxy refuses to start, "audit-log tail integrity check failed" | Audit log was tampered or corrupted | Run `tg verify` to locate the failure line; restore from backup; start with `-audit-log` pointing at the restored file |
+| `/readyz` returns 503 and reports a poisoned audit writer | An audit append failed and the proxy could not durably prove rollback to the pre-write boundary, or rotation changed the on-disk topology without completing its metadata barrier | Stop the proxy; preserve the log and complete rotation set for incident review; repair or restore the uncertain state; run `tg verify`; restart only after verification succeeds |
 | Proxy returns 503 on every `/evaluate` | `-fail-closed=true` and no policies loaded | Check `-policy-dir` exists and contains a valid `*.yaml` |
 | Every `llm_classify` rule times out | Ollama unreachable; check `-ollama_url` in policy or that Ollama is running on the configured endpoint | `curl http://localhost:11434/api/tags` |
 | Latency suddenly 10x worse | Cold-start of a freshly-pulled Ollama model | First call after model swap is ~5-20s; subsequent calls are ~600ms |

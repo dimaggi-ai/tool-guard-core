@@ -2,9 +2,10 @@
 
 ## What was built
 
-Full Python SDK (`toolguard` v0.1.0 — pre-1.0, never published; see
-`Development Status :: 4 - Beta` in `pyproject.toml`) for Tool Guard Core, shipped at
-`sdk/python/`.  Turns the doc-pattern-only LangChain/AutoGen/native
+Full Python SDK (`toolguard`, initially built as unpublished v0.1.0; PyPI
+distribution `toolguard-core` begins with the lockstep v0.8.0 release) for
+Tool Guard Core, shipped at `sdk/python/`. It turns the doc-pattern-only
+LangChain/AutoGen/native
 snippets in `docs/integration.md` into shipped, tested, importable code.
 
 ## File list
@@ -109,11 +110,11 @@ These are verbatim copies of the Go `json:"..."` struct tags from
 
 ## CLI backend details
 
-`tg evaluate` reads ONE policy YAML (`-policy`) and ONE envelope JSON
-(`-call`) per invocation — NOT stdin + -policy-dir as the spec described.
-The SDK writes the envelope to a temp file and evaluates against each
-`*.yaml` / `*.yml` in `policy_dir` independently, taking the most
-restrictive result (deny > escalate > flag > allow).
+`tg evaluate` reads one policy set (`-policy FILE` or `-policy-dir DIR`) and
+one envelope JSON (`-call`) per invocation. The SDK writes the envelope to a
+temp file and passes its configured policy file or directory to the Go engine
+in one call. Evaluating the complete set together preserves mixed
+shadow/enforcement behavior exactly instead of approximating it in Python.
 
 Exit-code contract (from `cmd/tg/main.go` cmdEvaluate):
 - `0` → allowed / allowed_shadow

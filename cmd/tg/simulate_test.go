@@ -1,8 +1,11 @@
 package main
 
 import (
+	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -36,6 +39,34 @@ func writeTemp(t *testing.T, name, content string) string {
 	return p
 }
 
+func captureSimulateOutput(t *testing.T, run func() int) (int, []byte) {
+	t.Helper()
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	type readResult struct {
+		out []byte
+		err error
+	}
+	done := make(chan readResult, 1)
+	go func() {
+		out, readErr := io.ReadAll(r)
+		done <- readResult{out: out, err: readErr}
+	}()
+	code := run()
+	_ = w.Close()
+	os.Stdout = oldStdout
+	read := <-done
+	_ = r.Close()
+	if read.err != nil {
+		t.Fatal(read.err)
+	}
+	return code, read.out
+}
+
 func TestSimulate_CountsDecisionsAndRuleFires(t *testing.T) {
 	pol := writeTemp(t, "pol.yaml", simPolicy)
 	calls := writeTemp(t, "calls.jsonl", simCalls)
@@ -55,6 +86,127 @@ func TestSimulate_JSONMode(t *testing.T) {
 	calls := writeTemp(t, "calls.jsonl", simCalls)
 	if code := cmdSimulate([]string{"-policy", pol, "-calls", calls, "-json"}); code != 0 {
 		t.Errorf("json simulate exit = %d, want 0", code)
+	}
+}
+
+func TestSimulate_ShadowDeniesAreReportedButDoNotFailAppliedActionGate(t *testing.T) {
+	shadowPolicy := strings.Replace(simPolicy, "mode: enforcement", "mode: shadow", 1)
+	pol := writeTemp(t, "shadow.yaml", shadowPolicy)
+	calls := writeTemp(t, "calls.jsonl", simCalls)
+
+	code, out := captureSimulateOutput(t, func() int {
+		return cmdSimulate([]string{"-policy", pol, "-calls", calls, "-json", "-fail-on-deny"})
+	})
+
+	if code != 0 {
+		t.Fatalf("shadow-only simulation must not fail the applied-deny gate; exit = %d, output=%s", code, out)
+	}
+	var summary struct {
+		Decisions map[string]int `json:"decisions"`
+		Actions   map[string]int `json:"actions"`
+	}
+	if err := json.Unmarshal(out, &summary); err != nil {
+		t.Fatalf("decode simulation JSON: %v; output=%s", err, out)
+	}
+	if summary.Decisions["denied"] != 2 {
+		t.Errorf("raw denied decisions = %d, want 2", summary.Decisions["denied"])
+	}
+	if summary.Actions["allowed_shadow"] != 2 || summary.Actions["denied"] != 0 {
+		t.Errorf("applied actions = %#v, want allowed_shadow=2 and denied=0", summary.Actions)
+	}
+}
+
+func TestSimulate_FailOnDenyRejectsMalformedCorpus(t *testing.T) {
+	pol := writeTemp(t, "pol.yaml", simPolicy)
+	tests := []struct {
+		name  string
+		calls string
+	}{
+		{name: "all malformed", calls: "not-json\n"},
+		{name: "partially malformed", calls: simCalls + "not-json\n"},
+		{name: "null envelope", calls: "null\n"},
+		{name: "array envelope", calls: "[]\n"},
+		{name: "empty object", calls: "{}\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			calls := writeTemp(t, "calls.jsonl", tt.calls)
+			code, out := captureSimulateOutput(t, func() int {
+				return cmdSimulate([]string{"-policy", pol, "-calls", calls, "-json", "-fail-on-deny"})
+			})
+			if code != 1 {
+				t.Fatalf("malformed gated simulation exit = %d, want 1; output=%s", code, out)
+			}
+			var summary struct {
+				Malformed int `json:"malformed"`
+			}
+			if err := json.Unmarshal(out, &summary); err != nil {
+				t.Fatalf("decode simulation JSON: %v; output=%s", err, out)
+			}
+			if summary.Malformed != 1 {
+				t.Fatalf("malformed count = %d, want 1", summary.Malformed)
+			}
+		})
+	}
+}
+
+func TestSimulate_FailOnDenyRejectsEmptyCorpus(t *testing.T) {
+	pol := writeTemp(t, "pol.yaml", simPolicy)
+	for _, tt := range []struct {
+		name  string
+		calls string
+	}{
+		{name: "empty", calls: ""},
+		{name: "whitespace only", calls: " \n\t\r\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			calls := writeTemp(t, "calls.jsonl", tt.calls)
+			code, out := captureSimulateOutput(t, func() int {
+				return cmdSimulate([]string{"-policy", pol, "-calls", calls, "-json", "-fail-on-deny"})
+			})
+			if code != 1 {
+				t.Fatalf("empty gated simulation exit = %d, want 1; output=%s", code, out)
+			}
+			var summary struct {
+				Total     int `json:"total"`
+				Malformed int `json:"malformed"`
+			}
+			if err := json.Unmarshal(out, &summary); err != nil {
+				t.Fatalf("decode simulation JSON: %v; output=%s", err, out)
+			}
+			if summary.Total != 0 || summary.Malformed != 0 {
+				t.Fatalf("empty summary = %#v, want total=0 and malformed=0", summary)
+			}
+		})
+	}
+}
+
+func TestSimulate_TableReportsAppliedActions(t *testing.T) {
+	shadowPolicy := strings.Replace(simPolicy, "mode: enforcement", "mode: shadow", 1)
+	pol := writeTemp(t, "shadow.yaml", shadowPolicy)
+	calls := writeTemp(t, "calls.jsonl", simCalls)
+	code, out := captureSimulateOutput(t, func() int {
+		return cmdSimulate([]string{"-policy", pol, "-calls", calls})
+	})
+	if code != 0 {
+		t.Fatalf("table simulation exit = %d, output=%s", code, out)
+	}
+	text := string(out)
+	if !strings.Contains(text, "applied actions (what would execute):") {
+		t.Fatalf("table output missing applied-actions section:\n%s", text)
+	}
+	found := false
+	for _, line := range strings.Split(text, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[0] == "allowed_shadow" {
+			found = true
+			if fields[1] != "2" {
+				t.Errorf("allowed_shadow count = %s, want 2; line=%q", fields[1], line)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("table output missing allowed_shadow count:\n%s", text)
 	}
 }
 
@@ -86,6 +238,63 @@ func TestSimulate_PolicyDirLoadsMultiple(t *testing.T) {
 	}
 }
 
+func TestSimulate_SeparatesSameRuleIDAcrossPolicies(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "deny.yaml"), []byte(simPolicy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	second := strings.Replace(simPolicy, "policy_id: sim-pol", "policy_id: sim-pol-2", 1)
+	second = strings.Replace(second, "name: sim-refund-cap", "name: sim-refund-cap-2", 1)
+	second = strings.Replace(second, "effect: deny", "effect: escalate", 1)
+	if err := os.WriteFile(filepath.Join(dir, "escalate.yaml"), []byte(second), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	calls := writeTemp(t, "calls.jsonl", `{"envelope_id":"over","tool_name":"issue_refund","parameters":{"amount":9000}}`+"\n")
+	code, out := captureSimulateOutput(t, func() int {
+		return cmdSimulate([]string{"-policy-dir", dir, "-calls", calls, "-json"})
+	})
+	if code != 0 {
+		t.Fatalf("simulate exit = %d; output=%s", code, out)
+	}
+	var summary struct {
+		RuleFires []struct {
+			PolicyID      string `json:"policy_id"`
+			PolicyVersion int    `json:"policy_version"`
+			RuleID        string `json:"rule_id"`
+			Fires         int    `json:"fires"`
+			Effect        string `json:"effect"`
+		} `json:"rule_fires"`
+	}
+	if err := json.Unmarshal(out, &summary); err != nil {
+		t.Fatalf("decode simulation JSON: %v; output=%s", err, out)
+	}
+	if len(summary.RuleFires) != 2 {
+		t.Fatalf("rule fire rows = %#v, want two distinct policy identities", summary.RuleFires)
+	}
+	seen := map[string]string{}
+	for _, row := range summary.RuleFires {
+		if row.PolicyVersion != 1 || row.RuleID != "cap" || row.Fires != 1 {
+			t.Fatalf("unexpected rule-fire row: %#v", row)
+		}
+		seen[row.PolicyID] = row.Effect
+	}
+	if seen["sim-pol"] != "deny" || seen["sim-pol-2"] != "escalate" {
+		t.Fatalf("rule fires merged or effects overwritten: %#v", seen)
+	}
+
+	tableCode, tableOut := captureSimulateOutput(t, func() int {
+		return cmdSimulate([]string{"-policy-dir", dir, "-calls", calls})
+	})
+	if tableCode != 0 {
+		t.Fatalf("table simulate exit = %d; output=%s", tableCode, tableOut)
+	}
+	for _, identity := range []string{"sim-pol@v1/cap", "sim-pol-2@v1/cap"} {
+		if !strings.Contains(string(tableOut), identity) {
+			t.Errorf("table output missing full rule identity %q:\n%s", identity, tableOut)
+		}
+	}
+}
+
 func TestLoadPolicySet_ValidatesBadPolicy(t *testing.T) {
 	bad := `policy_id: bad
 name: bad
@@ -103,5 +312,19 @@ rules:
 	p := writeTemp(t, "bad.yaml", bad)
 	if _, err := loadPolicySet("", p); err == nil {
 		t.Error("expected loadPolicySet to reject a policy with an uncompilable regex")
+	}
+}
+
+func TestLoadPolicySet_RejectsDuplicatePolicyIdentity(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "first.yaml"), []byte(simPolicy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	second := strings.Replace(simPolicy, "rule_id: cap", "rule_id: second-cap", 1)
+	if err := os.WriteFile(filepath.Join(dir, "second.yaml"), []byte(second), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadPolicySet(dir, ""); err == nil || !strings.Contains(err.Error(), "duplicate policy identity") {
+		t.Fatalf("loadPolicySet duplicate-identity error = %v", err)
 	}
 }

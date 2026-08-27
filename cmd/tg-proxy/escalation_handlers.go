@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -74,9 +75,47 @@ func (p *proxy) escalationByID(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(io.LimitReader(r.Body, 1<<16))
 		_ = json.Unmarshal(raw, &body) // body optional
 		approved := action == "approve"
-		e, ok := p.escalations.resolve(id, body.Approver, body.Reason, approved)
+		e, ok, auditErr := p.escalations.resolveAudited(
+			id,
+			body.Approver,
+			body.Reason,
+			approved,
+			func(candidate *Escalation) error {
+				trace, err := p.emitEscalationResolution(candidate, approved)
+				if err == nil {
+					candidate.ResolutionReceipt = receiptForAppendedTrace(trace)
+				}
+				return err
+			},
+		)
 		if e == nil {
 			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if errors.Is(auditErr, errEscalationPastDue) {
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error":           "escalation_past_due",
+				"message":         "escalation is past expires_at and cannot be approved or denied while its expiry audit transition is pending",
+				"resolution_hint": "do not authorize the action; allow the expiry reaper to publish expired after its audit record succeeds, repairing the audit writer if necessary",
+				"escalation":      e,
+			})
+			return
+		}
+		if auditErr != nil {
+			message := "escalation resolution was not committed because its audit record could not be written durably"
+			hint := "repair the audit writer, then retry this pending escalation"
+			if errors.Is(auditErr, errAuditWriterPoisoned) {
+				hint = "stop processing approvals; preserve, repair, and verify the audit log, then restart the proxy and have the originating action resubmitted with a fresh envelope ID; do not retry this escalation ID"
+			}
+			if e.State == EscIndeterminate {
+				message = "escalation resolution is indeterminate because a terminal audit record may exist but its durability could not be proven; no authorization was granted"
+			}
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+				"error":           "audit_append_failed",
+				"message":         message,
+				"resolution_hint": hint,
+				"escalation":      e,
+			})
 			return
 		}
 		if !ok {
@@ -86,12 +125,9 @@ func (p *proxy) escalationByID(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		// Audit the state transition. The original escalate decision
-		// is already in the chain (from /evaluate); this entry records
-		// the human approval/denial as a separate, linked event so a
-		// verifier can replay the full lifecycle and answer "who
-		// approved this and when". docs/escalation.md commits to this.
-		p.emitEscalationResolution(e, approved)
+		// resolveAudited appended the state-transition record before it
+		// published this terminal state. A 200 therefore never exposes an
+		// approval or receipt that is missing from the durable audit chain.
 		writeJSON(w, http.StatusOK, e)
 		return
 	}

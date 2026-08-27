@@ -43,6 +43,7 @@ func (e *Evaluator) Evaluate(envelope *domain.ActionEnvelope, policies []domain.
 	var allResults []domain.RuleResult
 	var enforcedResults []domain.RuleResult
 	rulesTriggered := 0
+	shadowEffectMatched := false
 	shadowGatingMatched := false
 	for _, policy := range matched {
 		for _, rule := range policy.Rules {
@@ -58,8 +59,11 @@ func (e *Evaluator) Evaluate(envelope *domain.ActionEnvelope, policies []domain.
 				// modes, but direct engine callers still fail closed.
 				if policy.Mode != domain.PolicyModeShadow {
 					enforcedResults = append(enforcedResults, result)
-				} else if result.Effect == domain.EffectDeny || result.Effect == domain.EffectEscalate {
-					shadowGatingMatched = true
+				} else {
+					shadowEffectMatched = true
+					if result.Effect == domain.EffectDeny || result.Effect == domain.EffectEscalate {
+						shadowGatingMatched = true
+					}
 				}
 			}
 		}
@@ -71,20 +75,24 @@ func (e *Evaluator) Evaluate(envelope *domain.ActionEnvelope, policies []domain.
 		decision = ResolveDecision(allResults)
 	}
 
-	// Step 5: Resolve what actually controls the action. A call-site enforcement
-	// mode applies the aggregate decision. In call-site shadow mode, effects from
-	// enforcement policies still apply, while shadow-policy effects remain
-	// telemetry only. Resolve those enforcement effects independently: otherwise
-	// a higher-severity shadow deny could suppress a lower-severity enforcement
+	// Step 5: Resolve what actually controls the action. Policy mode owns each
+	// policy's contribution: a shadow policy is telemetry even when the call site
+	// defaults to enforcement, while an enforcement policy cannot be downgraded
+	// by a shadow call site. Resolve enforcement effects independently so a
+	// higher-severity shadow deny cannot suppress a lower-severity enforcement
 	// escalation and let the action run.
-	actionDecision := decision
+	enforcedDecision := ResolveDecision(enforcedResults)
+	actionDecision := enforcedDecision
 	effectiveMode := domain.PolicyModeEnforcement // unknown modes fail closed
-	if mode == domain.PolicyModeShadow {
-		enforcedDecision := ResolveDecision(enforcedResults)
-		if enforcedDecision == domain.DecisionAllowed {
+	if enforcedDecision == domain.DecisionAllowed {
+		actionDecision = decision
+		// Loaders and CLI/HTTP entry points reject invalid modes, but Evaluate is
+		// also a public Go API. Preserve its fail-closed boundary: only the two
+		// known call-site modes may allow a shadow contribution to become
+		// observe-only. An unknown direct-call value stays enforcement.
+		validCallSiteMode := mode == domain.PolicyModeShadow || mode == domain.PolicyModeEnforcement
+		if validCallSiteMode && (shadowEffectMatched || mode == domain.PolicyModeShadow) {
 			effectiveMode = domain.PolicyModeShadow
-		} else {
-			actionDecision = enforcedDecision
 		}
 	}
 
@@ -95,40 +103,97 @@ func (e *Evaluator) Evaluate(envelope *domain.ActionEnvelope, policies []domain.
 	// A near-miss records a matched shadow deny/escalate that was not itself
 	// applied. It can coexist with a different enforcement-policy action (for
 	// example, a shadow deny observed while the floor escalates the same call).
-	isNearMiss := mode == domain.PolicyModeShadow && shadowGatingMatched
+	isNearMiss := shadowGatingMatched
 
 	// Step 8: Find primary citation and suggested response
 	primaryCitation := FindPrimaryCitation(allResults)
+	// Keep aggregate decision provenance separate from the rules that control
+	// execution. A higher-severity shadow rule can own Decision while a lower-
+	// severity enforcement rule owns ActionTaken; operational consumers must
+	// explain the latter when asking a human to approve or blocking a call.
+	appliedResults := enforcedResults
+	if enforcedDecision == domain.DecisionAllowed &&
+		(actionTaken == domain.ActionDenied || actionTaken == domain.ActionEscalated || actionTaken == domain.ActionFlagged) {
+		// Covers shadow flags (which are applied telemetry) and the public Go
+		// API's fail-closed handling of an invalid call-site mode.
+		appliedResults = matchedRuleResults(allResults)
+	}
+	appliedPrimaryCitation := FindPrimaryCitation(appliedResults)
 	suggestedResponse := ""
-	if decision == domain.DecisionDenied {
-		// Collect all rules from matched policies for suggested response lookup
-		var allRules []domain.Rule
-		for _, policy := range matched {
-			for _, rule := range policy.Rules {
-				if rule.IsEnabled() {
-					allRules = append(allRules, rule)
-				}
-			}
+	if decision != domain.DecisionAllowed {
+		guidanceResults := appliedResults
+		if actionTaken == domain.ActionAllowedShadow {
+			// No gating policy controlled execution, so retain the raw shadow
+			// guidance as observe-only telemetry.
+			guidanceResults = allResults
 		}
-		suggestedResponse = FindSuggestedResponse(allRules, allResults)
+		suggestedResponse = findPolicySuggestedResponse(matched, guidanceResults)
 	}
 
 	// Step 9: Generate decision reason
 	decisionReason := generateDecisionReason(decision, actionDecision, allResults, effectiveMode)
 
 	return &domain.EvaluationResult{
-		Decision:          decision,
-		ActionTaken:       actionTaken,
-		DecisionReason:    decisionReason,
-		EffectiveMode:     effectiveMode,
-		PoliciesMatched:   len(matched),
-		RulesEvaluated:    len(allResults),
-		RulesTriggered:    rulesTriggered,
-		RuleResults:       allResults,
-		PrimaryCitation:   primaryCitation,
-		IsNearMiss:        isNearMiss,
-		SuggestedResponse: suggestedResponse,
+		Decision:               decision,
+		ActionTaken:            actionTaken,
+		DecisionReason:         decisionReason,
+		EffectiveMode:          effectiveMode,
+		PoliciesMatched:        len(matched),
+		RulesEvaluated:         len(allResults),
+		RulesTriggered:         rulesTriggered,
+		RuleResults:            allResults,
+		AppliedRuleResults:     appliedResults,
+		PrimaryCitation:        primaryCitation,
+		AppliedPrimaryCitation: appliedPrimaryCitation,
+		IsNearMiss:             isNearMiss,
+		SuggestedResponse:      suggestedResponse,
 	}
+}
+
+func matchedRuleResults(results []domain.RuleResult) []domain.RuleResult {
+	matched := make([]domain.RuleResult, 0, len(results))
+	for _, result := range results {
+		if result.Matched {
+			matched = append(matched, result)
+		}
+	}
+	return matched
+}
+
+type policyRuleKey struct {
+	policyID      string
+	policyVersion int
+	ruleID        string
+}
+
+// findPolicySuggestedResponse resolves guidance from the exact policy rule
+// that controls the selected result set. Rule IDs are not globally unique, so
+// policy ID and version are part of the key.
+func findPolicySuggestedResponse(policies []domain.Policy, results []domain.RuleResult) string {
+	responses := make(map[policyRuleKey]string)
+	for _, policy := range policies {
+		for _, rule := range policy.Rules {
+			if !rule.IsEnabled() {
+				continue
+			}
+			responses[policyRuleKey{policy.PolicyID, policy.Version, rule.RuleID}] = rule.EffectConfig.SuggestedResponse
+		}
+	}
+
+	bestSeverity := 0
+	response := ""
+	for _, result := range results {
+		if !result.Matched {
+			continue
+		}
+		severity := domain.EffectSeverity(result.Effect)
+		if severity <= bestSeverity {
+			continue
+		}
+		bestSeverity = severity
+		response = responses[policyRuleKey{result.PolicyID, result.PolicyVersion, result.RuleID}]
+	}
+	return response
 }
 
 // evaluateRule evaluates a single rule against the flattened field map.

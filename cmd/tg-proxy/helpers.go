@@ -9,15 +9,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dimaggi-ai/tool-guard-core/pkg/audit"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
+	"github.com/dimaggi-ai/tool-guard-core/pkg/engine"
+	"github.com/dimaggi-ai/tool-guard-core/pkg/policyload"
 )
 
 // ── helpers ────────────────────────────────────────────────────────────────
 // Small utilities shared across handlers / audit / policy loading.
 
-func amountFromEnvelope(env *domain.ActionEnvelope) float64 {
-	a, _ := env.Amount()
-	return a
+func evaluatedAmountFromEnvelope(env *domain.ActionEnvelope) (float64, string) {
+	return engine.EvaluatedAmount(env)
 }
 
 func writeJSON(w http.ResponseWriter, code int, body any) {
@@ -57,27 +59,68 @@ func validateJSONDepth(body []byte, maxDepth int) error {
 	return nil
 }
 
-// timeoutFromMatchedRules walks the rules that fired (and the policies
-// they came from) looking for an EffectConfig.TimeoutMinutes. First
-// non-zero value wins. Returns 0 if none set so callers can fall back
-// to the proxy's default.
+// timeoutFromMatchedRules selects timeout configuration only from matched
+// enforcement-mode escalation rules. RuleResults are already ordered by
+// policy priority, so the first qualifying non-zero value wins
+// deterministically. Shadow rules are telemetry and must not mutate pending
+// enforcement state. Returns 0 if none set so callers use the proxy default.
 func timeoutFromMatchedRules(result *domain.EvaluationResult, policies []domain.Policy) int {
 	for _, rr := range result.RuleResults {
-		if !rr.Matched {
+		if !rr.Matched || rr.Effect != domain.EffectEscalate {
 			continue
 		}
 		for _, p := range policies {
-			if p.PolicyID != rr.PolicyID {
+			if p.PolicyID != rr.PolicyID || p.Version != rr.PolicyVersion || p.Mode == domain.PolicyModeShadow {
 				continue
 			}
 			for _, rule := range p.Rules {
-				if rule.RuleID == rr.RuleID && rule.EffectConfig.TimeoutMinutes > 0 {
+				if rule.RuleID == rr.RuleID && rule.Effect == domain.EffectEscalate && rule.EffectConfig.TimeoutMinutes > 0 {
 					return rule.EffectConfig.TimeoutMinutes
 				}
 			}
 		}
 	}
 	return 0
+}
+
+// stampTraceProvenance stamps a trace before canonical hashing. Callers that
+// evaluated a policy snapshot pass its hash explicitly. The fallback supports
+// tests and defensive internal writers; production reload always precomputes
+// policySetHash under the same lock as policies.
+func (p *proxy) stampTraceProvenance(trace *domain.DecisionTrace, policySetHash string) error {
+	if policySetHash == "" {
+		p.mu.RLock()
+		policySetHash = p.policySetHash
+		policies := p.policies
+		p.mu.RUnlock()
+		if policySetHash == "" {
+			var err error
+			policySetHash, err = policyload.PolicySetHash(policies)
+			if err != nil {
+				return fmt.Errorf("hash policy set for audit provenance: %w", err)
+			}
+		}
+	}
+	engineVersion := p.engineVersion
+	if engineVersion == "" {
+		engineVersion = resolvedEngineVersion()
+	}
+	return audit.StampProvenance(trace, engineVersion, policySetHash)
+}
+
+// receiptForAppendedTrace derives optional response metadata after appendTrace
+// has returned successfully. Failure is intentionally local: a receipt is
+// never an input to authorization and must not weaken or delay the decision.
+func receiptForAppendedTrace(trace *domain.DecisionTrace) *audit.DecisionReceipt {
+	receipt := audit.NewDecisionReceipt(trace)
+	if receipt == nil {
+		traceID := ""
+		if trace != nil {
+			traceID = trace.TraceID
+		}
+		log.Printf("tg-proxy: could not construct receipt for appended trace %q", traceID)
+	}
+	return receipt
 }
 
 // emitBoundaryDeny writes an audit trace for a deny that happens
@@ -90,29 +133,40 @@ func timeoutFromMatchedRules(result *domain.EvaluationResult, policies []domain.
 // The trace carries the boundary reason as DecisionReason; no rule
 // results since no rule fired. Errors are logged but never propagate
 // to the caller — the deny response must still go out even if audit
-// append failed; that's a separate failure surfaced via metrics.
-func (p *proxy) emitBoundaryDeny(env *domain.ActionEnvelope, reason string, mode domain.PolicyMode) {
+// append failed; that's a separate failure surfaced via metrics. A non-nil
+// return is safe to attach to the boundary response because appendTrace
+// completed successfully.
+func (p *proxy) emitBoundaryDeny(env *domain.ActionEnvelope, reason string, mode domain.PolicyMode, policySetHash string) *audit.DecisionReceipt {
+	amount, amountStatus := evaluatedAmountFromEnvelope(env)
 	trace := domain.DecisionTrace{
-		TraceID:        fmt.Sprintf("trc-%d", time.Now().UnixNano()),
-		Timestamp:      time.Now().UTC(),
-		OrgID:          env.OrgID,
-		EnvelopeID:     env.EnvelopeID,
-		AgentID:        env.AgentID,
-		AgentVersion:   env.AgentVersion,
-		SessionID:      env.SessionID,
-		TurnNumber:     env.TurnNumber,
-		ToolName:       env.ToolName,
-		ToolGroup:      env.ToolGroup,
-		Amount:         amountFromEnvelope(env),
-		Decision:       domain.DecisionDenied,
-		ActionTaken:    domain.ActionDenied,
-		DecisionReason: reason,
-		Mode:           mode,
+		TraceID:           fmt.Sprintf("trc-%d", time.Now().UnixNano()),
+		Timestamp:         time.Now().UTC(),
+		OrgID:             env.OrgID,
+		EnvelopeID:        env.EnvelopeID,
+		AgentID:           env.AgentID,
+		AgentVersion:      env.AgentVersion,
+		SessionID:         env.SessionID,
+		TurnNumber:        env.TurnNumber,
+		ToolName:          env.ToolName,
+		ToolGroup:         env.ToolGroup,
+		Amount:            amount,
+		AmountParseStatus: amountStatus,
+		Decision:          domain.DecisionDenied,
+		ActionTaken:       domain.ActionDenied,
+		DecisionReason:    reason,
+		Mode:              mode,
+	}
+	if err := p.stampTraceProvenance(&trace, policySetHash); err != nil {
+		log.Printf("tg-proxy: emitBoundaryDeny provenance: %v", err)
+		p.auditFailureCount.Add(1)
+		return nil
 	}
 	if err := p.appendTrace(&trace); err != nil {
 		log.Printf("tg-proxy: emitBoundaryDeny audit: %v", err)
 		p.auditFailureCount.Add(1)
+		return nil
 	}
+	return receiptForAppendedTrace(&trace)
 }
 
 // emitEscalationResolution writes an audit trace for the human
@@ -123,7 +177,7 @@ func (p *proxy) emitBoundaryDeny(env *domain.ActionEnvelope, reason string, mode
 // AgentID/SessionID/OrgID/Tool* are copied from the original envelope
 // so the trace is queryable on the same identity axes as the rest of
 // the chain.
-func (p *proxy) emitEscalationResolution(e *Escalation, approved bool) {
+func (p *proxy) emitEscalationResolution(e *Escalation, approved bool) (*domain.DecisionTrace, error) {
 	var (
 		decision    domain.Decision
 		actionTaken domain.ActionTaken
@@ -138,26 +192,70 @@ func (p *proxy) emitEscalationResolution(e *Escalation, approved bool) {
 		actionTaken = domain.ActionDenied
 		reason = fmt.Sprintf("escalation %s denied by %q: %s", e.ID, e.Approver, e.ApproverReason)
 	}
+	amount, amountStatus := evaluatedAmountFromEnvelope(&e.Envelope)
 	trace := domain.DecisionTrace{
-		TraceID:        fmt.Sprintf("trc-%d", time.Now().UnixNano()),
-		Timestamp:      time.Now().UTC(),
-		OrgID:          e.Envelope.OrgID,
-		EnvelopeID:     e.Envelope.EnvelopeID,
-		AgentID:        e.Envelope.AgentID,
-		AgentVersion:   e.Envelope.AgentVersion,
-		SessionID:      e.Envelope.SessionID,
-		TurnNumber:     e.Envelope.TurnNumber,
-		ToolName:       e.Envelope.ToolName,
-		ToolGroup:      e.Envelope.ToolGroup,
-		Amount:         amountFromEnvelope(&e.Envelope),
-		Decision:       decision,
-		ActionTaken:    actionTaken,
-		DecisionReason: reason,
+		TraceID:           fmt.Sprintf("trc-%d", time.Now().UnixNano()),
+		Timestamp:         time.Now().UTC(),
+		OrgID:             e.Envelope.OrgID,
+		EnvelopeID:        e.Envelope.EnvelopeID,
+		AgentID:           e.Envelope.AgentID,
+		AgentVersion:      e.Envelope.AgentVersion,
+		SessionID:         e.Envelope.SessionID,
+		TurnNumber:        e.Envelope.TurnNumber,
+		ToolName:          e.Envelope.ToolName,
+		ToolGroup:         e.Envelope.ToolGroup,
+		Amount:            amount,
+		AmountParseStatus: amountStatus,
+		Decision:          decision,
+		ActionTaken:       actionTaken,
+		DecisionReason:    reason,
 	}
-	if err := p.appendTrace(&trace); err != nil {
+	if err := p.stampTraceProvenance(&trace, ""); err != nil {
+		log.Printf("tg-proxy: emitEscalationResolution provenance: %v", err)
+		p.auditFailureCount.Add(1)
+		return nil, err
+	}
+	if err := p.appendTraceDurable(&trace); err != nil {
 		log.Printf("tg-proxy: emitEscalationResolution audit: %v", err)
 		p.auditFailureCount.Add(1)
+		return nil, err
 	}
+	return &trace, nil
+}
+
+// emitEscalationExpiry durably records the deny-by-timeout transition before
+// the store publishes EscExpired.
+func (p *proxy) emitEscalationExpiry(e *Escalation) error {
+	amount, amountStatus := evaluatedAmountFromEnvelope(&e.Envelope)
+	trace := domain.DecisionTrace{
+		TraceID:           fmt.Sprintf("trc-%d", time.Now().UnixNano()),
+		Timestamp:         time.Now().UTC(),
+		EnvelopeID:        e.Envelope.EnvelopeID,
+		AgentID:           e.Envelope.AgentID,
+		AgentVersion:      e.Envelope.AgentVersion,
+		SessionID:         e.Envelope.SessionID,
+		TurnNumber:        e.Envelope.TurnNumber,
+		OrgID:             e.Envelope.OrgID,
+		ToolName:          e.Envelope.ToolName,
+		ToolGroup:         e.Envelope.ToolGroup,
+		Amount:            amount,
+		AmountParseStatus: amountStatus,
+		Decision:          domain.DecisionDenied,
+		ActionTaken:       domain.ActionDenied,
+		DecisionReason:    fmt.Sprintf("escalation %s expired without approval", e.ID),
+		Mode:              domain.PolicyModeEnforcement,
+	}
+	if err := p.stampTraceProvenance(&trace, ""); err != nil {
+		log.Printf("tg-proxy: emitEscalationExpiry provenance: %v", err)
+		p.auditFailureCount.Add(1)
+		return err
+	}
+	if err := p.appendTraceDurable(&trace); err != nil {
+		log.Printf("tg-proxy: emitEscalationExpiry audit: %v", err)
+		p.auditFailureCount.Add(1)
+		return err
+	}
+	return nil
 }
 
 // splitCommaPaths parses a comma-separated path list into a slice, trimming

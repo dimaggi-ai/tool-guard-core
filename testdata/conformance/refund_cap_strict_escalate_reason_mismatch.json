@@ -8,5 +8,5 @@
     "tool_group": "monetary_outflow",
     "parameters": {"amount": 100, "reason": "Partial credit, remainder of the $1000 refund to follow"}
   },
-  "expect": {"decision": "escalated", "action_taken": "escalated"}
+  "expect": {"decision": "escalated", "action_taken": "escalated", "matched_rule_ids": ["rule-reason-amount-consistency"]}
 }

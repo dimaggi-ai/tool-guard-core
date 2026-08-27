@@ -4,6 +4,173 @@ All notable changes to Tool Guard Core are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+## [0.8.0] — 2026-08-26
+
+### Breaking mode-precedence correction
+
+- A policy's YAML `mode` is now authoritative. In 0.7, the default
+  enforcement call-site could override a `mode: shadow` policy and block its
+  deny or escalation. In 0.8, that policy still reports the raw denied or
+  escalated decision, but its applied action is `allowed_shadow`: `tg
+  evaluate` exits 0, the proxy returns `allowed_shadow` so the integration may
+  execute the tool, and `tg hook` emits `allow`.
+  The Python SDK exposes both `decision` and `action_taken` so integrations can
+  distinguish observation from enforcement. The reverse downgrade is not
+  allowed: a shadow call-site cannot weaken a `mode: enforcement` policy.
+- Before upgrading, review every deployed shadow policy. Change it to
+  `mode: enforcement` if its matches must continue blocking execution; leave
+  it in shadow only when observe-without-blocking is intentional. Test the
+  resulting set with `tg simulate` before rollout.
+
+### Breaking policy-identity validation
+
+- Loaded sets now reject duplicate `(policy_id, version)` identities, and each
+  policy rejects duplicate `rule_id` values. Older releases accepted these
+  ambiguous identities; their citations and suggested responses could be
+  attributed to the wrong rule.
+- Before upgrading, run the 0.8 binary's `tg lint` against every policy file,
+  then run `tg simulate -policy-dir <dir> -calls <representative.jsonl>` to
+  exercise set-level loading. Rename every reported duplicate before rollout.
+  This is especially important for `tg hook`: a policy-set load error follows
+  the configured failure mode, which is `allow` by default. Use the hook's
+  documented fail-closed options where a load failure must block execution.
+- Simulation rule-fire rows are now keyed by
+  `(policy_id, policy_version, rule_id)` instead of `rule_id` alone. JSON rows
+  retain `rule_id`, `fires`, and `effect` and add `policy_id` and
+  `policy_version`; distinct policies no longer merge their counts or effects.
+
+### Breaking audit-format migration
+
+- New audit writers stamp canonical trace v2 so the raw decision and the
+  applied-action provenance are both covered by the trace hash. Canonical v1
+  remains byte-identical and the 0.8 verifier accepts mixed v1/v2 chains, but
+  canonical versions are monotonic: v1 to v2 is accepted and v2 to v1 is
+  rejected. A 0.7 verifier cannot read a v2 record; a 0.7 proxy therefore
+  cannot resume a v2 tail. The older hook can physically append a markerless
+  v1 record after v2, but 0.8 rejects that downgrade as an invalid chain, so it
+  is not a valid resumption path.
+- Upgrade every verifier and writer that shares an audit chain before resuming
+  writes. Do not roll a writer back to 0.7 after a v2 append. The detailed
+  quiesce, backup, verification, and rollback procedure is in
+  `docs/operating.md`.
+- Verification now requires the first record in the complete rotation set to
+  be a genesis record with an empty `previous_trace_hash`. A detached suffix
+  is not accepted as an intact chain merely because its remaining hashes link
+  to one another. Preserve every rotated sibling; intentional suffix
+  verification needs an explicit trusted anchor, which 0.8 does not provide.
+- Canonical v2 persists every evaluated `amount`, including IEEE-754 negative
+  zero, so a record cannot lose hash-bound numeric bits during JSON
+  serialization. Markerless v1 records now reject the v2-only
+  `amount_parse_status` field instead of displaying provenance that v1 does
+  not hash.
+- Hook, proxy, and documented in-process writers now preserve a valid JSONL
+  chain whose final record is terminated by EOF rather than LF. The first
+  resumed append prefixes the missing delimiter in the same write, including
+  when the tail is in a rotated file and the active file is empty.
+- Before each hook append, the complete existing chain is replayed under the
+  append lock. The hook refuses to extend a chain with a broken link, hash, or
+  canonical-version downgrade and surfaces the lost audit record on stderr.
+  This intentionally replaces the historical O(1) tail-only recovery with an
+  O(n) integrity check in the size of the active hook log.
+- Hook append serialization now uses an OS advisory lock, which the kernel
+  releases when a process exits. The persistent lockfile is never removed or
+  stolen based on its age, so verification that takes longer than ten seconds
+  cannot let another live process lock a different inode and fork the chain.
+- Proxy audit appends now roll a failed or short write back to the exact
+  pre-write size and durably verify that repair before another append. A
+  rollback failure permanently poisons that process's writer, makes
+  `/readyz` return 503, and suppresses fail-closed retry writes against the
+  ambiguous tail. A complete write followed by a failed durability sync is
+  also rolled back durably; the in-memory hash/counters are restored before a
+  fail-closed deny is recorded. Approval and denial force this barrier even
+  when ordinary evaluation logging uses `interval` or `none`, and publish
+  terminal state only after it succeeds. If rollback cannot be proven, the
+  writer is poisoned and the escalation becomes `indeterminate` for operator
+  reconciliation instead of claiming an ordinary pending or approved state.
+  Size-triggered rotation now completes before writing the trace that would
+  cross the configured boundary, then flushes its rename and replacement-file
+  metadata (directory fsync on POSIX; write-through rename plus file sync on
+  Windows). A failed rotation therefore cannot leave a durable `allowed` trace
+  that fail-closed later reports as `denied`. Any uncertain rotation poisons the
+  writer in every sync mode, so `/readyz` cannot remain green and a later
+  approval cannot bypass the unresolved state. Expiration now uses the same
+  audit-before-publish transaction as human resolution: a proven pre-write
+  failure leaves the escalation pending, while a possibly written terminal
+  record makes its state `indeterminate`. A pending entry never regains an
+  authorization window after `expires_at`: late approval and denial return a
+  structured `escalation_past_due` conflict without writing an `allowed` trace.
+- Compile-only `js/wasm` and `wasip1/wasm` proxy builds no longer reference
+  unavailable process-signal constants. Native SIGHUP reload and graceful
+  shutdown behavior is unchanged.
+- This intentionally supersedes the 0.7 documentation that described a future
+  v2 writer as opt-in. Keeping v1 as the default would leave the new
+  applied-action attribution outside the integrity commitment. Because Tool
+  Guard is pre-1.0, 0.8 carries this explicitly documented breaking migration
+  in a minor release rather than weakening the audit guarantee.
+
+### Breaking Go API migration
+
+- The exported mutable package variable `engine.LLMClassifyHook` has been
+  removed. Direct writes raced with concurrent evaluations and bypassed the
+  synchronization added for policy reload and parallel tests. Replace direct
+  assignment with `engine.SetLLMClassifyHook(hook)` and reads with
+  `engine.GetLLMClassifyHook()`; pass `nil` to the setter to clear the hook.
+  This is an intentional pre-1.0 source break. The hook signature and runtime
+  behavior are unchanged.
+
+### Release verification
+
+- Tag-triggered releases now call the complete CI workflow and cannot build or
+  publish Go, container, or Python artifacts until the same race, platform,
+  vulnerability, policy-lint, SDK, and release-config gates used for merges
+  pass on the tagged commit. The release workflow no longer maintains a
+  separate test list, and publish permissions are limited to publishing jobs.
+- GoReleaser now stages a draft GitHub Release. Archive attestation, container
+  signing and verification, and idempotent PyPI trusted publishing must all
+  succeed before a final job promotes the draft. A failed publish therefore
+  leaves no public GitHub Release that claims incomplete artifacts.
+
+### Proxy decision receipts
+
+- Durable `tg-proxy /evaluate` responses now include an optional,
+  non-resolvable `decision_receipt` after the first audit append succeeds;
+  successfully audited escalation approvals/denials expose a separate
+  `resolution_receipt`. The receipt carries the persisted trace identity,
+  hash, outcome, timestamp, algorithm/canonical version, optional issuer, and
+  `urn:tool-guard:trace:<version>:<hash>` correlation URI. The OpenAPI contract
+  and Python SDK types/helper match the wire shape. Receipts are post-hash
+  response metadata: the engine result and canonical trace schema do not
+  change, and missing receipt metadata is never authorization.
+
+### Audit provenance
+
+- New audit records use canonical schema v2 and include `engine_version`,
+  `policy_set_hash`, and `schema_version` inside the canonical hash. The policy
+  digest is deterministic across YAML presentation and load order. Legacy
+  records without `schema_version` continue to verify with the frozen v1
+  encoder, including chains that transition from v1 to v2 after an upgrade.
+
+### Audit export
+
+- `tg export -file <audit-path> --format jsonl` streams a verified audit
+  snapshot as one JSON object per line, walking rotated files oldest-first.
+  Inclusive `--since`, exclusive `--until`, and repeatable/comma-separated
+  `--policy` and `--action` selectors make the stream usable by standard log
+  pipelines without a new runtime dependency. A damaged chain is rejected
+  before stdout receives any record.
+- Export uses the same 4 MiB logical-record boundary as audit writers and the
+  verifier: an exact-maximum record is accepted and a larger record is rejected
+  before JSON decoding.
+
+### Documentation integrity
+
+- The complete `tg` command reference, classifier list, and lint-check table
+  now have AST-backed drift guards. Package maps include the shared strict
+  policy loader, the documentation index covers every current guide, and
+  CHANGELOG release links are checked against repository tags.
+
 ## [0.7.0] — 2026-08-20
 
 Release focus: **policy-loading hardening** and **release-integrity
@@ -725,7 +892,8 @@ Enterprise boundary is unchanged (deny-only, no redaction/inference/signing).
   a SHA-256 hash-chained JSONL log (verify with `tg verify`), so the
   coding-agent guard leaves a tamper-evident record like `tg-proxy` does. Tail
   read keeps appends O(1) per call. Best-effort: an audit failure never
-  changes the decision.
+  changes the decision. (The O(1) tail-only recovery described here was the
+  0.4 behavior; 0.8 supersedes it with full-chain replay before each append.)
 - **`tg coverage` verb** — measures what fraction of an agent's tool calls have
   ANY governing policy (scope-match), versus what passes only because nothing
   governs it. Reads a JSONL of envelopes *or* decision traces, so it runs
@@ -923,9 +1091,10 @@ reliable self-protection is outside the policy, at operator-flag level.
   policy-dir loading, validation of a bad policy.
 - Full suite green under `-race -count=1`, including the integration tag.
 
-## [0.1.0] — 2026-06-09
+## 0.1.0 development snapshot (pre-release, no tag) — 2026-06-09
 
-Initial public release.
+Initial public development snapshot. No `v0.1.0` tag or GitHub release was
+published; the tagged release history begins at `v0.2.0`.
 
 ### Multimodal content-safety classifier — `pkg/llmguard` (new)
 
@@ -1193,12 +1362,12 @@ Lint heuristics shipped (8):
   documented battle-test catalogue; the strict variants are for
   operators who already accept those build-time costs.
 
-[Unreleased]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.5.0...v0.5.2
 [0.5.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/dimaggi-ai/tool-guard-core/releases/tag/v0.1.0
+[0.2.0]: https://github.com/dimaggi-ai/tool-guard-core/releases/tag/v0.2.0

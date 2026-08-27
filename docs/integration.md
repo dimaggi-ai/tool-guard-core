@@ -41,8 +41,8 @@ Available flags:
 | `-listen` | `:9090` | host:port to bind |
 | `-policy-dir` | `./policies` | directory of `*.yaml` to load on startup and on SIGHUP |
 | `-audit-log` | `./decisions.jsonl` | path to append the SHA-256 hash-chained JSONL |
-| `-default-mode` | `enforcement` | `shadow` for observe-only |
-| `-fail-closed` | `true` | return 503 from `/readyz` and from `/evaluate` when zero policies are loaded |
+| `-default-mode` | `enforcement` | Call-site default. `shadow` is observe-only only for policies whose YAML mode is also `shadow`; enforcement policies still block. |
+| `-fail-closed` | `true` | return 503 from `/readyz` and fail closed in `/evaluate` when zero policies are loaded |
 
 Endpoints:
 
@@ -50,10 +50,16 @@ Endpoints:
 |---|---|---|
 | `POST` | `/evaluate` | body: `ActionEnvelope` JSON; returns `EvaluationResult` JSON |
 | `GET` | `/healthz` | liveness; 200 OK if process is alive |
-| `GET` | `/readyz` | readiness; 200 OK if at least one policy is loaded |
+| `GET` | `/readyz` | readiness; 200 OK if policy requirements are met and the audit writer has not been poisoned |
 | `GET` | `/policies` | list the policies currently loaded (debugging) |
 | `GET` | `/metrics` | plain-text counters; scrape-friendly |
 | `POST` | `/reload` | trigger a policy reload without restarting (also fires on `SIGHUP`) |
+
+The proxy rolls a failed or short audit write back to its exact pre-write file
+size and syncs that repair before accepting another append. If truncation,
+sync, or size verification fails, the writer enters a sticky poisoned state:
+later appends are rejected and `/readyz` returns 503 until an operator stops
+the process, repairs and verifies the audit log, and restarts the proxy.
 
 ### 1.2 Make a request from any language
 
@@ -82,9 +88,16 @@ Response (`HTTP 200`):
   "rules_evaluated": 3,
   "rules_triggered": 2,
   "rule_results": [{ "...": "..." }],
-  "primary_citation": { "...": "..." }
+  "applied_rule_results": [{ "...": "..." }],
+  "primary_citation": { "...": "..." },
+  "applied_primary_citation": { "...": "..." }
 }
 ```
+
+`primary_citation` explains the aggregate raw decision. Use
+`applied_primary_citation` and `applied_rule_results` when explaining the
+action actually taken; these can differ when stricter shadow telemetry is
+co-loaded with an enforcement policy.
 
 In your agent code: call the tool when `action_taken` is `allowed`
 (enforcement), `allowed_shadow` (shadow), or `flagged`. A `flag` effect
@@ -202,80 +215,174 @@ package main
 
 import (
     "context"
-    "encoding/json"
+    "fmt"
+    "io"
     "os"
+    "sync"
+    "time"
 
     "github.com/dimaggi-ai/tool-guard-core/pkg/audit"
     "github.com/dimaggi-ai/tool-guard-core/pkg/domain"
     "github.com/dimaggi-ai/tool-guard-core/pkg/engine"
+    "github.com/dimaggi-ai/tool-guard-core/pkg/policyload"
 )
 
 // Guard wraps the engine and an append-only audit log writer.
 // Construct it once at startup and reuse across requests; it is safe
 // for concurrent use.
 type Guard struct {
-    eval     *engine.Evaluator
-    policies []domain.Policy
+    eval      *engine.Evaluator
+    policies  []domain.Policy
     auditFile *os.File
-    auditEnc  *json.Encoder
-    lastHash string
+    auditMu   sync.Mutex
+    auditErr  error
+    lastHash  string
+    auditNeedsSeparator bool
+	engineVersion string
+	policySetHash string
 }
 
-func NewGuard(policies []domain.Policy, logPath string) (*Guard, error) {
-    f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+func NewGuard(policies []domain.Policy, logPath, engineVersion string) (*Guard, error) {
+    if err := engine.ValidatePolicySet(policies); err != nil {
+        return nil, fmt.Errorf("validate policy set: %w", err)
+    }
+	policySetHash, err := policyload.PolicySetHash(policies)
+	if err != nil {
+		return nil, fmt.Errorf("hash policy set: %w", err)
+	}
+    f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0o600)
     if err != nil {
         return nil, err
     }
+    report, err := audit.VerifyChainFromReader(f)
+    if err != nil {
+        _ = f.Close()
+        return nil, fmt.Errorf("verify existing audit chain: %w", err)
+    }
+    if !report.Intact {
+        _ = f.Close()
+        return nil, fmt.Errorf("existing audit chain failed at line %d: %s",
+            report.FirstFailureAt, report.FailureReason)
+    }
+    needsSeparator, err := audit.NeedsRecordSeparator(f)
+    if err != nil {
+        _ = f.Close()
+        return nil, fmt.Errorf("inspect existing audit delimiter: %w", err)
+    }
     return &Guard{
-        eval: engine.NewEvaluator(),
+        eval:     engine.NewEvaluator(),
         policies: policies,
         auditFile: f,
-        auditEnc: json.NewEncoder(f),
+        lastHash: report.Tail,
+        auditNeedsSeparator: needsSeparator,
+        engineVersion: engineVersion,
+        policySetHash: policySetHash,
     }, nil
 }
 
-func (g *Guard) Check(ctx context.Context, env *domain.ActionEnvelope) (bool, *domain.EvaluationResult) {
+func (g *Guard) Check(ctx context.Context, env *domain.ActionEnvelope) (bool, *domain.EvaluationResult, error) {
     result := g.eval.Evaluate(env, g.policies, domain.PolicyModeEnforcement)
+    amount, amountStatus := engine.EvaluatedAmount(env)
+    timestamp := env.Timestamp
+    if timestamp.IsZero() {
+        timestamp = time.Now().UTC()
+    }
     // Append to the audit chain. Use the CANONICAL hash
     // (ComputeCanonicalTraceHash) - it covers the decision and the
-    // fields that produce it (the exact set is canonicalTraceV1 in
+    // fields that produce it (the exact current set is canonicalTraceV2 in
     // pkg/audit/canonical.go) and is what `tg verify` recomputes. The
     // legacy ComputeTraceHash covers only six identity fields and will
     // not verify.
     trace := domain.DecisionTrace{
-        TraceID:           "trc-" + env.EnvelopeID,
-        EnvelopeID:        env.EnvelopeID,
-        Timestamp:         env.Timestamp,
-        OrgID:             env.OrgID,
-        AgentID:           env.AgentID,
-        SessionID:         env.SessionID,
-        ToolName:          env.ToolName,
-        ToolGroup:         env.ToolGroup,
-        Decision:          result.Decision,
-        ActionTaken:       result.ActionTaken,
-        DecisionReason:    result.DecisionReason,
-        Mode:              result.EffectiveMode,
-        PreviousTraceHash: g.lastHash,
+        CanonicalVersion:       audit.CanonicalTraceVersion,
+        TraceID:                "trc-" + env.EnvelopeID,
+        EnvelopeID:             env.EnvelopeID,
+        Timestamp:              timestamp.UTC(),
+        OrgID:                  env.OrgID,
+        AgentID:                env.AgentID,
+        AgentVersion:           env.AgentVersion,
+        SessionID:              env.SessionID,
+        TurnNumber:             env.TurnNumber,
+        ToolName:               env.ToolName,
+        ToolGroup:              env.ToolGroup,
+        Amount:                 amount,
+        AmountParseStatus:      amountStatus,
+        Decision:               result.Decision,
+        ActionTaken:            result.ActionTaken,
+        DecisionReason:         result.DecisionReason,
+        Mode:                   result.EffectiveMode,
+        PoliciesMatched:        result.PoliciesMatched,
+        RulesEvaluated:         result.RulesEvaluated,
+        RulesTriggered:         result.RulesTriggered,
+        RuleResults:            result.RuleResults,
+        AppliedRuleResults:     result.AppliedRuleResults,
+        PrimaryCitation:        result.PrimaryCitation,
+        AppliedPrimaryCitation: result.AppliedPrimaryCitation,
+        SuggestedResponse:      result.SuggestedResponse,
+        IsNearMiss:             result.IsNearMiss,
+        ParametersRedacted:     append([]byte(nil), env.ParametersRedacted...),
     }
+	if err := audit.StampProvenance(&trace, g.engineVersion, g.policySetHash); err != nil {
+		return false, result, fmt.Errorf("stamp audit provenance: %w", err)
+	}
+
+    // Serialize link -> hash -> append -> durability -> tail update. Once any
+    // audit operation fails, poison this Guard instance: continuing after a
+    // short write or failed fsync could fork the chain.
+    g.auditMu.Lock()
+    defer g.auditMu.Unlock()
+    if g.auditErr != nil {
+        return false, result, g.auditErr
+    }
+    trace.PreviousTraceHash = g.lastHash
     hash, err := audit.ComputeCanonicalTraceHash(&trace)
     if err != nil {
-        return false, nil // fail closed on audit errors
+        g.auditErr = fmt.Errorf("hash audit trace: %w", err)
+        return false, result, g.auditErr
     }
     trace.TraceHash = hash
-    _ = g.auditEnc.Encode(trace)
+    line, err := audit.MarshalTraceRecord(&trace)
+    if err != nil {
+        g.auditErr = fmt.Errorf("marshal audit trace: %w", err)
+        return false, result, g.auditErr
+    }
+    record := make([]byte, 0, len(line)+2)
+    if g.auditNeedsSeparator {
+        record = append(record, '\n')
+    }
+    record = append(record, line...)
+    record = append(record, '\n')
+    n, err := g.auditFile.Write(record)
+    if err == nil && n != len(record) {
+        err = io.ErrShortWrite
+    }
+    if err != nil {
+        g.auditErr = fmt.Errorf("append audit trace: %w", err)
+        return false, result, g.auditErr
+    }
+    if err := g.auditFile.Sync(); err != nil {
+        g.auditErr = fmt.Errorf("sync audit trace: %w", err)
+        return false, result, g.auditErr
+    }
     g.lastHash = trace.TraceHash
+    g.auditNeedsSeparator = false
 
     // A `flag` effect is a recorded near-miss - the call still proceeds.
     return result.ActionTaken == domain.ActionAllowed ||
            result.ActionTaken == domain.ActionAllowedShadow ||
-           result.ActionTaken == domain.ActionFlagged, result
+           result.ActionTaken == domain.ActionFlagged, result, nil
 }
 ```
 
 Then in your tool-call path:
 
 ```go
-ok, result := guard.Check(ctx, envelope)
+ok, result, err := guard.Check(ctx, envelope)
+if err != nil {
+    // Audit persistence is part of enforcement: fail closed and surface the
+    // operational error instead of executing without a durable record.
+    return "", fmt.Errorf("tool guard audit: %w", err)
+}
 if !ok {
     // Don't execute the tool. Return result.SuggestedResponse to the
     // model so it knows what to say to the user.
@@ -325,10 +432,11 @@ func (s *Server) CallTool(ctx context.Context, req CallToolRequest) (CallToolRes
 
 ### 3.2 LangChain (Python)
 
-Install the SDK (not yet published to PyPI — install from a clone of this repo):
+Install the SDK (PyPI distribution `toolguard-core`; Python import
+`toolguard`):
 
 ```bash
-pip install "./tool-guard-core/sdk/python[langchain]"
+pip install "toolguard-core[langchain]"
 ```
 
 Use the drop-in `ToolGuardCallbackHandler` — no boilerplate required:
@@ -358,7 +466,7 @@ calls proceed normally.  See `sdk/python/README.md` for full examples.
 Install the SDK:
 
 ```bash
-pip install "./tool-guard-core/sdk/python[autogen]"
+pip install "toolguard-core[autogen]"
 ```
 
 Use the `guarded` decorator:
@@ -391,7 +499,7 @@ refusal to the LLM.
 Install the SDK:
 
 ```bash
-pip install "./tool-guard-core/sdk/python[anthropic]"   # or [openai]
+pip install "toolguard-core[anthropic]"   # or [openai]
 ```
 
 ```python
@@ -452,19 +560,19 @@ tamper-evident.
 
 ## 5. Operational notes
 
-- **Mode policy.** Call-site `enforcement` applies the aggregate decision.
-  In call-site `shadow`, matched effects from enforcement policies still apply,
-  while shadow-policy effects remain telemetry only. The engine resolves those
-  sets separately, so a higher-severity shadow effect cannot cancel a
-  lower-severity enforcement gate, and an allow-only enforcement policy does not
-  promote an unrelated shadow deny. A policy marked `mode: enforcement` in YAML
-  cannot be downgraded by either flag.
+- **Mode policy.** Each policy's YAML mode owns its contribution. A
+  `mode: shadow` policy remains telemetry even under a call-site
+  `enforcement` default, while a `mode: enforcement` policy cannot be
+  downgraded by a call-site `shadow` flag. The engine resolves enforcement and
+  shadow effects separately, so a higher-severity shadow effect cannot cancel
+  a lower-severity enforcement gate, and an allow-only enforcement policy does
+  not promote an unrelated shadow deny.
 - **Latency.** Deterministic evaluation is in-process and p99 ≈ 14µs
   on commodity hardware (see `tg benchmark`). The proxy adds one
   HTTP hop plus JSON marshal/unmarshal; expect sub-millisecond round
   trips over loopback TCP on the same host and 1–3 ms across a
   Kubernetes pod.
-  Measurement conditions and the nightly-asserted throughput floor
+  Measurement conditions and the nightly same-runner regression gate
   are documented in [performance.md](performance.md).
 - **Failure mode.** Run with `-fail-closed=true` (the default). On
   policy load failure the proxy refuses new requests; an upstream
@@ -501,6 +609,81 @@ curl -X POST http://localhost:9090/evaluate \
   -d @examples/call_over_cap.json | jq .decision
 # expected: "denied"
 ```
+
+---
+
+## 7. Decision receipts
+
+After an audit append returns successfully, `tg-proxy` adds an optional
+`decision_receipt` to the `/evaluate` response. This includes ordinary 200
+responses, a 202 escalation response, and a pre-engine boundary deny when its
+deny trace was appended. The pure engine result and the non-durable
+`tg evaluate` CLI output do not contain receipts.
+
+An approved or denied escalation carries a separate `resolution_receipt` for
+the terminal audit record. The pending escalation has no resolution receipt;
+after a successful resolution append, the receipt is returned by the mutating
+endpoint and retained on later `GET /escalations/{id}` responses.
+
+```json
+{
+  "receipt_version": "1",
+  "trace_id": "trc-1770000000000000000",
+  "trace_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "hash_algorithm": "sha256",
+  "canonical_trace_version": "v2",
+  "integrity_model": "hash-chain",
+  "decision": "denied",
+  "action_taken": "denied",
+  "timestamp": "2026-08-25T00:00:00Z",
+  "issuer": "proxy-instance-7",
+  "receipt_uri": "urn:tool-guard:trace:v2:sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+}
+```
+
+`issuer` is omitted when the underlying trace has no `signed_by` instance
+identity. Its presence does not turn the receipt into a signature.
+`receipt_uri` is an opaque, non-resolvable URN keyed by the trace hash:
+
+```text
+urn:tool-guard:trace:<canonical-version>:<trace-hash>
+```
+
+There is deliberately no HTTP resolver. Correlate the URI or `trace_hash`
+with the retained audit record and run `tg verify` over the complete chain.
+External consumers should compare the record's `trace_id`, `trace_hash`,
+`decision`, `action_taken`, and `timestamp` before storing the correlation.
+
+### Safety boundaries (verbatim)
+
+- This is a **tamper-evident hash-chain reference, not a signed or independently authentic receipt**.
+- Absence of a receipt is never authorization.
+- Receipt creation failure never weakens or delays the underlying decision.
+- Durability follows `audit-sync-mode`; the receipt proves an append was accepted, not that it is fsync-durable beyond that mode's guarantee.
+- No canonical-trace change, no schema version bump.
+
+In shadow mode, `decision` is what the policy would have decided while
+`action_taken` is what the proxy actually enforced (`allowed_shadow`). Durable
+downstream consumers must key execution state on `action_taken`.
+
+The Python SDK exposes `DecisionReceipt` and `Escalation` types. Its neutral,
+dependency-free memory adapter attaches only the opaque URI to a dict-shaped
+record:
+
+```python
+from toolguard.adapters.memory import with_receipt_reference
+
+result = guard.evaluate_raw("issue_refund", {"amount": 100})
+event = with_receipt_reference(
+    {"tool": "issue_refund", "outcome": result.action_taken},
+    result,
+)
+# event has tool_guard_receipt_uri only when the proxy supplied a receipt.
+```
+
+This helper writes no external data and defines no inbound policy field. Store
+delivery, retention, disclosure, authentication, and any future resolver are
+separate product/security decisions.
 
 ---
 

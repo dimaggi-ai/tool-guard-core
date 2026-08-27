@@ -497,13 +497,15 @@ func TestFloorDoesNotNullifyCoLoadedShadowPolicy(t *testing.T) {
 	floor := domain.Policy{
 		PolicyID: "floor", Version: 1, Mode: domain.PolicyModeEnforcement, Status: domain.PolicyStatusApproved,
 		Rules: []domain.Rule{{RuleID: "f1", Effect: domain.EffectEscalate, EffectConfig: domain.EffectConfig{Severity: "high"},
-			Conditions: domain.Condition{Field: "reversibility", Operator: domain.OpEq, Value: "irreversible"}}},
+			Conditions: domain.Condition{Field: "reversibility", Operator: domain.OpEq, Value: "irreversible"},
+			Citation:   domain.Citation{DocumentID: "floor", Excerpt: "enforcement approval"}}},
 	}
 	shadowDeny := domain.Policy{
 		PolicyID: "refundcap", Version: 1, Mode: domain.PolicyModeShadow, Status: domain.PolicyStatusApproved,
 		Scope: domain.PolicyScope{ToolNames: []string{"issue_refund"}},
 		Rules: []domain.Rule{{RuleID: "r1", Effect: domain.EffectDeny, EffectConfig: domain.EffectConfig{Severity: "critical"},
-			Conditions: domain.Condition{Field: "amount", Operator: domain.OpGt, Value: float64(1000)}}},
+			Conditions: domain.Condition{Field: "amount", Operator: domain.OpGt, Value: float64(1000)},
+			Citation:   domain.Citation{DocumentID: "refundcap", Excerpt: "shadow telemetry"}}},
 	}
 	env := makeEnvelope(5000, "issue_refund", "a", "o")
 	res := NewEvaluator().Evaluate(env, []domain.Policy{floor, shadowDeny}, domain.PolicyModeShadow)
@@ -518,6 +520,15 @@ func TestFloorDoesNotNullifyCoLoadedShadowPolicy(t *testing.T) {
 	}
 	if res.EffectiveMode != domain.PolicyModeEnforcement {
 		t.Errorf("effective_mode=%v want enforcement", res.EffectiveMode)
+	}
+	if res.PrimaryCitation == nil || res.PrimaryCitation.DocumentID != "refundcap" {
+		t.Errorf("aggregate citation=%#v want shadow deny citation", res.PrimaryCitation)
+	}
+	if res.AppliedPrimaryCitation == nil || res.AppliedPrimaryCitation.DocumentID != "floor" {
+		t.Errorf("applied citation=%#v want enforcement escalation citation", res.AppliedPrimaryCitation)
+	}
+	if len(res.AppliedRuleResults) != 1 || res.AppliedRuleResults[0].PolicyID != "floor" {
+		t.Errorf("applied rules=%#v want only the enforcement floor", res.AppliedRuleResults)
 	}
 	// And the floor still enforces an irreversible action it OWNS, even in a shadow deployment.
 	env2 := envFor("wire_transfer", "payments", nil)

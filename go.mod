@@ -1,6 +1,6 @@
 module github.com/dimaggi-ai/tool-guard-core
 
-go 1.25
+go 1.25.0
 
 toolchain go1.25.13
 
@@ -8,6 +8,7 @@ require (
 	github.com/pganalyze/pg_query_go/v5 v5.1.0
 	github.com/pingcap/tidb/pkg/parser v0.0.0-20260606125118-d568a8528e9c
 	github.com/rqlite/sql v0.0.0-20260224021119-1b2524a41372
+	golang.org/x/sys v0.47.0
 	google.golang.org/protobuf v1.31.0
 	gopkg.in/yaml.v3 v3.0.1
 )

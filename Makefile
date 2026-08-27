@@ -5,7 +5,7 @@
 
 GO      ?= go
 BIN     ?= bin
-PKGS    := ./pkg/... ./cmd/... ./api/...
+PKGS    := ./pkg/... ./cmd/... ./api/... ./examples/mcp-server
 
 .DEFAULT_GOAL := help
 
@@ -102,6 +102,14 @@ conformance: ## Run the public conformance corpus (testdata/conformance/) — al
 .PHONY: policy-compat
 policy-compat: ## Assert frozen policy YAML snapshots (testdata/policy-compat/) still evaluate identically under the current engine
 	$(GO) test -run TestPolicyCompat -v ./cmd/tg/
+
+.PHONY: api-check
+api-check: ## Fail when the exported Go API differs from the reviewed baseline
+	@./scripts/check-api.sh
+
+.PHONY: api-update
+api-update: ## Refresh the Go API baseline after following docs/api-stability.md
+	@./scripts/check-api.sh --update
 
 .PHONY: lint
 lint: ## Run go vet across all packages

@@ -7,16 +7,20 @@ and HTTP proxy (`tg-proxy /evaluate`) — so you can run locally or in productio
 
 ## Install
 
-Not yet published to PyPI — install from source:
+The PyPI distribution is named `toolguard-core` because the unqualified
+`toolguard` project belongs to an unrelated package. The import remains
+`toolguard`. Tagged releases beginning with v0.8.0 install with:
 
 ```bash
-git clone https://github.com/dimaggi-ai/tool-guard-core
-pip install "./tool-guard-core/sdk/python"                    # core only (httpx)
-pip install "./tool-guard-core/sdk/python[langchain]"         # + langchain-core
-pip install "./tool-guard-core/sdk/python[autogen]"           # + pyautogen
-pip install "./tool-guard-core/sdk/python[openai]"            # + openai SDK
-pip install "./tool-guard-core/sdk/python[anthropic]"         # + anthropic SDK
+pip install "toolguard-core"                    # core only (httpx)
+pip install "toolguard-core[langchain]"         # + langchain-core
+pip install "toolguard-core[autogen]"           # + pyautogen
+pip install "toolguard-core[openai]"            # + openai SDK
+pip install "toolguard-core[anthropic]"         # + anthropic SDK
 ```
+
+Before v0.8.0, or when testing an unreleased checkout, use
+`pip install "./sdk/python[langchain]"` from the repository root.
 
 ## Quick start
 
@@ -52,15 +56,11 @@ result = guard.evaluate_raw("issue_refund", {"amount": 100})
 print(result.decision)  # "allowed"
 ```
 
-**Known limitation: CLI mode cannot run in shadow mode today.** The SDK
-never passes `-mode` to `tg evaluate`, which defaults to `enforcement` —
-a `mode: shadow` policy still evaluates under CLI mode, but the engine's
-own mode-escalation rule (a policy's own `mode: enforcement` always wins)
-means the *proxy* backend is the only one where shadow-mode-as-a-fleet-
-default currently works end to end. If you need shadow mode, use
-`mode="proxy"` against a `tg-proxy` started with `-default-mode shadow`
-(see the shadow-mode test in `tests/test_contract.py`,
-`TestProxyShadowModeContract`, for a worked example).
+CLI mode evaluates the whole policy directory as one set. Each policy's YAML
+mode owns its contribution: a `mode: shadow` policy remains observe-only under
+the CLI's default `enforcement` call-site mode, while a `mode: enforcement`
+policy cannot be downgraded by a shadow default. Mixed-mode behavior is pinned
+against the real Go engine in `tests/test_contract.py`.
 
 `evaluate()` raises `ToolDenied` or `ToolEscalated` on a block.
 `evaluate_raw()` always returns the `EvaluationResult` without raising.
@@ -229,8 +229,37 @@ The SDK mirrors the Go `pkg/domain` JSON contract exactly.  Key field names:
 **EvaluationResult** (what the engine returns):
 `decision` (`"allowed"` | `"denied"` | `"escalated"` | `"flagged"`),
 `action_taken`, `decision_reason`, `effective_mode`, `policies_matched`,
-`rules_evaluated`, `rules_triggered`, `rule_results`, `primary_citation`,
-`is_near_miss`, `suggested_response`.
+`rules_evaluated`, `rules_triggered`, `rule_results`, `applied_rule_results`,
+`primary_citation`, `applied_primary_citation`, `is_near_miss`,
+`suggested_response`, and the proxy-only optional `decision_receipt`. The
+applied provenance fields explain `action_taken`;
+the aggregate fields can point to stricter shadow-only telemetry.
+
+**DecisionReceipt** (after a successful proxy audit append):
+`receipt_version`, `trace_id`, `trace_hash`, `hash_algorithm`,
+`canonical_trace_version`, `integrity_model`, `decision`, `action_taken`,
+`timestamp`, optional `issuer`, and the opaque `receipt_uri`.
+
+**Escalation** (poll/approve/deny responses): `id`, `state`, timestamps,
+approver fields, `envelope`, `decision`, and an optional
+`resolution_receipt` after the terminal resolution was audited.
+
+## Decision-receipt helper
+
+```python
+from toolguard.adapters.memory import with_receipt_reference
+
+result = guard.evaluate_raw("issue_refund", {"amount": 100})
+event = with_receipt_reference(
+    {"tool": "issue_refund", "outcome": result.action_taken}, result
+)
+```
+
+The helper adds `tool_guard_receipt_uri` only when the proxy supplied a real
+receipt. It performs no storage or network operation and never fabricates a
+fallback identifier. Absence is never authorization. The URN is a
+tamper-evident hash-chain reference, not a signature or fetchable URL; see the
+[full contract](../../docs/integration.md#7-decision-receipts).
 
 ---
 

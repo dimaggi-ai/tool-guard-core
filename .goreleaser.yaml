@@ -176,7 +176,15 @@ release:
     owner: dimaggi-ai
     name: tool-guard-core
   prerelease: auto
-  draft: false
+  # Keep the GitHub Release private until archive provenance, container
+  # signatures, and the Python package have all been published and verified.
+  # release.yml promotes this draft only in its final transaction step.
+  draft: true
+  # A workflow rerun after the draft or its assets were uploaded must continue
+  # on that same draft instead of failing on duplicate release state. Existing
+  # assets are replaced with the bytes rebuilt from the immutable tag.
+  use_existing_draft: true
+  replace_existing_artifacts: true
   name_template: "Tool Guard Core {{ .Tag }}"
   header: |
     # Tool Guard Core {{ .Tag }}

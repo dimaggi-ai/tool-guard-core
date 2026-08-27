@@ -9,5 +9,5 @@
     "parameters": {"prompt": "summarize this document"},
     "context": {"verified": {"agent_velocity": {"llm_cost_usd_1h": 60, "llm_cost_usd_24h": 350, "token_count_24h": 100000}}}
   },
-  "expect": {"decision": "denied", "action_taken": "denied"}
+  "expect": {"decision": "denied", "action_taken": "denied", "matched_rule_ids": ["rule-llm-cost-hourly", "rule-llm-cost-daily"]}
 }

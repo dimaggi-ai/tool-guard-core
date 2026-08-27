@@ -136,16 +136,13 @@ func TestIntegration_EvaluateExitCodes(t *testing.T) {
 		}
 	})
 
-	t.Run("over cap in shadow mode → exit 0 (allowed_shadow) when policy YAML also says shadow", func(t *testing.T) {
-		// Engine semantic: the effective mode is the STRICTEST of the
-		// call-site mode and every matched policy's mode (engine.Evaluate
-		// step 3). So a policy marked enforcement in YAML cannot be
-		// dropped to shadow by passing -mode shadow on the CLI — that's
-		// intentional (policy authors govern the floor). To observe
-		// shadow behaviour the policy itself must opt into it.
+	t.Run("over cap with shadow policy → exit 0 under the default enforcement call site", func(t *testing.T) {
+		// Policy mode owns the policy's contribution. This is the documented
+		// staging workflow: changing only the YAML to shadow must be sufficient,
+		// even though the CLI call-site default remains enforcement.
 		shadowPolicy := strings.Replace(policyDenyOver500, "mode: enforcement", "mode: shadow", 1)
 		sp := writeFile(t, dir, "policy_shadow.yaml", shadowPolicy)
-		code, stdout, _ := exitCode(t, "evaluate", "-policy", sp, "-call", over, "-mode", "shadow")
+		code, stdout, _ := exitCode(t, "evaluate", "-policy", sp, "-call", over)
 		if code != 0 {
 			t.Fatalf("shadow must exit 0 even on would-deny; got %d, stdout=%s", code, stdout)
 		}
@@ -154,12 +151,30 @@ func TestIntegration_EvaluateExitCodes(t *testing.T) {
 		}
 	})
 
-	t.Run("strictest-mode semantic: policy=enforcement + -mode shadow → still exit 3", func(t *testing.T) {
-		// This pins the engine's "strictest mode wins" contract so any
-		// future refactor that quietly drops it fails the build.
+	t.Run("enforcement policy + -mode shadow → still exit 3", func(t *testing.T) {
+		// A caller cannot downgrade the policy author's enforcement floor.
 		code, stdout, _ := exitCode(t, "evaluate", "-policy", pol, "-call", over, "-mode", "shadow")
 		if code != 3 {
 			t.Fatalf("enforcement-marked policy must still deny under CLI -mode shadow; got %d, stdout=%s", code, stdout)
+		}
+	})
+
+	t.Run("policy directory evaluates mixed modes as one set", func(t *testing.T) {
+		policyDir := filepath.Join(dir, "mixed-policies")
+		if err := os.Mkdir(policyDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		shadowPolicy := strings.Replace(policyDenyOver500, "policy_id: pol-int", "policy_id: pol-shadow", 1)
+		shadowPolicy = strings.Replace(shadowPolicy, "mode: enforcement", "mode: shadow", 1)
+		writeFile(t, policyDir, "00-shadow.yaml", shadowPolicy)
+		writeFile(t, policyDir, "10-enforcement.yaml", policyDenyOver500)
+
+		code, stdout, stderr := exitCode(t, "evaluate", "-policy-dir", policyDir, "-call", over)
+		if code != 3 {
+			t.Fatalf("mixed policy set exit = %d, want 3; stdout=%s stderr=%s", code, stdout, stderr)
+		}
+		if !strings.Contains(stdout, `"action_taken":"denied"`) {
+			t.Errorf("mixed policy set did not preserve enforcement deny: %s", stdout)
 		}
 	})
 
@@ -170,6 +185,13 @@ func TestIntegration_EvaluateExitCodes(t *testing.T) {
 		}
 		if !strings.Contains(stderr, "evaluate:") {
 			t.Errorf("expected verb-prefixed stderr; got: %s", stderr)
+		}
+	})
+
+	t.Run("both policy selectors → exit 2 (usage error)", func(t *testing.T) {
+		code, _, stderr := exitCode(t, "evaluate", "-policy", pol, "-policy-dir", dir, "-call", under)
+		if code != 2 {
+			t.Errorf("exit = %d, want 2; stderr=%s", code, stderr)
 		}
 	})
 
@@ -215,6 +237,46 @@ func TestIntegration_VerifyExitCodes(t *testing.T) {
 		code, _, _ := exitCode(t, "verify", "-file", filepath.Join(dir, "no-such.jsonl"))
 		if code != 1 {
 			t.Errorf("exit = %d, want 1", code)
+		}
+	})
+}
+
+// ── tg export ─────────────────────────────────────────────────────
+
+func TestIntegration_ExportJSONL(t *testing.T) {
+	dir := t.TempDir()
+	intactPath, tamperedPath := writeIntactAndTamperedChain(t, dir)
+
+	t.Run("intact chain is streamed as JSONL", func(t *testing.T) {
+		code, stdout, stderr := exitCode(t, "export", "-file", intactPath, "-format", "jsonl")
+		if code != 0 {
+			t.Fatalf("exit = %d, want 0; stderr=%s", code, stderr)
+		}
+		if stderr != "" {
+			t.Errorf("stderr = %q, want empty", stderr)
+		}
+		lines := strings.Split(strings.TrimSpace(stdout), "\n")
+		if len(lines) != 3 {
+			t.Fatalf("exported lines = %d, want 3; stdout=%s", len(lines), stdout)
+		}
+		for i, line := range lines {
+			var trace domain.DecisionTrace
+			if err := json.Unmarshal([]byte(line), &trace); err != nil {
+				t.Fatalf("line %d is not JSON: %v", i+1, err)
+			}
+		}
+	})
+
+	t.Run("tampered chain is rejected without partial output", func(t *testing.T) {
+		code, stdout, stderr := exitCode(t, "export", "-file", tamperedPath)
+		if code != 1 {
+			t.Fatalf("exit = %d, want 1; stderr=%s", code, stderr)
+		}
+		if stdout != "" {
+			t.Errorf("stdout = %q, want empty", stdout)
+		}
+		if !strings.Contains(stderr, "not intact") {
+			t.Errorf("stderr missing integrity failure: %s", stderr)
 		}
 	})
 }
@@ -370,6 +432,17 @@ func TestIntegration_LintExitCodes(t *testing.T) {
 			t.Errorf("expected schema version in error; got: %s", stderr)
 		}
 	})
+
+	t.Run("comment-only policy is a named load error", func(t *testing.T) {
+		p := writeFile(t, dir, "comment-only.yaml", "# no policy content\n")
+		code, _, stderr := exitCode(t, "lint", "-policy", p)
+		if code != 1 {
+			t.Fatalf("exit = %d, want 1; stderr=%s", code, stderr)
+		}
+		if !strings.Contains(stderr, "comment-only.yaml") || !strings.Contains(stderr, "empty or comment-only") {
+			t.Errorf("expected filename and recovery hint in error; got: %s", stderr)
+		}
+	})
 }
 
 // ── tg benchmark ───────────────────────────────────────────────────────────
@@ -416,7 +489,10 @@ func TestIntegration_Help(t *testing.T) {
 		if code != 0 {
 			t.Errorf("exit = %d, want 0", code)
 		}
-		for _, verb := range []string{"evaluate", "verify", "lint", "benchmark"} {
+		for _, verb := range []string{
+			"evaluate", "simulate", "coverage", "hook", "protect", "status",
+			"unprotect", "verify", "export", "lint", "benchmark", "version",
+		} {
 			if !strings.Contains(stdout, verb) {
 				t.Errorf("usage missing verb %q", verb)
 			}

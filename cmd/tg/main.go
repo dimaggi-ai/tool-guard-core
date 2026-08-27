@@ -1,7 +1,8 @@
-// tg is the Tool Guard Core CLI. One binary, four verbs:
+// tg is the Tool Guard Core CLI. Key data-plane verbs:
 //
-//	tg evaluate -policy POLICY.yaml -call CALL.json     # run one tool call against one policy
+//	tg evaluate (-policy-dir DIR | -policy POLICY.yaml) -call CALL.json
 //	tg verify   -file DECISIONS.jsonl                   # replay the audit chain offline
+//	tg export   -file DECISIONS.jsonl -format jsonl     # stream records for external log tooling
 //	tg lint     -policy POLICY.yaml                     # warn on scope-too-narrow + other footguns
 //	tg benchmark                                        # report deterministic eval p99 on this host
 //
@@ -15,14 +16,12 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"regexp"
 	"runtime/debug"
 	"strings"
 	"time"
 
-	"github.com/dimaggi-ai/tool-guard-core/pkg/audit"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/engine"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/policyload"
@@ -37,7 +36,7 @@ import (
 const usage = `tg — Tool Guard Core CLI
 
 Usage:
-  tg evaluate  -policy POLICY.yaml -call CALL.json [-mode shadow|enforcement]
+  tg evaluate  (-policy-dir DIR | -policy POLICY.yaml) -call CALL.json [-mode shadow|enforcement]
   tg simulate  (-policy-dir DIR | -policy POLICY.yaml) -calls CALLS.jsonl
   tg coverage  (-policy-dir DIR | -policy POLICY.yaml) -calls CALLS.jsonl
   tg hook      (-policy-dir DIR | -policy POLICY.yaml) [-protect-self] [-fail-closed-tools ...]
@@ -45,6 +44,7 @@ Usage:
   tg status    [claude] [-config PATH]
   tg unprotect claude [-apply] [-config PATH]
   tg verify    -file DECISIONS.jsonl
+  tg export    -file DECISIONS.jsonl [-format jsonl] [-since RFC3339] [-until RFC3339] [-policy ID] [-action ACTION]
   tg lint      -policy POLICY.yaml
   tg benchmark [-trials N]
   tg version
@@ -61,6 +61,18 @@ var (
 	Commit    string
 	BuildDate string
 )
+
+func resolvedEngineVersion() string {
+	if Version != "" {
+		return Version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		if v := info.Main.Version; v != "" && v != "(devel)" {
+			return v
+		}
+	}
+	return "(devel)"
+}
 
 // printVersion writes the release version (ldflags-injected) or the
 // module version embedded in the binary, plus the Go toolchain version.
@@ -109,6 +121,8 @@ func main() {
 		os.Exit(cmdUnprotect(args))
 	case "verify":
 		os.Exit(cmdVerify(args))
+	case "export":
+		os.Exit(cmdExport(args))
 	case "lint":
 		os.Exit(cmdLint(args))
 	case "benchmark":
@@ -125,39 +139,42 @@ func main() {
 
 // ── tg evaluate ────────────────────────────────────────────────────────────
 //
-// Reads ONE policy (YAML) and ONE tool call (JSON), runs them through the
+// Reads one policy set (a YAML file or directory) and one tool call (JSON), runs them through the
 // engine, and prints the decision as a single JSONL line. Exit 0 on
 // allow (and allowed_shadow), 3 on deny, 4 on escalate.
 //
-// Note on -mode: the effective mode is the STRICTEST of the -mode flag
-// and the policy YAML's own `mode:` field. A policy marked
-// `mode: enforcement` cannot be downgraded to shadow from the CLI —
-// policy authors govern the floor; the CLI can only raise the bar.
+// Note on -mode: policy mode owns that policy's contribution. A policy
+// marked `mode: shadow` remains telemetry under the default enforcement
+// call site, while a policy marked `mode: enforcement` cannot be downgraded
+// by `-mode shadow`. Policy authors govern the enforcement floor.
 
 func cmdEvaluate(args []string) int {
 	fs := flag.NewFlagSet("evaluate", flag.ExitOnError)
-	policyPath := fs.String("policy", "", "Path to policy YAML")
+	policyDir := fs.String("policy-dir", "", "directory of *.yaml/*.yml policies (mutually exclusive with -policy)")
+	policyPath := fs.String("policy", "", "single policy YAML (mutually exclusive with -policy-dir)")
 	callPath := fs.String("call", "", "Path to tool-call JSON")
 	modeStr := fs.String("mode", "enforcement", "shadow | enforcement")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if *policyPath == "" || *callPath == "" {
-		fmt.Fprintln(os.Stderr, "evaluate: -policy and -call are required")
+	if (*policyDir == "") == (*policyPath == "") {
+		fmt.Fprintln(os.Stderr, "evaluate: exactly one of -policy-dir or -policy is required")
+		fs.Usage()
+		return 2
+	}
+	if *callPath == "" {
+		fmt.Fprintln(os.Stderr, "evaluate: -call is required")
 		fs.Usage()
 		return 2
 	}
 
-	policy, err := policyload.Load(*policyPath)
+	policies, err := loadPolicySet(*policyDir, *policyPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "evaluate:", err)
 		return 1
 	}
-	// Same structural gate the proxy applies at load: unknown effects,
-	// bad regexes/types/depth, classifiers under not:, etc. must refuse
-	// to evaluate rather than silently fail open.
-	if err := engine.ValidatePolicy(&policy); err != nil {
-		fmt.Fprintln(os.Stderr, "evaluate:", err)
+	if len(policies) == 0 {
+		fmt.Fprintln(os.Stderr, "evaluate: no policies loaded")
 		return 1
 	}
 	env, err := loadEnvelopeJSON(*callPath)
@@ -175,7 +192,7 @@ func cmdEvaluate(args []string) int {
 		return 2
 	}
 
-	result := engine.NewEvaluator().Evaluate(env, []domain.Policy{policy}, mode)
+	result := engine.NewEvaluator().Evaluate(env, policies, mode)
 	enc := json.NewEncoder(os.Stdout)
 	if err := enc.Encode(result); err != nil {
 		fmt.Fprintln(os.Stderr, "evaluate: encode:", err)
@@ -206,41 +223,13 @@ func cmdVerify(args []string) int {
 		return 2
 	}
 
-	files, err := audit.RotationSetOldestFirst(*filePath)
+	fileSet, err := openVerifiedAuditFileSet(*filePath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "verify:", err)
 		return 1
 	}
-
-	// Concatenate readers in chain order (oldest first, then active).
-	readers := make([]io.Reader, 0, len(files))
-	closers := make([]io.Closer, 0, len(files))
-	for _, p := range files {
-		f, err := os.Open(p)
-		if err != nil {
-			for _, c := range closers {
-				_ = c.Close()
-			}
-			fmt.Fprintln(os.Stderr, "verify: open", p, ":", err)
-			return 1
-		}
-		readers = append(readers, f)
-		closers = append(closers, f)
-	}
-	defer func() {
-		for _, c := range closers {
-			_ = c.Close()
-		}
-	}()
-
-	report, err := audit.VerifyChainFromReader(io.MultiReader(readers...))
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "verify:", err)
-		return 1
-	}
-	if len(files) > 1 {
-		report.Note = fmt.Sprintf("walked %d files (rotation set): %v", len(files), files)
-	}
+	defer fileSet.close()
+	report := fileSet.report
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(report); err != nil {
@@ -256,8 +245,8 @@ func cmdVerify(args []string) int {
 // ── tg lint ────────────────────────────────────────────────────────────────
 //
 // Static checks on a policy YAML for the footguns the battle test
-// surfaced. Today this applies eight heuristics; the list grows as we
-// surface more bypass classes.
+// surfaced. The implementation-to-docs guard counts these finding IDs, so
+// the public list cannot silently drift as the rule set grows.
 
 type LintFinding struct {
 	Rule     string `json:"rule"`
@@ -778,7 +767,3 @@ func loadEnvelopeJSON(path string) (*domain.ActionEnvelope, error) {
 	}
 	return &env, nil
 }
-
-// Reserved for the streaming-verifier interface — currently a no-op
-// reference so `io` stays imported when we add tg verify -stream later.
-var _ = io.EOF

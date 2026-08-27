@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_call:
 
 jobs:
   test:
@@ -62,8 +63,19 @@ jobs:
       - name: go build
         run: go build ./...
 
+      # Browser/WASI builds do not expose process signals. Keep these compile
+      # checks in the required Ubuntu job so a platform-specific import cannot
+      # silently reintroduce the unsupported-signal regression.
+      - name: Compile signal-less proxy targets
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          portability_dir="${RUNNER_TEMP}/tool-guard-portability"
+          mkdir -p "$portability_dir"
+          GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$portability_dir/tg-proxy-js.wasm" ./cmd/tg-proxy
+          GOOS=wasip1 GOARCH=wasm CGO_ENABLED=0 go build -o "$portability_dir/tg-proxy-wasip1.wasm" ./cmd/tg-proxy
+
       - name: Unit tests with -race
-        run: go test -race -count=1 ./pkg/... ./cmd/... ./api/...
+        run: go test -race -count=1 ./pkg/... ./cmd/... ./api/... ./examples/mcp-server
 
       - name: Coverage on critical packages
         run: |
@@ -78,6 +90,10 @@ jobs:
 
       - name: Integration tests
         run: go test -race -count=1 -tags=integration ./cmd/tg/... ./cmd/tg-proxy/...
+
+      - name: Exported Go API matches reviewed baseline
+        if: matrix.os == 'ubuntu-latest'
+        run: ./scripts/check-api.sh
 
       # Only on one OS in the matrix — the fuzzed logic (JSON/YAML parsing)
       # has no OS-specific code path, so tripling this across the matrix
@@ -123,6 +139,18 @@ jobs:
           # that proves SDK decisions match the real engine, not a mock.
           TG_CONTRACT_REQUIRED: "1"
         run: make sdk-test
+      - name: Build and validate Python distribution
+        run: |
+          python -m pip install --disable-pip-version-check build==1.5.0 twine==7.0.0
+          if [ "${{ matrix.python }}" = "3.12" ]; then
+            bash scripts/verify-python-reproducible.sh dist/python
+          else
+            export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+            python -m build --outdir dist/python sdk/python
+            python scripts/normalize_python_dist.py dist/python --epoch "${SOURCE_DATE_EPOCH}"
+          fi
+          python -m twine check dist/python/*
+          python scripts/verify-python-dist.py dist/python
 
   govulncheck:
     name: govulncheck
@@ -203,3 +231,13 @@ jobs:
           distribution: goreleaser
           version: "~> v2"
           args: check
+
+      - name: Verify transactional release wiring
+        run: |
+          python3 scripts/verify-release-transaction.py
+          python3 -m unittest discover -s scripts -p 'test_verify_release_transaction.py'
+          python3 -m unittest discover -s scripts -p 'test_verify_release_tag_head.py'
+          python3 -m unittest discover -s scripts -p 'test_verify_release_workflow_state.py'
+          python3 -m unittest discover -s scripts -p 'test_select_stress_baseline.py'
+          python3 -m unittest discover -s scripts -p 'test_*python_dist.py'
+          python3 -m unittest discover -s scripts -p 'test_verify_pypi_release.py'

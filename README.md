@@ -15,14 +15,15 @@ tool call — `POST /evaluate` with a JSON `ActionEnvelope`, or call the
 Go library in-process — and it returns **allow / deny / escalate**, the
 exact rule that fired, and the reason, in microseconds. Every decision
 is appended to a SHA-256 hash-chained audit log you can verify offline
-with `tg verify`.
+with `tg verify` and stream into standard log pipelines with `tg export`.
 
 Core decides and records; your tool-execution layer enforces. When the
 answer is `deny`, you don't run the call — one `if` statement at the
 point where your agent executes tools, with working patterns for MCP,
 LangChain, AutoGen, and native Anthropic/OpenAI tool-use loops in
 [docs/integration.md](docs/integration.md). This repo is the complete
-engine: policy evaluation, the SQL / path / shell / LLM classifiers,
+engine: policy evaluation, the SQL / path / shell / write / HTTP / LLM
+classifiers,
 the `/evaluate` service, the Go library, and the audit primitive.
 Nothing in it is gated.
 
@@ -170,7 +171,7 @@ not depend on it.
 
 - Deterministic policy evaluation (thresholds, regex, scope, condition trees)
 - Shadow (observe-only) and enforcement modes — stage a policy against live traffic, then promote it to returning real deny/escalate decisions for your tool layer to act on, without redeploying agents
-- SHA-256 hash-chained audit log — a portable JSONL file you download, verify offline with `tg verify`, and use as source evidence in an audit workflow
+- SHA-256 hash-chained audit log — a portable JSONL file you download, verify offline with `tg verify`, and use as source evidence in an audit workflow; current records identify their engine version, canonical schema, and normalized policy set by hash
 - Policy lint warnings (`tg lint`)
 - `tg-proxy` HTTP service with policy reload, rate limit, escalation
 - Four-dialect SQL classifier (postgres / mysql / sqlite / mssql)
@@ -353,7 +354,19 @@ echo $?
 # 0
 ```
 
-**5. Benchmark the engine on this host:**
+**5. Export verified audit records as JSONL:**
+
+```bash
+./bin/tg export -file decisions.jsonl --format jsonl \
+  --since 2026-08-25T00:00:00Z --action denied \
+  | jq -c '{timestamp, trace_id, action_taken, policy_set_hash}'
+```
+
+The source chain is verified before anything is written to stdout. See
+[Exporting audit records](docs/audit-export.md) for filter semantics, version
+stamps, rotation behavior, and a generic log-forwarding example.
+
+**6. Benchmark the engine on this host:**
 
 ```bash
 ./bin/tg benchmark -trials 10000
@@ -362,10 +375,10 @@ echo $?
 
 p99 ~14µs on an AMD Ryzen 7 7700 — about three orders of magnitude
 below a 25 ms budget. This is a point measurement, not a promise; the
-published proxy floor and its methodology are in
+nightly same-runner proxy regression gate and its methodology are in
 [docs/performance.md](docs/performance.md).
 
-**6. See the audit chain do its job:**
+**7. See the audit chain do its job:**
 
 ```bash
 # Verify the sample chain at examples/decisions_chain.jsonl
@@ -397,7 +410,7 @@ there). The sample tool calls and audit chain to exercise them:
 |---|---|
 | `examples/call_under_cap.json` | Allowed $85 refund. |
 | `examples/call_over_cap.json` | Denied $1000 refund. |
-| `examples/decisions_chain.jsonl` | Real 3-record SHA-256 hash-chained audit log for `tg verify`. |
+| `examples/decisions_chain.jsonl` | Real 3-record SHA-256 hash-chained audit log for `tg verify` and `tg export`. |
 
 ### Domain bundles (each is a self-contained scenario)
 
@@ -471,12 +484,15 @@ to run.
 
 ```
 pkg/domain/      Tool-call envelopes, policy / rule / condition types,
-                 decision traces. JSON-tagged; YAML loaders in cmd/tg.
+                 decision traces. JSON-tagged; no loading or I/O.
+
+pkg/policyload/  Strict YAML loading and deterministic policy-set hashing.
+                 Shared by every policy-loading binary.
 
 pkg/engine/      Pure policy evaluation. No I/O. Given an envelope and a
                  set of policies, returns a decision in microseconds.
-                 Hosts the path_classify / shell_classify predicates and
-                 the regex compile cache.
+                 Hosts path, shell, write, HTTP, and reversibility
+                 classification plus the regex compile cache.
 
 pkg/sqlguard/    Four-dialect SQL classifier. The tokenizer-based
                  lite implementation (postgres / mysql / sqlite) and the
@@ -495,9 +511,11 @@ pkg/llmguard/    Local-LLM content classifier. Pure HTTP client against
                  semantics: timeout / network / model-refusal → deny.
 
 pkg/audit/       SHA-256 hash-chained traces, offline replay verifier,
-                 canonical JSON for stable hashing.
+                 versioned canonical JSON, and per-record engine/policy-set
+                 provenance for stable hashing.
 
-cmd/tg/          The one-shot CLI. evaluate / verify / lint / benchmark.
+cmd/tg/          The one-shot CLI. Policy evaluation, audit verification/export,
+                 linting, simulation, coverage, hooks, protection, and benchmarks.
 
 cmd/tg-proxy/    HTTP service. POST /evaluate, hash-chained JSONL audit
                  with rotation, SIGHUP policy reload, /metrics,
@@ -554,13 +572,16 @@ policy loading.
 - **Engine + audit chain:** table-driven tests pass with `-race`, ~µs p99
   on commodity hardware. CI enforces statement-coverage floors of 85%
   on `pkg/audit` and `pkg/engine` and 90% on `pkg/sqlguard/mssql`.
-- **CLI:** four operational verbs (`evaluate`, `verify`, `lint`, `benchmark`) plus `version`, with
-  documented exit-code contract; integration tests shell-out the binary
-  and assert behaviour end-to-end.
+- **CLI:** policy evaluation/simulation/coverage, native hooks/protection,
+  audit verification/export, linting, and benchmarks, with a documented
+  exit-code contract; integration tests shell-out the binary and assert
+  behaviour end-to-end.
 - **`tg-proxy` HTTP service:** `POST /evaluate` with hash-chained JSONL
   audit, SIGHUP policy reload, fail-closed by default, per-agent rate
   limiting, audit log rotation, integration tests assert the HTTP
-  contract over a real socket.
+  contract over a real socket. Successfully appended decisions carry an
+  optional, hash-keyed `decision_receipt`; escalation approvals/denials carry
+  a separate `resolution_receipt` ([contract and limits](docs/integration.md#7-decision-receipts)).
 - **SQL / path / shell / write / HTTP semantic classifiers:** four-dialect
   SQL classifier (`postgres`, `mysql`, `sqlite`, `mssql`) with pure-Go
   default tokenizer + opt-in strict variants via build tags. Closes CTE,
@@ -591,9 +612,11 @@ policy loading.
 Comprehensive docs live in [`docs/`](docs/README.md):
 
 - [Getting Started](docs/getting-started.md) — install, build, first policy in 5 commands
+- [CLI Reference](docs/cli-reference.md) — every `tg` command, checked against the binary in CI
 - [Architecture](docs/architecture.md) — engine, audit chain, classifiers
 - [Creating Policies](docs/creating-policies.md) — full YAML schema, every operator and classifier
 - [Operating in production](docs/operating.md) — systemd, k8s, metrics, backup, recovery
+- [Exporting audit records](docs/audit-export.md) — verified JSONL, filters, version stamps, log pipelines
 - [Content-gen bundle](docs/content-gen-bundle.md) — the multimodal Gemma 4 classifier
 - [Integration](docs/integration.md) — MCP, LangChain, AutoGen, native tool-use loops
 - [Escalation flow](docs/escalation.md) — human-in-the-loop approval
@@ -602,6 +625,13 @@ Comprehensive docs live in [`docs/`](docs/README.md):
 
 ## Known limitations
 
+> **New in 0.8.0 (breaking):** policy YAML `mode` is authoritative;
+> duplicate policy/rule identities are rejected; new audit writes use canonical
+> v2 and must not be resumed by a 0.7 writer; and direct access to
+> `engine.LLMClassifyHook` is replaced by its synchronized getter/setter.
+> Upgrade every writer and verifier that shares a chain together, run `tg lint`
+> and `tg simulate` before rollout, and follow the exact migration checklist in
+> [Release-Notes.md](Release-Notes.md).
 > **New in 0.7.0 (breaking):** policy loading is strict everywhere —
 > `schema_version: 1` declared (omitted still loads as v1), unknown or
 > misspelled fields are load errors, the no-op `deep_evaluation` field
@@ -670,10 +700,14 @@ Features absent from this repo today:
   certification or compliance guarantee.
 - **No managed hosting.** You run the proxy. You run Ollama. You own
   the operations. There is no hosted version.
+- **No receipt resolver.** Decision receipt URNs are deliberately opaque and
+  non-resolvable. Building a lookup endpoint requires authentication,
+  field-level disclosure policy, retention/rotation search, and rate limiting.
 - **No gRPC variant.** REST `POST /evaluate` only.
 - **No Node client SDK.** A Python SDK ships at
-  [`sdk/python/`](sdk/python/README.md) (`pip install` from source —
-  not yet on PyPI) with adapters for LangChain, AutoGen, native
+  [`sdk/python/`](sdk/python/README.md) (PyPI distribution
+  `toolguard-core` beginning with v0.8.0; import name `toolguard`) with
+  adapters for LangChain, AutoGen, native
   OpenAI/Anthropic tool use, and MCP. For other languages, the
   `tg-proxy` HTTP surface is specified in
   [`api/openapi.yaml`](api/openapi.yaml) (with conformance tests) and
@@ -699,7 +733,7 @@ Tool Guard governs **what an agent does**. Many AI-safety tools govern
 | Conversation-flow guardrails | Dialogue flow + content | Whether a conversation follows an allowed path or response flow |
 | Structured-output validators | Model output | Whether model output matches a schema, regex, topic, or format requirement |
 | Pre-deployment eval suites | Test/eval time | Whether prompts and responses pass benchmark or regression checks before release |
-| **Tool Guard Core** | **Tool execution** | **What action is about to run** — SQL/shell/path/LLM classifiers plus policy evaluation on the structured tool call, before the API executes; tamper-evident audit trail |
+| **Tool Guard Core** | **Tool execution** | **What action is about to run** — SQL/path/shell/write/HTTP/LLM classifiers plus policy evaluation on the structured tool call, before the API executes; tamper-evident audit trail |
 
 Use prompt and response guardrails when you need to control model text.
 Use Tool Guard when agents call tools that touch money, customer data,

@@ -1,0 +1,20 @@
+{
+  "name": "operator_regex",
+  "description": "The operator regex condition is evaluated through a loaded YAML policy and matches its dedicated rule.",
+  "policy_file": "fixtures/operator_matrix.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "operator_probe",
+    "parameters": {
+      "case": "op_regex",
+      "value": "safe-42"
+    }
+  },
+  "expect": {
+    "decision": "denied",
+    "action_taken": "denied",
+    "matched_rule_ids": [
+      "op-regex"
+    ]
+  }
+}

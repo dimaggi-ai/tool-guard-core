@@ -16,7 +16,10 @@ from toolguard.types import (
     AgentVelocityContext,
     Citation,
     Decision,
+    DecisionReceipt,
     EnvelopeContext,
+    Escalation,
+    EscalationState,
     EvaluationResult,
     Framework,
     IntegrationType,
@@ -26,6 +29,16 @@ from toolguard.types import (
     SessionStateContext,
     VerifiedContext,
 )
+
+
+def test_escalation_state_constants_match_server_contract():
+    assert {
+        EscalationState.PENDING,
+        EscalationState.APPROVED,
+        EscalationState.DENIED,
+        EscalationState.EXPIRED,
+        EscalationState.INDETERMINATE,
+    } == {"pending", "approved", "denied", "expired", "indeterminate"}
 
 
 # ---------------------------------------------------------------------------
@@ -284,6 +297,50 @@ class TestEvaluationResult:
         assert "primary_citation" in d
         assert d["primary_citation"]["document_id"] == "d1"
 
+    def test_applied_provenance_field_names(self):
+        applied_rule = RuleResult(
+            rule_id="enforce-r1",
+            rule_name="Enforced escalation",
+            policy_id="enforce-pol",
+            matched=True,
+            effect="escalate",
+            citation=Citation(document_id="enforce-doc", excerpt="Needs approval"),
+        )
+        result = EvaluationResult(
+            applied_rule_results=[applied_rule],
+            applied_primary_citation=Citation(
+                document_id="enforce-doc", excerpt="Needs approval"
+            ),
+        )
+        d = result.to_dict()
+        assert d["applied_rule_results"][0]["policy_id"] == "enforce-pol"
+        assert d["applied_primary_citation"]["document_id"] == "enforce-doc"
+
+    def test_v070_positional_constructor_compatibility(self):
+        """0.8 additive fields must not rebind the published 0.7 signature."""
+        citation = Citation(document_id="legacy-doc", excerpt="Legacy citation")
+        rule = RuleResult(rule_id="legacy-rule", matched=True, effect="deny")
+        result = EvaluationResult(
+            Decision.DENIED,
+            ActionTaken.DENIED,
+            "legacy reason",
+            PolicyMode.ENFORCEMENT,
+            1,
+            2,
+            1,
+            [rule],
+            citation,
+            True,
+            "legacy guidance",
+        )
+
+        assert result.primary_citation is citation
+        assert result.is_near_miss is True
+        assert result.suggested_response == "legacy guidance"
+        assert result.applied_rule_results == []
+        assert result.applied_primary_citation is None
+        assert result.to_dict()["primary_citation"]["document_id"] == "legacy-doc"
+
     def test_suggested_response_field_name(self):
         result = EvaluationResult(suggested_response="Please reduce the amount.")
         d = result.to_dict()
@@ -309,7 +366,18 @@ class TestEvaluationResult:
                     "citation": {"document_id": "sop-001", "excerpt": "No refund >$500"},
                 }
             ],
+            "applied_rule_results": [
+                {
+                    "rule_id": "rule-amount-cap",
+                    "rule_name": "Amount cap",
+                    "policy_id": "pol-refund",
+                    "matched": True,
+                    "effect": "deny",
+                    "citation": {"document_id": "sop-001", "excerpt": "No refund >$500"},
+                }
+            ],
             "primary_citation": {"document_id": "sop-001", "excerpt": "No refund >$500"},
+            "applied_primary_citation": {"document_id": "sop-001", "excerpt": "No refund >$500"},
             "is_near_miss": False,
         }
         result = EvaluationResult.from_dict(wire)
@@ -319,8 +387,12 @@ class TestEvaluationResult:
         assert result.rules_triggered == 1
         assert len(result.rule_results) == 1
         assert result.rule_results[0].rule_id == "rule-amount-cap"
+        assert len(result.applied_rule_results) == 1
+        assert result.applied_rule_results[0].policy_id == "pol-refund"
         assert result.primary_citation is not None
         assert result.primary_citation.document_id == "sop-001"
+        assert result.applied_primary_citation is not None
+        assert result.applied_primary_citation.document_id == "sop-001"
 
     def test_sample_envelope_go_contract(self):
         """
@@ -374,3 +446,103 @@ class TestCitation:
         restored = Citation.from_dict(original.to_dict())
         assert restored.document_id == "d1"
         assert restored.excerpt == "cap rule"
+
+
+# ---------------------------------------------------------------------------
+# DecisionReceipt and receipt-bearing proxy responses
+# ---------------------------------------------------------------------------
+
+_WIRE_RECEIPT = {
+    "receipt_version": "1",
+    "trace_id": "trc-001",
+    "trace_hash": "sha256:" + "ab" * 32,
+    "hash_algorithm": "sha256",
+    "canonical_trace_version": "v2",
+    "integrity_model": "hash-chain",
+    "decision": "denied",
+    "action_taken": "denied",
+    "timestamp": "2026-08-25T00:00:00Z",
+    "issuer": "proxy-instance-7",
+    "receipt_uri": "urn:tool-guard:trace:v2:sha256:" + "ab" * 32,
+}
+
+
+class TestDecisionReceipt:
+    def test_wire_fields_round_trip(self):
+        receipt = DecisionReceipt.from_dict(_WIRE_RECEIPT)
+        assert receipt.to_dict() == _WIRE_RECEIPT
+
+    def test_optional_issuer_is_omitted(self):
+        wire = dict(_WIRE_RECEIPT)
+        wire.pop("issuer")
+        receipt = DecisionReceipt.from_dict(wire)
+        assert receipt.issuer == ""
+        assert "issuer" not in receipt.to_dict()
+
+    def test_unknown_future_fields_are_ignored(self):
+        receipt = DecisionReceipt.from_dict(
+            dict(_WIRE_RECEIPT, future_metadata={"new": True})
+        )
+        assert receipt.receipt_uri == _WIRE_RECEIPT["receipt_uri"]
+
+
+class TestEvaluationResultReceipt:
+    def test_absent_receipt_stays_absent(self):
+        result = EvaluationResult.from_dict(
+            {"decision": "allowed", "action_taken": "allowed"}
+        )
+        assert result.decision_receipt is None
+        assert "decision_receipt" not in result.to_dict()
+
+    def test_nested_receipt_round_trip(self):
+        result = EvaluationResult.from_dict(
+            {
+                "decision": "denied",
+                "action_taken": "denied",
+                "decision_receipt": _WIRE_RECEIPT,
+            }
+        )
+        assert result.decision_receipt is not None
+        assert result.decision_receipt.trace_hash == _WIRE_RECEIPT["trace_hash"]
+        assert result.to_dict()["decision_receipt"] == _WIRE_RECEIPT
+
+    def test_non_object_receipt_is_ignored_without_changing_decision(self):
+        result = EvaluationResult.from_dict(
+            {
+                "decision": "allowed",
+                "action_taken": "allowed",
+                "decision_receipt": "malformed",
+            }
+        )
+        assert result.decision == "allowed"
+        assert result.decision_receipt is None
+
+
+class TestEscalationReceipt:
+    def test_resolution_receipt_round_trip(self):
+        wire = {
+            "id": "esc-1",
+            "state": "approved",
+            "created_at": "2026-08-25T00:00:00Z",
+            "expires_at": "2026-08-25T00:15:00Z",
+            "resolved_at": "2026-08-25T00:01:00Z",
+            "approver": "operator",
+            "envelope": {},
+            "decision": {"decision": "escalated", "action_taken": "escalated"},
+            "resolution_receipt": _WIRE_RECEIPT,
+        }
+        escalation = Escalation.from_dict(wire)
+        assert escalation.resolution_receipt is not None
+        assert escalation.resolution_receipt.receipt_uri == _WIRE_RECEIPT["receipt_uri"]
+        assert escalation.to_dict()["resolution_receipt"] == _WIRE_RECEIPT
+
+    def test_pending_resolution_receipt_is_absent(self):
+        escalation = Escalation.from_dict(
+            {
+                "id": "esc-pending",
+                "state": "pending",
+                "envelope": {},
+                "decision": {"decision": "escalated", "action_taken": "escalated"},
+            }
+        )
+        assert escalation.resolution_receipt is None

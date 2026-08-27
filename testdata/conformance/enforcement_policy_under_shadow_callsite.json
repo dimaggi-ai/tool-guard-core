@@ -1,0 +1,20 @@
+{
+  "name": "enforcement_policy_under_shadow_callsite",
+  "description": "A call-site shadow default cannot downgrade a policy explicitly declared as enforcement.",
+  "policy_file": "../../policies/refund_cap.yaml",
+  "mode": "shadow",
+  "envelope": {
+    "tool_name": "issue_refund",
+    "tool_group": "monetary_outflow",
+    "parameters": {
+      "amount": 750
+    }
+  },
+  "expect": {
+    "decision": "denied",
+    "action_taken": "denied",
+    "matched_rule_ids": [
+      "rule-amount-cap"
+    ]
+  }
+}

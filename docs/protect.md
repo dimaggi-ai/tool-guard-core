@@ -100,7 +100,9 @@ must parse and pass engine validation before the hook is activated.
   the pristine backup, and the audit directory (including rotation siblings).
 - `-protect-self` additionally blocks the agent from writing its policy source.
 - Consequential tools fail closed if policy loading or evaluation fails.
-- Every hook decision is appended to the hash-chained audit log.
+- Before each append, the hook verifies the complete existing hash chain under
+  its append lock. An invalid chain or persistence failure is reported on
+  stderr without changing the already-made tool decision.
 
 Rollback is also preview-first:
 

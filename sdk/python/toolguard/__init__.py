@@ -30,7 +30,10 @@ from toolguard.types import (
     AgentVelocityContext,
     Citation,
     Decision,
+    DecisionReceipt,
     EnvelopeContext,
+    Escalation,
+    EscalationState,
     EvaluationResult,
     Framework,
     IntegrationType,
@@ -66,4 +69,7 @@ __all__ = [
     "JustificationContext",
     "Citation",
     "RuleResult",
+    "DecisionReceipt",
+    "Escalation",
+    "EscalationState",
 ]

@@ -12,6 +12,7 @@
   },
   "expect": {
     "decision": "denied",
-    "action_taken": "denied"
+    "action_taken": "denied",
+    "matched_rule_ids": ["rule-write-surface"]
   }
 }

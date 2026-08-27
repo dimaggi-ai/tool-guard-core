@@ -1,10 +1,37 @@
 package engine
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 )
+
+func TestEvaluatedAmountMatchesFlattenEnvelope(t *testing.T) {
+	tests := []struct {
+		name       string
+		parameters string
+		wantAmount float64
+		wantStatus string
+	}{
+		{name: "missing", parameters: `{}`, wantAmount: 0, wantStatus: AmountParseOK},
+		{name: "sub-cent", parameters: `{"amount": 1.001}`, wantAmount: 1.001, wantStatus: AmountParseOK},
+		{name: "malformed", parameters: `{"amount": {"value": 100}}`, wantAmount: invalidAmountSentinel, wantStatus: AmountParseInvalidFailClosed},
+		{name: "non-finite", parameters: `{"amount": "NaN"}`, wantAmount: invalidAmountSentinel, wantStatus: AmountParseInvalidFailClosed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := &domain.ActionEnvelope{Parameters: json.RawMessage(tt.parameters)}
+			gotAmount, gotStatus := EvaluatedAmount(env)
+			if gotAmount != tt.wantAmount || gotStatus != tt.wantStatus {
+				t.Fatalf("EvaluatedAmount = (%v, %q), want (%v, %q)", gotAmount, gotStatus, tt.wantAmount, tt.wantStatus)
+			}
+			if flattened := FlattenEnvelope(env)["amount"]; flattened != gotAmount {
+				t.Fatalf("FlattenEnvelope amount = %v, EvaluatedAmount = %v", flattened, gotAmount)
+			}
+		})
+	}
+}
 
 func TestEvalCondition_LeafOperators(t *testing.T) {
 	fields := map[string]interface{}{

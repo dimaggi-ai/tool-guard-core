@@ -9,7 +9,7 @@ list of **rules** that say what to do.
 
 ```yaml
 schema_version: 1                 # Tool Guard policy schema
-policy_id: pol-refund-cap          # unique within the loaded set
+policy_id: pol-refund-cap          # policy_id + version is unique in the set
 name: refund-cap                   # human label
 description: >
   Allow refunds under $500; deny above.
@@ -22,7 +22,7 @@ scope:
   tool_groups: [monetary_outflow]  # by tool_group
 
 rules:
-  - rule_id: rule-amount-cap
+  - rule_id: rule-amount-cap       # unique within this policy
     name: Single refund amount limit
     rule_type: threshold
     conditions:
@@ -68,10 +68,14 @@ The former top-level `deep_evaluation` field was removed because no evaluator
 consumed it. Policies that need semantic classification should use an
 `llm_classify` condition.
 
-`tg lint -policy <file>` validates the shape and runs eight
-checks - warnings and errors (see [`tg lint` heuristics](#tg-lint-heuristics)).
+`tg lint -policy <file>` validates the shape and runs 10
+checks - warnings and errors (see [`tg lint` checks](#tg-lint-checks)).
 A policy that lints with `error`-severity findings will be REFUSED
 by `tg-proxy` at load.
+
+An empty or comment-only file is a load error, as is any document with a
+missing or blank `policy_id`. The error names the source file. This prevents an
+unfinished file from loading as a permissive, ID-less policy shell.
 
 ## Scope
 
@@ -126,10 +130,14 @@ hook maps its standard write and HTTP tool names to `filesystem_writes` and
 
 ## Modes
 
-- `enforcement` - the decision returned to the agent is applied.
-- `shadow` - the decision is computed and audited but the agent is
-  always told `allowed`. Useful for rolling out a new rule and
-  watching how it would have behaved against real traffic.
+- `enforcement` - this policy's decision contributes to the action applied to
+  the agent.
+- `shadow` - this policy's decision is computed and audited, but does not
+  contribute a deny or escalation to the applied action. A shadow-only match
+  is operationally allowed and reported as `action_taken: allowed_shadow`,
+  while the raw `decision` preserves what the policy would have done. Shadow
+  applies to one policy's contribution: it cannot weaken a co-loaded
+  `enforcement` policy.
 
 A near-miss flag on the trace records which mode the rule was
 operating in and what the "would-be" decision would have been.
@@ -340,7 +348,8 @@ conditions:
 ```
 
 `not:` may wrap a leaf condition (as above) but **not** a classifier
-(`sql_classify` / `path_classify` / `shell_classify` / `llm_classify`).
+(`sql_classify` / `path_classify` / `shell_classify` / `llm_classify` /
+`write_classify` / `http_classify`).
 Classifiers are fail-closed - they fire on malformed or adversarial input
 so a deny rule trips - and negating one inverts that into fail-OPEN.
 `ValidatePolicy` rejects any classifier under a `not:` node; express the
@@ -349,11 +358,12 @@ allowed set positively (e.g. `require.top_level_kinds: [SELECT]`) instead.
 `ValidatePolicy` refuses condition trees deeper than 64 nodes
 (stack-exhaustion defence).
 
-## tg lint heuristics
+## tg lint checks
 
 | Rule | Severity | Catches |
 |---|---|---|
 | `policy-scope-leak` | warn | Empty scope - policy matches every call |
+| `global-scope-contradiction` | warn | `intentionally_global` is combined with a tool selector, so the policy is not actually global |
 | `scope-no-tool-group` | warn | Tool-substitution bypass surface |
 | `amount-without-semantic-check` | warn | Free-text amount fragmentation; suppressed when a compiling regex / contains rule on a non-amount free-text field is present |
 | `rule-missing-citation` | warn | Auditor traceability gap |
@@ -424,8 +434,10 @@ no half-load state.
 
 ## Validation surface
 
-`ValidatePolicy` (run on every load) refuses:
+The shared loader and `ValidatePolicy` structural gate (both run on every load)
+refuse:
 
+- empty/comment-only policy files and blank `policy_id` values
 - empty / multi-form condition nodes
 - nil values on `eq` / `neq`
 - numeric operator on a non-numeric value

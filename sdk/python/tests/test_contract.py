@@ -30,6 +30,7 @@ import time
 import pytest
 
 from toolguard.client import ToolGuard
+from toolguard.adapters.memory import receipt_reference
 from toolguard.errors import ToolDenied, ToolEscalated
 from toolguard.types import Decision
 
@@ -94,6 +95,25 @@ rules:
     citation:
       document_id: sdk-contract-test
       excerpt: "Allow refunds up to $500"
+"""
+
+_ESCALATE_POLICY = """\
+policy_id: sdk-contract-escalate-cap
+status: approved
+mode: enforcement
+scope:
+  tool_names: [issue_refund]
+  tool_groups: [monetary_outflow]
+rules:
+  - rule_id: rule-escalate-cap
+    conditions:
+      field: amount
+      operator: gt
+      value: 500
+    effect: escalate
+    citation:
+      document_id: sdk-contract-test
+      excerpt: "Escalate refunds over $500 in the contract test"
 """
 
 
@@ -303,6 +323,7 @@ class TestContract:
 
         assert sdk_result.decision == engine_decision
         assert engine_decision == Decision.ALLOWED
+        assert sdk_result.decision_receipt is None  # non-durable CLI path
 
     def test_denied_call_matches_engine(self, sdk_client, tg_binary, policy_dir):
         """SDK decision for a denied call (amount $1000) must match raw engine."""
@@ -400,6 +421,48 @@ class TestContract:
         )
         assert result.decision == Decision.ALLOWED
 
+    @pytest.mark.parametrize(
+        ("enforcement_policy", "expected_exception", "expected_action"),
+        [
+            (_DENY_POLICY, ToolDenied, "denied"),
+            (_ESCALATE_POLICY, ToolEscalated, "escalated"),
+        ],
+    )
+    def test_mixed_modes_preserve_enforcement_action(
+        self,
+        tg_binary,
+        tmp_path,
+        enforcement_policy,
+        expected_exception,
+        expected_action,
+    ):
+        """A lexically earlier shadow deny cannot mask an enforced action."""
+        shadow = _DENY_POLICY.replace(
+            "policy_id: sdk-contract-deny-cap",
+            "policy_id: sdk-contract-shadow-deny-cap",
+        ).replace("mode: enforcement", "mode: shadow")
+        (tmp_path / "00-shadow-deny.yaml").write_text(shadow)
+        (tmp_path / "10-enforcement.yaml").write_text(enforcement_policy)
+        client = ToolGuard(
+            mode="cli",
+            tg_bin=tg_binary,
+            policy_dir=str(tmp_path),
+            agent_id="sdk-contract-agent",
+            org_id="sdk-contract-org",
+        )
+
+        with pytest.raises(expected_exception) as exc_info:
+            client.evaluate(
+                "issue_refund",
+                {"amount": 1000},
+                tool_group="monetary_outflow",
+            )
+
+        result = exc_info.value.result
+        assert result.decision == Decision.DENIED
+        assert result.action_taken == expected_action
+        assert result.is_near_miss is True
+
 
 # ---------------------------------------------------------------------------
 # Proxy-mode shadow contract: the real regression net for the
@@ -432,6 +495,11 @@ class TestProxyShadowModeContract:
 
         assert result.decision == Decision.DENIED
         assert result.action_taken == "allowed_shadow"
+        assert result.decision_receipt is not None
+        assert result.decision_receipt.canonical_trace_version == "v2"
+        assert result.decision_receipt.decision == Decision.DENIED
+        assert result.decision_receipt.action_taken == "allowed_shadow"
+        assert receipt_reference(result) == result.decision_receipt.receipt_uri
 
     def test_shadow_mode_allows_stay_allowed(self, tg_proxy_shadow):
         """Sanity check: a call the shadow policy wouldn't deny anyway

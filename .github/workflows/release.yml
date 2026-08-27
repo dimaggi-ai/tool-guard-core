@@ -6,41 +6,142 @@ on:
       - "v*.*.*"
 
 permissions:
-  contents: write     # GitHub Releases
-  packages: write     # ghcr.io image push
-  id-token: write     # actions/attest-build-provenance (OIDC signing)
-  attestations: write # actions/attest-build-provenance (publish the attestation)
+  contents: read
 
 jobs:
-  release:
+  # Guards against the v0.3.0 failure mode and stale reviewed heads: a new tag
+  # must point at main's exact current commit, not merely an ancestor of main.
+  # A rerun may resume the same immutable tag only when a draft already exists
+  # and main advanced normally as its descendant.
+  preflight:
+    name: Verify tag is releasable
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Reject unsupported tag shapes
+        run: |
+          if [[ ! "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Release tags must be stable semver (vN.N.N); prerelease tags are not published by this workflow." >&2
+            exit 1
+          fi
+      - name: Checkout (with tags)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Resolve release state
+        id: release-state
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          release_state=missing
+          if [ "${GITHUB_RUN_ATTEMPT}" -gt 1 ]; then
+            if release_draft="$(gh release view "${GITHUB_REF_NAME}" --json isDraft --jq '.isDraft' 2>/dev/null)"; then
+              if [ "${release_draft}" = "true" ]; then
+                release_state=draft
+              elif [ "${release_draft}" = "false" ]; then
+                release_state=public
+              fi
+            fi
+          fi
+          echo "state=${release_state}" >> "${GITHUB_OUTPUT}"
+      - name: Verify new tag or safe draft recovery
+        run: |
+          set -euo pipefail
+          git fetch origin main --quiet
+          git fetch origin "refs/tags/${GITHUB_REF_NAME}:refs/remotes/origin/release-preflight-tag" --force --quiet
+          bash scripts/verify-release-workflow-state.sh \
+            "${GITHUB_SHA}" origin/main "${GITHUB_REF_NAME}" \
+            "${GITHUB_RUN_ATTEMPT}" "${{ steps.release-state.outputs.state }}" \
+            refs/remotes/origin/release-preflight-tag
+
+  # Execute the exact workflow used as the merge gate at this tag. Keeping
+  # verification in ci.yml means tag releases cannot silently omit a race,
+  # vulnerability, policy-lint, SDK, platform, or GoReleaser-config check.
+  verify:
+    name: Full CI verification
+    needs: preflight
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
+  python-package:
+    name: Build Python package
+    needs: verify
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # setuptools-scm derives the SDK version from the release tag.
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Build and validate distributions
+        run: |
+          export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          python -m pip install --disable-pip-version-check build==1.5.0 twine==7.0.0
+          bash scripts/verify-python-reproducible.sh dist/python
+          python -m twine check dist/python/*
+          python scripts/verify-python-dist.py dist/python --expected-version "${GITHUB_REF_NAME#v}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: python-dist
+          path: dist/python/
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Stage artifacts and signed images
+    needs: [preflight, verify, python-package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write     # GitHub Releases
+      packages: write     # ghcr.io image push
+      id-token: write     # actions/attest-build-provenance (OIDC signing)
+      attestations: write # actions/attest-build-provenance (publish the attestation)
+    steps:
+      - name: Refuse to mutate an already-public release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          response="${RUNNER_TEMP}/release-state.json"
+          status="$(curl --silent --show-error \
+            --connect-timeout 5 --max-time 15 \
+            --output "${response}" --write-out '%{http_code}' \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/${GH_REPO}/releases/tags/${TAG}")"
+          case "${status}" in
+            200)
+              if [ "$(jq -r '.draft' "${response}")" != "true" ]; then
+                echo "::error::${TAG} already has a public GitHub Release; refusing to rebuild or push release artifacts" >&2
+                exit 1
+              fi
+              echo "Reusing the existing draft for ${TAG}"
+              ;;
+            404)
+              echo "No existing release for ${TAG}; a new draft will be staged"
+              ;;
+            *)
+              echo "::error::GitHub release-state query failed with HTTP ${status}" >&2
+              exit 1
+              ;;
+          esac
       - name: Checkout (with tags)
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
-      # Guards against exactly the failure mode from the v0.3.0 release: the
-      # tag was cut and published from a long-lived release/vX.Y.Z branch,
-      # but nobody fast-forwarded main to it — so the GitHub Release existed
-      # and worked, while the repo's default branch, its README, and its
-      # CHANGELOG.md/Release-Notes.md (which every Release's own body links
-      # to via blob/main/...) all still showed the PREVIOUS version. Refuse
-      # to publish a release whose tag commit main doesn't already contain —
-      # this must be the very first check, before any build/publish work.
-      - name: Verify this tag is reachable from main
-        run: |
-          git fetch origin main --quiet
-          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
-            echo "::error::Tag ${GITHUB_REF_NAME} (${GITHUB_SHA}) is not reachable from origin/main." >&2
-            echo "::error::main must be fast-forwarded (or merged) to this commit BEFORE tagging — see RELEASING.md." >&2
-            echo "::error::Fix: git checkout main && git merge --ff-only ${GITHUB_SHA} && git push origin main — then re-run this tag's release, or delete and re-push the tag once main is caught up." >&2
-            exit 1
-          fi
-          echo "OK: ${GITHUB_REF_NAME} is reachable from main."
-
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           # Keep in lockstep with go.mod and ci.yml — a release built on a
           # different toolchain than CI tested is untested code.
@@ -48,28 +149,31 @@ jobs:
           cache: true
 
       - name: Set up QEMU (for cross-arch container builds)
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install syft (for SBOM)
-        uses: anchore/sbom-action/download-syft@v0
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
 
-      - name: Verify build + tests pass at this tag
+      - name: Verify release tag before artifact publication
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
-          go vet ./...
-          go test -count=1 ./pkg/... ./cmd/... ./api/...
-
+          set -euo pipefail
+          git fetch origin "refs/tags/${TAG}:refs/remotes/origin/release-artifact-tag-check" --force --quiet
+          bash scripts/verify-release-tag-immutable.sh \
+            "${GITHUB_SHA}" refs/remotes/origin/release-artifact-tag-check "${TAG}"
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
         with:
           distribution: goreleaser
           version: "~> v2"
@@ -89,7 +193,7 @@ jobs:
       # separate rebuild-and-diff verifier job this repo doesn't have yet
       # — don't conflate the two when talking about this publicly.
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
         with:
           subject-path: "dist/*.tar.gz,dist/*.zip,dist/checksums.txt"
 
@@ -107,7 +211,7 @@ jobs:
       # for some other tag shape (v0.7.0-anything) can never satisfy the
       # documented verification.
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@f713795cb21599bc4e5c4b58cbad1da852d7eeb9 # v3
 
       - name: Sign container images (keyless, by digest)
         env:
@@ -121,11 +225,8 @@ jobs:
             cosign sign --yes "${IMAGE}@${digest}"
           done
 
-      # The GitHub Release (published by GoReleaser, above) already
-      # claims the images are signed — so prove it before the workflow
-      # goes green: verify both manifests against the exact documented
-      # identity. A failed or skipped signing step fails the release
-      # here instead of shipping release notes that overclaim.
+      # The GitHub Release is still a draft at this point. Prove both
+      # manifests before the final job makes those notes public.
       - name: Verify container signatures (fail release if unsigned)
         env:
           IMAGE: ghcr.io/dimaggi-ai/tool-guard-core
@@ -138,3 +239,114 @@ jobs:
               --certificate-identity-regexp '^https://github\.com/dimaggi-ai/tool-guard-core/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$' \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com
           done
+
+  publish-python:
+    name: Publish Python package to PyPI
+    needs: [python-package, release]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/toolguard-core/
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout release verification code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      # SHA-pinned because this job can mint a PyPI OIDC token.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: python-dist
+          path: dist/python
+      - name: Verify release tag before PyPI publication
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git fetch origin "refs/tags/${TAG}:refs/remotes/origin/release-pypi-tag-check" --force --quiet
+          bash scripts/verify-release-tag-immutable.sh \
+            "${GITHUB_SHA}" refs/remotes/origin/release-pypi-tag-check "${TAG}"
+      - name: Publish with PyPI trusted publishing
+        # SHA-pinned because a mutable ref in an id-token:write job can steal
+        # the trusted-publishing identity and the distribution artifact.
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1, reviewed 2026-08-26
+        with:
+          packages-dir: dist/python/
+          # A retry after PyPI accepted one distribution but the workflow
+          # lost its response must not fail on that already-present file.
+          skip-existing: true
+
+  finalize-release:
+    name: Verify registries and publish GitHub Release
+    needs: [release, publish-python]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      # Keep gh repository resolution explicit even though this job checks out
+      # the tag for the registry-verification helper below.
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Checkout release verification code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Download the exact Python distributions sent to PyPI
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: python-dist
+          path: dist/python
+      - name: Verify staged release and PyPI package
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          release_draft="$(gh release view "${TAG}" --json isDraft --jq '.isDraft')"
+          if [ "${release_draft}" != "true" ] && [ "${GITHUB_RUN_ATTEMPT}" = "1" ]; then
+            echo "::error::${TAG} was already public on the first finalizer attempt; refusing unexpected release state" >&2
+            exit 1
+          fi
+          if [ "${release_draft}" != "true" ]; then
+            echo "${TAG} is already public on retry; prerequisites will be reverified before accepting that state"
+          fi
+
+          version="${TAG#v}"
+          found=false
+          metadata="${RUNNER_TEMP}/pypi-${version}.json"
+          for attempt in $(seq 1 18); do
+            if curl --fail --silent --show-error \
+              --connect-timeout 5 --max-time 15 \
+              "https://pypi.org/pypi/toolguard-core/${version}/json" >"${metadata}" && \
+              python3 scripts/verify_pypi_release.py \
+                --metadata "${metadata}" \
+                --dist-dir dist/python \
+                --expected-version "${version}"; then
+              found=true
+              break
+            fi
+            echo "PyPI has not exposed the exact toolguard-core ${version} distributions yet (attempt ${attempt}/18)"
+            sleep 10
+          done
+          if [ "${found}" != "true" ]; then
+            echo "::error::PyPI did not expose the exact toolguard-core ${version} filenames and SHA-256 digests; GitHub Release remains a draft" >&2
+            exit 1
+          fi
+
+      - name: Publish verified GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git fetch origin "refs/tags/${TAG}:refs/remotes/origin/release-tag-check" --force --quiet
+          bash scripts/verify-release-tag-immutable.sh \
+            "${GITHUB_SHA}" refs/remotes/origin/release-tag-check "${TAG}"
+          if [ "$(gh release view "${TAG}" --json isDraft --jq '.isDraft')" = "true" ]; then
+            gh release edit "${TAG}" --draft=false
+          else
+            echo "${TAG} was already promoted by an earlier attempt; verifying final state"
+          fi
+          test "$(gh release view "${TAG}" --json isDraft --jq '.isDraft')" = "false"

@@ -1,0 +1,20 @@
+{
+  "name": "refund_cap_numeric_string_over_500",
+  "description": "A numeric string from an SDK is normalized to the monetary amount and cannot bypass the $500 cap.",
+  "policy_file": "../../policies/refund_cap.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "issue_refund",
+    "tool_group": "monetary_outflow",
+    "parameters": {
+      "amount": "501"
+    }
+  },
+  "expect": {
+    "decision": "denied",
+    "action_taken": "denied",
+    "matched_rule_ids": [
+      "rule-amount-cap"
+    ]
+  }
+}

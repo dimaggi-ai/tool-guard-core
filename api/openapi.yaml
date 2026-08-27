@@ -96,7 +96,7 @@ paths:
           name: mode
           required: false
           schema: {type: string, enum: [shadow, enforcement]}
-          description: Request mode, subject to the strictest policy-mode floor.
+          description: Call-site default. Each policy's own mode remains authoritative for its contribution; enforcement policies cannot be downgraded.
       requestBody:
         required: true
         content:
@@ -191,7 +191,8 @@ paths:
         "401": {$ref: "#/components/responses/Unauthorized"}
         "404": {$ref: "#/components/responses/NotFound"}
         "405": {$ref: "#/components/responses/PlainMethodNotAllowed"}
-        "409": {$ref: "#/components/responses/AlreadyResolved"}
+        "409": {$ref: "#/components/responses/ResolutionConflict"}
+        "503": {$ref: "#/components/responses/AuditUnavailable"}
   /escalations/{id}/deny:
     parameters:
       - $ref: "#/components/parameters/EscalationID"
@@ -214,7 +215,8 @@ paths:
         "401": {$ref: "#/components/responses/Unauthorized"}
         "404": {$ref: "#/components/responses/NotFound"}
         "405": {$ref: "#/components/responses/PlainMethodNotAllowed"}
-        "409": {$ref: "#/components/responses/AlreadyResolved"}
+        "409": {$ref: "#/components/responses/ResolutionConflict"}
+        "503": {$ref: "#/components/responses/AuditUnavailable"}
 components:
   securitySchemes:
     approverToken:
@@ -265,15 +267,25 @@ components:
       content:
         text/plain:
           schema: {type: string}
-    AlreadyResolved:
-      description: Escalation was already resolved.
+    ResolutionConflict:
+      description: Escalation was already resolved or is past its approval deadline while expiry audit publication is pending.
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - {$ref: "#/components/schemas/AlreadyResolved"}
+              - {$ref: "#/components/schemas/EscalationPastDue"}
+    AuditUnavailable:
+      description: Audit append failed; the escalation remains pending after a proven rollback or becomes indeterminate when rollback cannot be proven durable.
       content:
         application/json:
           schema:
             type: object
-            required: [error, escalation]
+            required: [error, message, resolution_hint, escalation]
             properties:
-              error: {type: string, const: already resolved}
+              error: {type: string, const: audit_append_failed}
+              message: {type: string}
+              resolution_hint: {type: string}
               escalation: {$ref: "#/components/schemas/Escalation"}
   schemas:
     Error:
@@ -281,6 +293,20 @@ components:
       required: [error]
       properties:
         error: {type: string}
+    AlreadyResolved:
+      type: object
+      required: [error, escalation]
+      properties:
+        error: {type: string, const: already resolved}
+        escalation: {$ref: "#/components/schemas/Escalation"}
+    EscalationPastDue:
+      type: object
+      required: [error, message, resolution_hint, escalation]
+      properties:
+        error: {type: string, const: escalation_past_due}
+        message: {type: string}
+        resolution_hint: {type: string}
+        escalation: {$ref: "#/components/schemas/Escalation"}
     Health:
       type: object
       required: [status, started_at, uptime_s]
@@ -354,9 +380,19 @@ components:
         rule_results:
           type: array
           items: {$ref: "#/components/schemas/RuleResult"}
+        applied_rule_results:
+          type: array
+          description: Matched rules that contributed to the action actually applied; excludes shadow-only gating telemetry when enforcement controls the action.
+          items: {$ref: "#/components/schemas/RuleResult"}
         primary_citation: {$ref: "#/components/schemas/Citation"}
+        applied_primary_citation:
+          allOf:
+            - $ref: "#/components/schemas/Citation"
+          description: Citation for the rule that controls action_taken; may differ from primary_citation when a stricter shadow rule owns the raw decision.
         is_near_miss: {type: boolean}
         suggested_response: {type: string}
+        decision_receipt:
+          $ref: "#/components/schemas/DecisionReceipt"
     EvaluationResult:
       allOf:
         - $ref: "#/components/schemas/EvaluationResultFields"
@@ -407,7 +443,7 @@ components:
       required: [id, state, created_at, expires_at, envelope, decision]
       properties:
         id: {type: string}
-        state: {type: string, enum: [pending, approved, denied, expired]}
+        state: {type: string, enum: [pending, approved, denied, expired, indeterminate]}
         created_at: {type: string, format: date-time}
         expires_at: {type: string, format: date-time}
         resolved_at: {type: string, format: date-time}
@@ -415,6 +451,68 @@ components:
         approver_reason: {type: string}
         envelope: {$ref: "#/components/schemas/ActionEnvelope"}
         decision: {$ref: "#/components/schemas/EvaluationResult"}
+        resolution_receipt:
+          $ref: "#/components/schemas/DecisionReceipt"
+    DecisionReceipt:
+      type: object
+      additionalProperties: false
+      description: >-
+        A non-resolvable correlation reference to a successfully appended
+        decision trace. This is a tamper-evident hash-chain reference, not a
+        signed or independently authentic receipt. It is not authorization,
+        a digital signature, or a proof of non-repudiation. Durability follows
+        audit-sync-mode; the receipt proves an append was accepted, not that it
+        is fsync-durable beyond that mode's guarantee. Consumers must use
+        action_taken for the enforced outcome, especially in shadow mode.
+      required:
+        - receipt_version
+        - trace_id
+        - trace_hash
+        - hash_algorithm
+        - canonical_trace_version
+        - integrity_model
+        - decision
+        - action_taken
+        - timestamp
+        - receipt_uri
+      properties:
+        receipt_version:
+          type: string
+          const: "1"
+        trace_id:
+          type: string
+          minLength: 1
+          description: Persisted trace identifier copied from the audit entry.
+        trace_hash:
+          type: string
+          pattern: "^sha256:[0-9a-f]{64}$"
+          description: SHA-256 commitment over the canonical trace bytes.
+        hash_algorithm:
+          type: string
+          const: sha256
+        canonical_trace_version:
+          type: string
+          const: v2
+        integrity_model:
+          type: string
+          const: hash-chain
+        decision: {$ref: "#/components/schemas/Decision"}
+        action_taken: {$ref: "#/components/schemas/ActionTaken"}
+        timestamp:
+          type: string
+          format: date-time
+          description: Timestamp persisted in the referenced trace.
+        issuer:
+          type: string
+          description: >-
+            Proxy instance identity copied from signed_by when present. Its
+            presence does not make this receipt a signature.
+        receipt_uri:
+          type: string
+          pattern: "^urn:tool-guard:trace:v2:sha256:[0-9a-f]{64}$"
+          description: >-
+            Opaque, hash-keyed URN. It is intentionally not a fetchable URL;
+            this API publishes no receipt resolver.
     EscalationResolution:
       type: object
       properties:

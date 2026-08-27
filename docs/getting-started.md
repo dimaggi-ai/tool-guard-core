@@ -22,7 +22,7 @@ make build
 Output:
 
 ```
-bin/tg            # one-shot CLI: evaluate / verify / lint / benchmark
+bin/tg            # one-shot CLI; see docs/cli-reference.md for every command
 bin/tg-proxy      # HTTP service: POST /evaluate, hash-chained audit log
 bin/battle-test   # adversarial harness driving a local Ollama model
 bin/example-chain # generator for the sample audit chain
@@ -115,7 +115,8 @@ exact line where the chain broke and exits 5.
 
 Before deploying a policy change, see what it would do to real traffic.
 `tg simulate` runs the whole policy set against a JSONL file of envelopes
-(one per line) and prints the decision breakdown plus per-rule fire counts:
+(one per line) and prints rule decisions, applied actions, and per-rule fire
+counts:
 
 ```sh
 ./bin/tg simulate -policy-dir policies -calls yesterdays-calls.jsonl
@@ -124,26 +125,39 @@ Before deploying a policy change, see what it would do to real traffic.
 ```
 Tool Guard simulate — 3 policies, 1000 calls
 ────────────────────────────────────────────────
+  rule decisions (what policy logic concluded):
   allowed        942   94.2%
   flagged          6    0.6%
   escalated       21    2.1%
   denied          31    3.1%
              e.g. env-8831, env-9002, env-9114
 ────────────────────────────────────────────────
-  rule fires (by rule_id):
-    rule-amount-cap               22  [deny]
-    rule-refund-1h-sum             9  [deny]
+  applied actions (what would execute):
+  allowed           942   94.2%
+  allowed_shadow       0    0.0%
+  flagged             6    0.6%
+  escalated          21    2.1%
+  denied             31    3.1%
+────────────────────────────────────────────────
+  rule fires (by policy_id@version/rule_id):
+    pol-refund-cap@v1/rule-amount-cap          22  [deny]
+    pol-refund-velocity@v1/rule-refund-1h-sum   9  [deny]
     ...
 ```
 
-It uses the exact same engine as `tg evaluate` and the proxy, so a
-simulate verdict can't diverge from a live one. Add `-fail-on-deny` to
-exit 3 when any call denies (gate a policy change in CI), `-json` for
-machine-readable output, or `-calls -` to read from stdin.
+It uses the exact same engine as `tg evaluate` and the proxy, and reports both
+the raw rule decision and the applied action. Add `-fail-on-deny` to exit 3
+when any applied action is denied; in this CI-gating mode, an empty corpus or
+malformed call records fail with exit 1 rather than passing vacuously or being
+skipped. Use `-json` for machine-readable output, or `-calls -` to read from
+stdin. Each JSON `rule_fires` row includes `policy_id`, `policy_version`, and
+`rule_id`, so identical rule IDs in different policies remain distinct. A shadow-only deny
+remains visible in the decision counts but does not fail the applied-action
+gate because the call would proceed.
 
 ## 5b. Measure coverage — what fraction of calls is governed at all
 
-`tg simulate` shows the *decisions*; `tg coverage` shows the *blind spots* —
+`tg simulate` shows the *decisions and applied actions*; `tg coverage` shows the *blind spots* —
 how many of your agent's tool calls have any governing policy versus pass only
 because nothing governs them. It reads envelopes **or** decision traces, so you
 can point it straight at an audit log:
@@ -230,7 +244,7 @@ Key flags:
 | `-fail-closed` | Deny on any internal error (tooling glitch, bad policy load) |
 | `-fail-closed-tools bash,write,edit,notebookedit` | Deny only these tools on error; others fail open |
 | `-unknown-tools-deny` | Deny any tool_name not declared in `scope.tool_names` of a loaded enforcement policy — closes the gap where a new tool the agent starts calling matches no policy and is silently ungoverned |
-| `-mode shadow\|enforcement` | Shadow mode records decisions without blocking (default: enforcement) |
+| `-mode shadow\|enforcement` | Call-site default (default: enforcement). Enforcement-mode policies still block under `-mode shadow`; observe-only staging requires `mode: shadow` in policy YAML. |
 
 `-protect-self` is the key insight: any deny rule you write inside the
 policy can be edited away by the agent. `-protect-self` runs unconditionally

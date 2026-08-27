@@ -1,9 +1,11 @@
 package main
 
 import (
+	"errors"
 	"sync"
 	"time"
 
+	"github.com/dimaggi-ai/tool-guard-core/pkg/audit"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 )
 
@@ -11,23 +13,35 @@ import (
 type EscalationState string
 
 const (
-	EscPending  EscalationState = "pending"
-	EscApproved EscalationState = "approved"
-	EscDenied   EscalationState = "denied"
-	EscExpired  EscalationState = "expired"
+	// escRegistering is an internal reservation used while the initial
+	// escalated decision is being appended. It is deliberately invisible to
+	// pollers and approvers: an escalation does not exist as an authorizable
+	// object until its first audit record is durable.
+	escRegistering EscalationState = "registering"
+	EscPending     EscalationState = "pending"
+	EscApproved    EscalationState = "approved"
+	EscDenied      EscalationState = "denied"
+	EscExpired     EscalationState = "expired"
+	// EscIndeterminate means a terminal audit record may exist but its
+	// durability and the corresponding state transition could not be proven.
+	// Operators must reconcile the log; neither approval nor denial is granted.
+	EscIndeterminate EscalationState = "indeterminate"
 )
 
-// Escalation is one pending decision that's waiting for a human.
+var errEscalationPastDue = errors.New("escalation is past due")
+
+// Escalation is one human-review decision and its lifecycle state.
 type Escalation struct {
-	ID             string                  `json:"id"` // envelope_id, reused
-	State          EscalationState         `json:"state"`
-	CreatedAt      time.Time               `json:"created_at"`
-	ExpiresAt      time.Time               `json:"expires_at"`
-	ResolvedAt     *time.Time              `json:"resolved_at,omitempty"`
-	Approver       string                  `json:"approver,omitempty"` // identity of who approved/denied
-	ApproverReason string                  `json:"approver_reason,omitempty"`
-	Envelope       domain.ActionEnvelope   `json:"envelope"`
-	Decision       domain.EvaluationResult `json:"decision"`
+	ID                string                  `json:"id"` // envelope_id, reused
+	State             EscalationState         `json:"state"`
+	CreatedAt         time.Time               `json:"created_at"`
+	ExpiresAt         time.Time               `json:"expires_at"`
+	ResolvedAt        *time.Time              `json:"resolved_at,omitempty"`
+	Approver          string                  `json:"approver,omitempty"` // identity of who approved/denied
+	ApproverReason    string                  `json:"approver_reason,omitempty"`
+	Envelope          domain.ActionEnvelope   `json:"envelope"`
+	Decision          domain.EvaluationResult `json:"decision"`
+	ResolutionReceipt *audit.DecisionReceipt  `json:"resolution_receipt,omitempty"`
 }
 
 // escalationStore is the proxy-level pending-escalation registry.
@@ -42,6 +56,7 @@ type escalationStore struct {
 	mu         sync.Mutex
 	entries    map[string]*Escalation
 	maxEntries int
+	now        func() time.Time
 }
 
 // defaultEscalationMaxEntries caps the in-memory pending+resolved
@@ -52,7 +67,15 @@ func newEscalationStore() *escalationStore {
 	return &escalationStore{
 		entries:    make(map[string]*Escalation),
 		maxEntries: defaultEscalationMaxEntries,
+		now:        time.Now,
 	}
+}
+
+func (s *escalationStore) currentTime() time.Time {
+	if s.now != nil {
+		return s.now().UTC()
+	}
+	return time.Now().UTC()
 }
 
 // evictOldestResolvedLocked drops the oldest resolved entry (any
@@ -65,7 +88,7 @@ func (s *escalationStore) evictOldestResolvedLocked() bool {
 		oldest   time.Time
 	)
 	for id, e := range s.entries {
-		if e.State == EscPending {
+		if e.State == EscPending || e.State == escRegistering {
 			continue
 		}
 		t := e.CreatedAt
@@ -84,16 +107,18 @@ func (s *escalationStore) evictOldestResolvedLocked() bool {
 	return true
 }
 
-// add registers a new pending escalation. Caller passes the timeout
-// in minutes (from EffectConfig.TimeoutMinutes or a default).
-func (s *escalationStore) add(envelope *domain.ActionEnvelope, decision *domain.EvaluationResult, timeoutMinutes int) *Escalation {
+// reserve claims an escalation ID while its initial audit record is being
+// appended. Reserved entries count against the hard cap and block ID reuse,
+// but are hidden from get/list/resolve until publishReserved transitions the
+// exact reservation to pending.
+func (s *escalationStore) reserve(envelope *domain.ActionEnvelope, decision *domain.EvaluationResult, timeoutMinutes int) *Escalation {
 	if timeoutMinutes < 1 {
 		timeoutMinutes = 15
 	}
-	now := time.Now().UTC()
+	now := s.currentTime()
 	e := &Escalation{
 		ID:        envelope.EnvelopeID,
-		State:     EscPending,
+		State:     escRegistering,
 		CreatedAt: now,
 		ExpiresAt: now.Add(time.Duration(timeoutMinutes) * time.Minute),
 		Envelope:  *envelope,
@@ -132,10 +157,54 @@ func (s *escalationStore) add(envelope *domain.ActionEnvelope, decision *domain.
 	return e
 }
 
+// publishReserved makes an exact, successfully audited reservation visible to
+// agents and approvers. Pointer identity prevents a stale request from
+// publishing a later entry that reused the same ID.
+func (s *escalationStore) publishReserved(expected *Escalation) bool {
+	if expected == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.entries[expected.ID]
+	if !ok || e != expected || e.State != escRegistering {
+		return false
+	}
+	e.State = EscPending
+	return true
+}
+
+// discardReserved removes only the exact hidden reservation supplied by the
+// caller. It is used when provenance stamping or the initial audit append
+// fails, ensuring that an unaudited escalation can never be approved later.
+func (s *escalationStore) discardReserved(expected *Escalation) bool {
+	if expected == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.entries[expected.ID]
+	if !ok || e != expected || e.State != escRegistering {
+		return false
+	}
+	delete(s.entries, expected.ID)
+	return true
+}
+
+// add preserves the store helper used by tests and non-auditing callers. The
+// proxy's evaluate path uses reserve/publishReserved around the audit append.
+func (s *escalationStore) add(envelope *domain.ActionEnvelope, decision *domain.EvaluationResult, timeoutMinutes int) *Escalation {
+	e := s.reserve(envelope, decision, timeoutMinutes)
+	if e == nil || !s.publishReserved(e) {
+		return nil
+	}
+	return e
+}
+
 func (s *escalationStore) get(id string) *Escalation {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if e, ok := s.entries[id]; ok {
+	if e, ok := s.entries[id]; ok && e.State != escRegistering {
 		ec := *e
 		return &ec
 	}
@@ -143,48 +212,133 @@ func (s *escalationStore) get(id string) *Escalation {
 }
 
 func (s *escalationStore) resolve(id, approver, reason string, approved bool) (*Escalation, bool) {
+	e, ok, _ := s.resolveAudited(id, approver, reason, approved, nil)
+	return e, ok
+}
+
+// resolveAudited prepares a terminal state, invokes beforeCommit while the
+// entry is still pending, and publishes the state only if that callback
+// succeeds. Holding the store lock across the callback serializes competing
+// approvals for the same entry. The callback must not call back into the
+// escalation store.
+func (s *escalationStore) resolveAudited(
+	id, approver, reason string,
+	approved bool,
+	beforeCommit func(*Escalation) error,
+) (*Escalation, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e, ok := s.entries[id]
 	if !ok {
-		return nil, false
+		return nil, false, nil
+	}
+	if e.State == escRegistering {
+		return nil, false, nil
 	}
 	if e.State != EscPending {
 		ec := *e
-		return &ec, false // already resolved
+		return &ec, false, nil // already resolved
 	}
-	now := time.Now().UTC()
-	e.ResolvedAt = &now
-	e.Approver = approver
-	e.ApproverReason = reason
+	now := s.currentTime()
+	// The reaper may leave a due entry pending when it can prove that the
+	// expiry audit record was not written. Pending is an audit-recovery state
+	// in that case, not a renewed authorization window: never let a late human
+	// resolution bypass the original expiry deadline.
+	if !now.Before(e.ExpiresAt) {
+		ec := *e
+		return &ec, false, errEscalationPastDue
+	}
+	candidate := *e
+	candidate.ResolvedAt = &now
+	candidate.Approver = approver
+	candidate.ApproverReason = reason
 	if approved {
-		e.State = EscApproved
+		candidate.State = EscApproved
 	} else {
-		e.State = EscDenied
+		candidate.State = EscDenied
 	}
+	if beforeCommit != nil {
+		if err := beforeCommit(&candidate); err != nil {
+			if errors.Is(err, errAuditStateIndeterminate) || errors.Is(err, errAuditRecordCommitted) {
+				candidate.State = EscIndeterminate
+				*e = candidate
+				indeterminate := *e
+				return &indeterminate, false, err
+			}
+			current := *e
+			return &current, false, err
+		}
+	}
+	*e = candidate
 	ec := *e
-	return &ec, true
+	return &ec, true, nil
 }
 
-// reapExpired marks any pending entry past its expires_at as expired
-// and returns shallow copies of every entry just expired. The caller
-// (proxy reaper goroutine) writes a synthetic Decision=denied trace
-// per expired entry so the audit chain captures the lifecycle
-// terminating without operator action.
-func (s *escalationStore) reapExpired() []Escalation {
-	now := time.Now().UTC()
+type escalationExpiryFailure struct {
+	Escalation Escalation
+	Err        error
+}
+
+// reapExpiredAudited prepares each due expiration, invokes beforeCommit while
+// the entry is still pending, and publishes expired only after the audit
+// transition succeeds. An ambiguous terminal write becomes indeterminate;
+// a proven pre-write failure leaves the entry pending for operator recovery.
+func (s *escalationStore) reapExpiredAudited(
+	beforeCommit func(*Escalation) error,
+) ([]Escalation, []escalationExpiryFailure) {
+	now := s.currentTime()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var out []Escalation
+	var (
+		out      []Escalation
+		failures []escalationExpiryFailure
+	)
 	for _, e := range s.entries {
 		if e.State == EscPending && !now.Before(e.ExpiresAt) {
-			e.State = EscExpired
+			candidate := *e
+			candidate.State = EscExpired
 			t := now
-			e.ResolvedAt = &t
+			candidate.ResolvedAt = &t
+			if beforeCommit != nil {
+				if err := beforeCommit(&candidate); err != nil {
+					if errors.Is(err, errAuditStateIndeterminate) || errors.Is(err, errAuditRecordCommitted) {
+						candidate.State = EscIndeterminate
+						*e = candidate
+					}
+					failures = append(failures, escalationExpiryFailure{Escalation: *e, Err: err})
+					continue
+				}
+			}
+			*e = candidate
 			out = append(out, *e)
 		}
 	}
-	return out
+	return out, failures
+}
+
+// attachResolutionReceipt publishes receipt metadata only if the entry is
+// still the exact terminal transition that produced it. The state/timestamp
+// guard prevents a stale asynchronous attachment after eviction and ID reuse.
+func (s *escalationStore) attachResolutionReceipt(id string, expectedState EscalationState, expectedResolvedAt time.Time, receipt *audit.DecisionReceipt) *Escalation {
+	if receipt == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.entries[id]
+	if !ok || e.State != expectedState || e.ResolvedAt == nil || !e.ResolvedAt.Equal(expectedResolvedAt) {
+		return nil
+	}
+	e.ResolutionReceipt = receipt
+	copy := *e
+	return &copy
+}
+
+// reapExpired preserves the store-only helper used by unit tests and callers
+// that do not own an audit writer.
+func (s *escalationStore) reapExpired() []Escalation {
+	expired, _ := s.reapExpiredAudited(nil)
+	return expired
 }
 
 // list returns a snapshot of all entries (pending + resolved). Used
@@ -194,6 +348,9 @@ func (s *escalationStore) list() []Escalation {
 	defer s.mu.Unlock()
 	out := make([]Escalation, 0, len(s.entries))
 	for _, e := range s.entries {
+		if e.State == escRegistering {
+			continue
+		}
 		out = append(out, *e)
 	}
 	return out

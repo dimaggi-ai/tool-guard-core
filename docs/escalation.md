@@ -32,15 +32,30 @@ GET  /escalations/<id>
 POST /escalations/<id>/approve
   Authorization: Bearer <approver-token>
   Body (optional): {"approver": "alice", "reason": "verified runbook"}
-  → state transitions pending → approved
   → audit chain logs the approve event
+  → only then state transitions pending → approved
 
 POST /escalations/<id>/deny
   Authorization: Bearer <approver-token>
   Body (optional): {"approver": "alice", "reason": "policy violation"}
-  → state transitions pending → denied
   → audit chain logs the deny event
+  → only then state transitions pending → denied
 ```
+
+Approval and denial are transactional with their audit record. If the record
+cannot be written and synced durably, the proxy rolls it back and the endpoint
+returns HTTP 503 with a structured `audit_append_failed` response. A successful
+rollback leaves the escalation `pending`; repair the writer and retry that
+escalation. Approval and denial force this durability barrier even when general
+evaluation logging uses `audit-sync-mode=interval` or `none`.
+
+If the rollback itself cannot be proven durable, the audit tail is ambiguous,
+`/readyz` returns 503, and the escalation becomes `indeterminate`. Stop approval
+processing, preserve and repair the audit log, run `tg verify`, restart the
+proxy, and have the originating action resubmitted with a fresh envelope ID.
+The escalation registry is in memory, so the old ID cannot be retried after a
+restart. A 200 approval therefore never authorizes execution without a durably
+linked audit entry.
 
 ## Token configuration
 
@@ -65,12 +80,23 @@ pending  ──── approve ───▶  approved
    │
    ├──────── deny ──────▶  denied
    │
-   └──── timeout (default 15 min, configurable) ────▶  expired
+   ├──── timeout (default 15 min, configurable) ────▶  expired
+   │
+   └──── uncertain audit durability ───────────────▶  indeterminate
 ```
 
 The reaper sweeps every 30 seconds; any pending entry past its
 `expires_at` becomes `expired`. The agent's poll loop should treat
 `expired` the same as `denied`.
+
+Expiry is also audit-before-publish. A proven pre-write audit failure leaves
+the overdue entry visibly `pending` so the reaper can retry, but the original
+deadline remains authoritative: approval and denial return HTTP 409
+`escalation_past_due` and cannot emit an authorization trace. Repair the audit
+writer if necessary and let the reaper complete the `expired` transition. If a
+terminal expiry record may have been written but cannot be proven durable, the
+entry becomes `indeterminate`; follow the audit-reconciliation procedure above
+and never authorize the original action.
 
 ## Example policy
 
@@ -146,10 +172,11 @@ don't re-evaluate. Use a fresh `envelope_id` for every new tool call.
 
 ## Combining with deny policies
 
-If a stricter policy (`effect: deny`) and the escalation policy
-(`effect: escalate`) both match the same envelope, the proxy returns
-the strictest result - deny wins. The escalation rule only takes
-effect when no deny rule fires for the same call.
+Among enforcement policies, the strictest matching effect controls the action:
+an enforcement deny beats an enforcement escalation. Shadow policies remain
+telemetry. A shadow deny can therefore make the raw `decision` be `denied`
+while an enforcement escalation makes `action_taken` be `escalated`; the
+pending request and its timeout come only from the enforcement escalation.
 
 Scope escalation policies to a specific tool name, agent_id, or
 tool_group (the fields `scope` supports) so they don't collide with

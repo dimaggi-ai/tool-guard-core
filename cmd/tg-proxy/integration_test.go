@@ -23,6 +23,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/dimaggi-ai/tool-guard-core/pkg/audit"
+	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
+	"github.com/dimaggi-ai/tool-guard-core/pkg/policyload"
 )
 
 var (
@@ -260,6 +264,68 @@ func TestProxy_PoliciesEndpoint(t *testing.T) {
 	}
 }
 
+func TestProxy_AuditRecordCarriesVerifiableProvenance(t *testing.T) {
+	envelopeID := fmt.Sprintf("env-provenance-%d", time.Now().UnixNano())
+	code, body := postJSON(t, "/evaluate", map[string]any{
+		"envelope_id": envelopeID,
+		"timestamp":   time.Now().UTC().Format(time.RFC3339Nano),
+		"agent_id":    "agent-provenance",
+		"session_id":  "session-provenance",
+		"org_id":      "org-provenance",
+		"tool_name":   "issue_refund",
+		"tool_group":  "monetary_outflow",
+		"parameters":  map[string]any{"amount": 25},
+	})
+	if code != http.StatusOK {
+		t.Fatalf("evaluate status %d: %s", code, body)
+	}
+
+	raw, err := os.ReadFile(auditLogPath)
+	if err != nil {
+		t.Fatalf("read audit log: %v", err)
+	}
+	var found *domain.DecisionTrace
+	for _, line := range bytes.Split(raw, []byte{'\n'}) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var trace domain.DecisionTrace
+		if err := json.Unmarshal(line, &trace); err != nil {
+			t.Fatalf("decode audit line: %v", err)
+		}
+		if trace.EnvelopeID == envelopeID {
+			found = &trace
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("audit record for %q not found", envelopeID)
+	}
+
+	loaded := make([]domain.Policy, 0, 2)
+	for _, name := range []string{"escalation.yaml", "refund.yaml"} {
+		policy, err := policyload.Load(filepath.Join(policyDir, name))
+		if err != nil {
+			t.Fatalf("load %s: %v", name, err)
+		}
+		loaded = append(loaded, policy)
+	}
+	wantPolicyHash, err := policyload.PolicySetHash(loaded)
+	if err != nil {
+		t.Fatalf("PolicySetHash: %v", err)
+	}
+	if found.EngineVersion == "" || found.PolicySetHash != wantPolicyHash || found.SchemaVersion != audit.CanonicalTraceVersion {
+		t.Fatalf("incomplete/wrong audit provenance: %+v", *found)
+	}
+	ok, err := audit.VerifyCanonicalTraceHash(found)
+	if err != nil {
+		t.Fatalf("VerifyCanonicalTraceHash: %v", err)
+	}
+	if !ok {
+		t.Fatal("fresh proxy audit record did not verify")
+	}
+}
+
 func TestProxy_Evaluate_AllowAndDeny(t *testing.T) {
 	allow := map[string]any{
 		"agent_id":   "a",
@@ -276,6 +342,8 @@ func TestProxy_Evaluate_AllowAndDeny(t *testing.T) {
 	if !strings.Contains(string(body), `"decision":"allowed"`) {
 		t.Errorf("allow body missing allowed decision: %s", body)
 	}
+	allowReceipt := receiptFromResponse(t, body, "decision_receipt")
+	assertReceiptMatchesAudit(t, allowReceipt, domain.DecisionAllowed, domain.ActionAllowed)
 
 	deny := map[string]any{
 		"agent_id":   "a",
@@ -291,6 +359,135 @@ func TestProxy_Evaluate_AllowAndDeny(t *testing.T) {
 	}
 	if !strings.Contains(string(body), `"decision":"denied"`) {
 		t.Errorf("deny body missing denied decision: %s", body)
+	}
+	denyReceipt := receiptFromResponse(t, body, "decision_receipt")
+	assertReceiptMatchesAudit(t, denyReceipt, domain.DecisionDenied, domain.ActionDenied)
+}
+
+func receiptFromResponse(t *testing.T, body []byte, field string) *audit.DecisionReceipt {
+	t.Helper()
+	var response map[string]json.RawMessage
+	if err := json.Unmarshal(body, &response); err != nil {
+		t.Fatalf("decode response: %v\n%s", err, body)
+	}
+	raw, ok := response[field]
+	if !ok || bytes.Equal(raw, []byte("null")) {
+		t.Fatalf("response missing %s: %s", field, body)
+	}
+	var receipt audit.DecisionReceipt
+	if err := json.Unmarshal(raw, &receipt); err != nil {
+		t.Fatalf("decode %s: %v\n%s", field, err, raw)
+	}
+	return &receipt
+}
+
+func assertReceiptMatchesAudit(t *testing.T, receipt *audit.DecisionReceipt, wantDecision domain.Decision, wantAction domain.ActionTaken) {
+	t.Helper()
+	if receipt.ReceiptVersion != audit.ReceiptVersion || receipt.HashAlgorithm != audit.HashAlgorithmSHA256 || receipt.IntegrityModel != audit.IntegrityModelHashChain {
+		t.Errorf("receipt version/algorithm/model are invalid: %+v", receipt)
+	}
+	if receipt.TraceID == "" || receipt.CanonicalTraceVersion != audit.CanonicalTraceVersion {
+		t.Errorf("receipt trace identity/version are invalid: %+v", receipt)
+	}
+	if receipt.Decision != wantDecision || receipt.ActionTaken != wantAction {
+		t.Errorf("receipt decision/action = %s/%s, want %s/%s", receipt.Decision, receipt.ActionTaken, wantDecision, wantAction)
+	}
+	wantURI := "urn:tool-guard:trace:" + audit.CanonicalTraceVersion + ":" + receipt.TraceHash
+	if receipt.ReceiptURI != wantURI {
+		t.Errorf("receipt_uri=%q, want %q", receipt.ReceiptURI, wantURI)
+	}
+
+	raw, err := os.ReadFile(auditLogPath)
+	if err != nil {
+		t.Fatalf("read audit log: %v", err)
+	}
+	for _, line := range bytes.Split(raw, []byte{'\n'}) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var trace domain.DecisionTrace
+		if err := json.Unmarshal(line, &trace); err != nil {
+			t.Fatalf("decode audit trace: %v", err)
+		}
+		if trace.TraceHash != receipt.TraceHash {
+			continue
+		}
+		if trace.TraceID != receipt.TraceID || trace.Decision != receipt.Decision || trace.ActionTaken != receipt.ActionTaken || !trace.Timestamp.Equal(receipt.Timestamp) {
+			t.Fatalf("receipt does not copy persisted trace fields\nreceipt: %+v\ntrace: %+v", receipt, trace)
+		}
+		valid, err := audit.VerifyCanonicalTraceHash(&trace)
+		if err != nil || !valid {
+			t.Fatalf("receipt target is not canonically verifiable: valid=%t err=%v", valid, err)
+		}
+		return
+	}
+	t.Fatalf("receipt trace_hash %q not found in audit log", receipt.TraceHash)
+}
+
+func TestProxy_Evaluate_BoundaryDenyCarriesReceiptAfterAppend(t *testing.T) {
+	tmp := t.TempDir()
+	port, err := freePort()
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	baseURL := "http://" + addr
+	boundaryAudit := filepath.Join(tmp, "audit.jsonl")
+	cmd := exec.Command(proxyBin,
+		"-listen", addr,
+		"-policy-dir", policyDir,
+		"-audit-log", boundaryAudit,
+		"-rate-limit-rps", "0.001",
+		"-rate-limit-burst", "1",
+	)
+	setNewProcessGroup(cmd)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		killProcessTree(cmd)
+		_, _ = cmd.Process.Wait()
+	}()
+	if err := waitReady(baseURL+"/readyz", 5*time.Second); err != nil {
+		t.Fatalf("rate-limited proxy did not become ready: %v", err)
+	}
+
+	envelope := map[string]any{
+		"agent_id": "receipt-rate-limit", "session_id": "s", "org_id": "o",
+		"tool_name": "issue_refund", "tool_group": "monetary_outflow",
+		"parameters": map[string]any{"amount": 1.0},
+	}
+	rawEnvelope, _ := json.Marshal(envelope)
+	for attempt := 0; attempt < 2; attempt++ {
+		response, err := http.Post(baseURL+"/evaluate", "application/json", bytes.NewReader(rawEnvelope))
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		if attempt == 0 {
+			if response.StatusCode != http.StatusOK {
+				t.Fatalf("first status=%d, want 200: %s", response.StatusCode, body)
+			}
+			continue
+		}
+		if response.StatusCode != http.StatusTooManyRequests {
+			t.Fatalf("second status=%d, want 429: %s", response.StatusCode, body)
+		}
+		receipt := receiptFromResponse(t, body, "decision_receipt")
+		if receipt.Decision != domain.DecisionDenied || receipt.ActionTaken != domain.ActionDenied {
+			t.Fatalf("boundary receipt outcome=%s/%s, want denied/denied", receipt.Decision, receipt.ActionTaken)
+		}
+		if receipt.ReceiptURI != "urn:tool-guard:trace:"+audit.CanonicalTraceVersion+":"+receipt.TraceHash {
+			t.Fatalf("boundary receipt URI is not hash-keyed: %+v", receipt)
+		}
+		data, err := os.ReadFile(boundaryAudit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(data, []byte(`"trace_hash":"`+receipt.TraceHash+`"`)) {
+			t.Fatalf("boundary receipt target not found in audit: %s", data)
+		}
 	}
 }
 
@@ -399,6 +596,8 @@ func TestEscalation_HappyPath(t *testing.T) {
 	if escID != "env-esc-happy" {
 		t.Fatalf("escalation_id=%v, want env-esc-happy", escID)
 	}
+	decisionReceipt := receiptFromResponse(t, body, "decision_receipt")
+	assertReceiptMatchesAudit(t, decisionReceipt, domain.DecisionEscalated, domain.ActionEscalated)
 
 	// GET /escalations/<id> should show pending.
 	code, body = getRaw(t, "/escalations/env-esc-happy")
@@ -410,6 +609,9 @@ func TestEscalation_HappyPath(t *testing.T) {
 	if get["state"] != "pending" {
 		t.Fatalf("state=%v, want pending", get["state"])
 	}
+	if _, exists := get["resolution_receipt"]; exists {
+		t.Fatalf("pending escalation unexpectedly has resolution_receipt: %s", body)
+	}
 
 	// Approve.
 	code, body = postWithAuth(t, "/escalations/env-esc-happy/approve",
@@ -418,6 +620,8 @@ func TestEscalation_HappyPath(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("approve status %d: %s", code, body)
 	}
+	resolutionReceipt := receiptFromResponse(t, body, "resolution_receipt")
+	assertReceiptMatchesAudit(t, resolutionReceipt, domain.DecisionAllowed, domain.ActionAllowed)
 
 	// GET again → approved.
 	code, body = getRaw(t, "/escalations/env-esc-happy")
@@ -430,6 +634,9 @@ func TestEscalation_HappyPath(t *testing.T) {
 	}
 	if get["approver"] != "dba" {
 		t.Errorf("approver=%v, want dba", get["approver"])
+	}
+	if _, exists := get["resolution_receipt"]; !exists {
+		t.Errorf("resolved escalation did not retain resolution_receipt: %s", body)
 	}
 }
 
@@ -461,12 +668,14 @@ func TestEscalation_OperatorDeny(t *testing.T) {
 		"parameters": map[string]any{"sql": "INSERT INTO users VALUES (1,'evil')"},
 	}
 	_, _ = postJSON(t, "/evaluate", env)
-	code, _ := postWithAuth(t, "/escalations/env-esc-deny/deny",
+	code, resolutionBody := postWithAuth(t, "/escalations/env-esc-deny/deny",
 		map[string]string{"approver": "dba", "reason": "policy spirit violation"},
 		"Bearer test-approver-token")
 	if code != 200 {
 		t.Fatalf("deny status %d", code)
 	}
+	resolutionReceipt := receiptFromResponse(t, resolutionBody, "resolution_receipt")
+	assertReceiptMatchesAudit(t, resolutionReceipt, domain.DecisionDenied, domain.ActionDenied)
 	_, body := getRaw(t, "/escalations/env-esc-deny")
 	var get map[string]any
 	_ = json.Unmarshal(body, &get)

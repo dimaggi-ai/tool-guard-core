@@ -5,6 +5,116 @@ per-change record see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## 0.8.0 — 2026-08-26
+
+"Decision evidence you can carry" — canonical v2 extends what new audit
+records hash-bind, proxy responses gain correlation receipts, and verified
+JSONL export becomes available. This is an intentionally breaking pre-1.0
+release. Runtime audit records remain SHA-256 hash-chained, not externally
+signed; supply-chain attestations and container signatures described below are
+separate release artifacts.
+
+### What breaks
+
+- **Policy mode is authoritative.** A `mode: shadow` policy now reports its raw
+  match but applies `allowed_shadow`; an enforcement call-site cannot make it
+  block. A shadow call-site cannot weaken a `mode: enforcement` policy. Review
+  every deployed shadow policy before upgrading.
+- **Ambiguous identities are rejected.** Loaded sets reject duplicate
+  `(policy_id, version)` pairs, and each policy rejects duplicate `rule_id`
+  values. Simulation rows are keyed by policy identity plus rule ID.
+- **New writes use canonical v2.** A 0.7 verifier cannot read v2, and a 0.7
+  writer must not resume a chain after its first v2 append. The 0.8 verifier
+  accepts a monotonic v1-to-v2 chain, but legacy v1 records do not retroactively
+  bind applied-action or v2 provenance fields. Canonical v2 is now the safe
+  default rather than the future opt-in described by the 0.7 documentation.
+- **The mutable Go hook variable is removed.** Replace direct reads or writes
+  of `engine.LLMClassifyHook` with `engine.GetLLMClassifyHook()` and
+  `engine.SetLLMClassifyHook()`. The hook signature is unchanged.
+
+### How to check and migrate
+
+1. Validate every policy set with the 0.8 binary, then exercise representative
+   calls before deployment:
+
+   ```sh
+   set -e
+   for policy in ./policies/*.yaml ./policies/*.yml; do
+     [ -e "$policy" ] || continue
+     tg lint -policy "$policy"
+   done
+   tg simulate -policy-dir ./policies -calls representative.jsonl
+   ```
+
+   Resolve duplicate identities and confirm every shadow policy is deliberately
+   non-blocking.
+2. Quiesce every writer sharing an audit chain. Back up the active log and all
+   rotated siblings, then verify the same bytes with both 0.7 and 0.8 before
+   upgrading all consumers and writers for that chain together. Do not append
+   with 0.7 after the first v2 record. Full backup, rotation, and rollback steps
+   are in [docs/operating.md](docs/operating.md).
+3. Verify and export a migrated chain with:
+
+   ```sh
+   tg verify -file decisions.jsonl
+   tg export -file decisions.jsonl --format jsonl > verified-decisions.jsonl
+   ```
+
+4. Regenerate clients from [api/openapi.yaml](api/openapi.yaml) or upgrade the
+   Python SDK before consuming receipts or the `indeterminate` escalation state.
+   Receipt absence is never authorization; treat `indeterminate` as no
+   authorization and reconcile the audit log.
+
+### What is verifiable
+
+- Canonical v2 binds the raw decision, applied action, engine version,
+  deterministic policy-set digest, and schema version. `tg verify` checks these
+  records and their links across the complete rotation set. V1 records retain
+  their frozen, narrower integrity contract.
+- A decision receipt is returned only after its evaluation trace append
+  succeeds. A human approval, denial, or expiry becomes visible only after its
+  terminal audit record is durable. Receipts correlate to records; they are not
+  signatures or authorization when absent.
+- `tg export` verifies the source chain before writing stdout, walks rotations
+  oldest-first, and supports time, policy, and action selectors. Its logical
+  record limit matches the writer and verifier: exactly 4 MiB is accepted and a
+  larger record is rejected.
+- The release workflow attests binary archives and keyless-signs container
+  images by digest. After downloading an archive and the published image, verify
+  them separately:
+
+  ```sh
+  gh attestation verify ./tool-guard-core_*.tar.gz -R dimaggi-ai/tool-guard-core
+  cosign verify ghcr.io/dimaggi-ai/tool-guard-core:0.8.0 \
+    --certificate-identity-regexp '^https://github\.com/dimaggi-ai/tool-guard-core/\.github/workflows/release\.yml@refs/tags/v0\.8\.0$' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com
+  ```
+
+  These checks establish artifact origin and container-signing identity; they
+  do not prove bit-for-bit reproducible builds or certify the software as safe.
+
+### Staged publication and recovery
+
+Tag CI keeps the GitHub Release as a draft while it attests archives, signs and
+verifies container digests, and publishes through PyPI Trusted Publishing. The
+draft is promoted only after registry checks succeed. This is staged, not
+atomic: registry artifacts can become visible before GitHub Release promotion.
+The finalizer compares the published PyPI filenames and SHA-256 digests with
+the exact wheel and source archive produced by the release workflow before it
+promotes the GitHub Release.
+If a step fails before promotion, the GitHub Release remains a draft; inspect
+the failed workflow, preserve the same tag and artifacts, and rerun the
+publish path only after correcting the release infrastructure. GoReleaser
+reuses that draft and replaces its uploaded assets with bytes rebuilt from the
+same immutable tag. Python distribution timestamps and gzip metadata are
+normalized from that tag's commit time so a full workflow rerun produces the
+same wheel and source-archive digests. A
+runner can lose its response after promotion succeeds; on that retry, the
+finalizer rechecks the registries, recognizes the already-public release, and
+verifies its final state instead of attempting to republish artifacts.
+
+---
+
 ## 0.7.0 — 2026-08-20
 
 "Load strictly, prove it shipped" — policy loading becomes strict
@@ -450,8 +560,10 @@ effect: deny
 The hook path (`tg hook`, the PreToolUse guard for Claude Code / Codex /
 Antigravity) now appends every decision to a SHA-256 hash-chained JSONL log,
 verifiable offline with `tg verify` — the same guarantee `tg-proxy` already
-had. Tail-read keeps each append O(1). Best-effort: an audit-write failure
-never changes the returned decision.
+had. At introduction, tail-read kept each append O(1); 0.8 supersedes that
+with full-chain replay before each append so the hook cannot extend a chain
+its verifier rejects. Best-effort: an audit-write failure never changes the
+returned decision.
 
 ### 4. `tg coverage` — measure what's actually governed
 
@@ -616,10 +728,12 @@ write-capable tools but has no `path_classify` guard — a nudge toward
 
 ---
 
-## 0.1.0 — 2026-06-09
+## 0.1.0 development snapshot (pre-release, no tag) — 2026-06-09
 
-Initial public release: the deterministic core, the classifiers, tamper-evident
-audit, the CLI, and the runtime proxy. Apache 2.0, no usage limits.
+Initial public development snapshot: the deterministic core, the classifiers,
+tamper-evident audit, the CLI, and the runtime proxy. No `v0.1.0` tag or
+GitHub release was published; tagged release history begins at `v0.2.0`.
+Apache 2.0, no usage limits.
 
 ### Deterministic policy engine (`pkg/engine`)
 

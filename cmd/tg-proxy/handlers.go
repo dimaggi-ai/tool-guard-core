@@ -2,15 +2,31 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"time"
 
+	"github.com/dimaggi-ai/tool-guard-core/pkg/audit"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/engine"
 )
+
+// evaluationResponse augments only the proxy wire response. The pure engine's
+// domain.EvaluationResult deliberately remains receipt-agnostic.
+type evaluationResponse struct {
+	*domain.EvaluationResult
+	DecisionReceipt *audit.DecisionReceipt `json:"decision_receipt,omitempty"`
+}
+
+func addDecisionReceipt(body map[string]any, receipt *audit.DecisionReceipt) map[string]any {
+	if receipt != nil {
+		body["decision_receipt"] = receipt
+	}
+	return body
+}
 
 // ── HTTP handlers ──────────────────────────────────────────────────────────
 // Everything an operator hits via curl lives here. The proxy struct
@@ -35,6 +51,17 @@ func (p *proxy) readyz(w http.ResponseWriter, r *http.Request) {
 	p.mu.RLock()
 	n := len(p.policies)
 	p.mu.RUnlock()
+	p.auditMu.Lock()
+	auditPoisoned := p.auditPoisoned
+	p.auditMu.Unlock()
+	if auditPoisoned {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"status":   "not_ready",
+			"reason":   "audit writer is poisoned; restart after repairing and verifying the audit log",
+			"policies": n,
+		})
+		return
+	}
 	if n == 0 && p.failClosed {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
 			"status":   "not_ready",
@@ -103,6 +130,42 @@ func requireHTTPMethod(w http.ResponseWriter, r *http.Request, method string) bo
 	return false
 }
 
+// actionProceeds reports whether the evaluated tool call may execute. Runtime
+// side effects must branch on ActionTaken, not Decision: in shadow mode the
+// decision records what would have happened while the action still proceeds.
+func actionProceeds(action domain.ActionTaken) bool {
+	switch action {
+	case domain.ActionAllowed, domain.ActionAllowedShadow, domain.ActionFlagged:
+		return true
+	default:
+		return false
+	}
+}
+
+// applyOperationalDeny records a deny imposed by the proxy itself rather than
+// by a policy rule (for example an escalation-store collision or an audit
+// failure). Policy attribution and guidance must be cleared: the operational
+// reason, not the previously proposed policy action, now controls execution.
+func applyOperationalDeny(result *domain.EvaluationResult, reason string) {
+	result.Decision = domain.DecisionDenied
+	result.ActionTaken = domain.ActionDenied
+	result.DecisionReason = reason
+	result.AppliedRuleResults = nil
+	result.PrimaryCitation = nil
+	result.AppliedPrimaryCitation = nil
+	result.SuggestedResponse = ""
+}
+
+func syncResultOutcomeToTrace(trace *domain.DecisionTrace, result *domain.EvaluationResult) {
+	trace.Decision = result.Decision
+	trace.ActionTaken = result.ActionTaken
+	trace.DecisionReason = result.DecisionReason
+	trace.AppliedRuleResults = result.AppliedRuleResults
+	trace.PrimaryCitation = result.PrimaryCitation
+	trace.AppliedPrimaryCitation = result.AppliedPrimaryCitation
+	trace.SuggestedResponse = result.SuggestedResponse
+}
+
 func (p *proxy) reloadHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")
@@ -124,8 +187,8 @@ func (p *proxy) reloadHandler(w http.ResponseWriter, r *http.Request) {
 // Optional query parameters:
 //
 //	?mode=shadow|enforcement   — override the server's default mode for
-//	                              this request only (subject to the
-//	                              engine's strictest-mode floor).
+//	                              this request only; per-policy mode remains
+//	                              authoritative for each contribution.
 func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")
@@ -165,6 +228,14 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 		env.Timestamp = time.Now().UTC()
 	}
 
+	// Capture policies and their digest atomically. The same snapshot must
+	// drive both evaluation and audit provenance even if SIGHUP reloads the
+	// server before the trace is appended.
+	p.mu.RLock()
+	policies := p.policies
+	policySetHash := p.policySetHash
+	p.mu.RUnlock()
+
 	// Rate limit (per agent/session/org per -rate-limit-key-by). Over
 	// the bucket cap returns 429 with an audit-loggable reason; the
 	// caller never reaches the engine.
@@ -180,14 +251,14 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 		}
 		if !p.rateLimit.allow(key) {
 			reason := fmt.Sprintf("rate limit exceeded for %s=%q", p.rateLimitKeyBy, key)
-			p.emitBoundaryDeny(&env, reason, p.defaultMode)
+			receipt := p.emitBoundaryDeny(&env, reason, p.defaultMode, policySetHash)
 			p.denyCount.Add(1)
-			writeJSON(w, http.StatusTooManyRequests, map[string]any{
+			writeJSON(w, http.StatusTooManyRequests, addDecisionReceipt(map[string]any{
 				"decision":        "denied",
 				"action_taken":    "denied",
 				"decision_reason": reason,
 				"effective_mode":  p.defaultMode,
-			})
+			}, receipt))
 			return
 		}
 	}
@@ -212,14 +283,14 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 	// the engine.
 	if len(p.protectPaths) > 0 {
 		if violated, reason := engine.ViolatesProtectedPaths(&env, p.protectPaths); violated {
-			p.emitBoundaryDeny(&env, reason, mode)
+			receipt := p.emitBoundaryDeny(&env, reason, mode, policySetHash)
 			p.denyCount.Add(1)
-			writeJSON(w, http.StatusForbidden, map[string]any{
+			writeJSON(w, http.StatusForbidden, addDecisionReceipt(map[string]any{
 				"decision":        "denied",
 				"action_taken":    "denied",
 				"decision_reason": reason,
 				"effective_mode":  mode,
-			})
+			}, receipt))
 			return
 		}
 	}
@@ -261,21 +332,17 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	p.mu.RLock()
-	policies := p.policies
-	p.mu.RUnlock()
-
 	if len(policies) == 0 && p.failClosed {
 		reason := "no policies loaded; fail-closed engaged"
-		p.emitBoundaryDeny(&env, reason, mode)
+		receipt := p.emitBoundaryDeny(&env, reason, mode, policySetHash)
 		p.failClosedCount.Add(1)
 		p.denyCount.Add(1)
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+		writeJSON(w, http.StatusServiceUnavailable, addDecisionReceipt(map[string]any{
 			"decision":        "denied",
 			"action_taken":    "denied",
 			"decision_reason": reason,
 			"effective_mode":  mode,
-		})
+		}, receipt))
 		return
 	}
 
@@ -300,15 +367,15 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 	result, evalErr := p.safeEvaluate(&env, policies, mode)
 	if evalErr != nil {
 		reason := fmt.Sprintf("policy evaluator error; failing closed (unconditional — see safeEvaluate): %v", evalErr)
-		p.emitBoundaryDeny(&env, reason, mode)
+		receipt := p.emitBoundaryDeny(&env, reason, mode, policySetHash)
 		p.failClosedCount.Add(1)
 		p.denyCount.Add(1)
-		writeJSON(w, http.StatusInternalServerError, map[string]any{
+		writeJSON(w, http.StatusInternalServerError, addDecisionReceipt(map[string]any{
 			"decision":        "denied",
 			"action_taken":    "denied",
 			"decision_reason": reason,
 			"effective_mode":  mode,
-		})
+		}, receipt))
 		return
 	}
 
@@ -320,41 +387,44 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 	if p.unknownToolsDeny && !engine.ToolNameKnown(env.ToolName, policies) {
 		// Counter increment happens once in the final switch, not
 		// here — earlier code double-counted unknown-tool denies.
-		result.Decision = domain.DecisionDenied
-		result.ActionTaken = domain.ActionDenied
-		result.DecisionReason = fmt.Sprintf(
-			"tool_name %q is not declared in scope.tool_names of any loaded policy (--unknown-tools-deny)",
+		applyOperationalDeny(result, fmt.Sprintf(
+			"tool_name %q is not declared in scope.tool_names of any loaded enforcement policy (--unknown-tools-deny)",
 			env.ToolName,
-		)
+		))
 	}
 
 	traceID := fmt.Sprintf("trc-%d", time.Now().UnixNano())
+	amount, amountStatus := evaluatedAmountFromEnvelope(&env)
 	trace := domain.DecisionTrace{
-		TraceID:              traceID,
-		Timestamp:            env.Timestamp.UTC(),
-		OrgID:                env.OrgID,
-		EnvelopeID:           env.EnvelopeID,
-		AgentID:              env.AgentID,
-		AgentVersion:         env.AgentVersion,
-		SessionID:            env.SessionID,
-		TurnNumber:           env.TurnNumber,
-		ToolName:             env.ToolName,
-		ToolGroup:            env.ToolGroup,
-		Amount:               amountFromEnvelope(&env),
-		Decision:             result.Decision,
-		ActionTaken:          result.ActionTaken,
-		DecisionReason:       result.DecisionReason,
-		Mode:                 result.EffectiveMode,
-		PoliciesMatched:      result.PoliciesMatched,
-		RulesEvaluated:       result.RulesEvaluated,
-		RulesTriggered:       result.RulesTriggered,
-		RuleResults:          result.RuleResults,
-		PrimaryCitation:      result.PrimaryCitation,
-		SuggestedResponse:    result.SuggestedResponse,
-		IsNearMiss:           result.IsNearMiss,
-		EvaluationDurationMs: 0,
+		TraceID:                traceID,
+		Timestamp:              env.Timestamp.UTC(),
+		OrgID:                  env.OrgID,
+		EnvelopeID:             env.EnvelopeID,
+		AgentID:                env.AgentID,
+		AgentVersion:           env.AgentVersion,
+		SessionID:              env.SessionID,
+		TurnNumber:             env.TurnNumber,
+		ToolName:               env.ToolName,
+		ToolGroup:              env.ToolGroup,
+		Amount:                 amount,
+		AmountParseStatus:      amountStatus,
+		Decision:               result.Decision,
+		ActionTaken:            result.ActionTaken,
+		DecisionReason:         result.DecisionReason,
+		Mode:                   result.EffectiveMode,
+		PoliciesMatched:        result.PoliciesMatched,
+		RulesEvaluated:         result.RulesEvaluated,
+		RulesTriggered:         result.RulesTriggered,
+		RuleResults:            result.RuleResults,
+		AppliedRuleResults:     result.AppliedRuleResults,
+		PrimaryCitation:        result.PrimaryCitation,
+		AppliedPrimaryCitation: result.AppliedPrimaryCitation,
+		SuggestedResponse:      result.SuggestedResponse,
+		IsNearMiss:             result.IsNearMiss,
+		EvaluationDurationMs:   0,
 	}
-	// When the decision is escalated, register the pending entry so
+	provenanceErr := p.stampTraceProvenance(&trace, policySetHash)
+	// When the applied action is escalated, register the pending entry so
 	// the approver endpoints can find it and the agent can poll.
 	// EnvelopeID serves as the escalation ID. The per-rule
 	// EffectConfig.TimeoutMinutes (if set) overrides the default.
@@ -365,18 +435,16 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 	// poll URL would let an agent see another entry's approval
 	// state, and escalating past the cap would silently drop the
 	// pending entry. Better to surface a clean deny.
-	if result.Decision == domain.DecisionEscalated {
+	var escalationReservation *Escalation
+	if result.ActionTaken == domain.ActionEscalated {
 		timeoutMin := p.escalationDefaultMin
 		if t := timeoutFromMatchedRules(result, policies); t > 0 {
 			timeoutMin = t
 		}
-		if registered := p.escalations.add(&env, result, timeoutMin); registered == nil {
-			result.Decision = domain.DecisionDenied
-			result.ActionTaken = domain.ActionDenied
-			result.DecisionReason = "escalation could not be registered (envelope_id collision or pending-store at cap); downgraded to deny"
-			trace.Decision = result.Decision
-			trace.ActionTaken = result.ActionTaken
-			trace.DecisionReason = result.DecisionReason
+		escalationReservation = p.escalations.reserve(&env, result, timeoutMin)
+		if escalationReservation == nil {
+			applyOperationalDeny(result, "escalation could not be registered (envelope_id collision or pending-store at cap); downgraded to deny")
+			syncResultOutcomeToTrace(&trace, result)
 		}
 	}
 
@@ -384,29 +452,62 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 	// can't be written and --fail-closed is set. Counter updates
 	// happen once at the very end against the FINAL decision so
 	// there are no underflow / double-count races.
-	auditErr := p.appendTrace(&trace)
+	auditErr := provenanceErr
+	if auditErr == nil {
+		if escalationReservation != nil {
+			auditErr = p.appendTraceDurable(&trace)
+		} else {
+			auditErr = p.appendTrace(&trace)
+		}
+	}
+	var receipt *audit.DecisionReceipt
 	if auditErr != nil {
 		log.Printf("tg-proxy: append audit trace: %v", auditErr)
 		p.auditFailureCount.Add(1)
-		if p.failClosed && result.Decision == domain.DecisionAllowed {
-			result.Decision = domain.DecisionDenied
-			result.ActionTaken = domain.ActionDenied
-			result.DecisionReason = "decision was allow but audit append failed; downgraded to deny (--fail-closed=true)"
-			trace.Decision = result.Decision
-			trace.ActionTaken = result.ActionTaken
-			trace.DecisionReason = result.DecisionReason
-			_ = p.appendTrace(&trace) // best-effort log of the override
+		if escalationReservation != nil {
+			p.escalations.discardReserved(escalationReservation)
+			escalationReservation = nil
+			applyOperationalDeny(result, "escalation audit append failed; hidden reservation discarded and action downgraded to deny")
+			syncResultOutcomeToTrace(&trace, result)
+			// Escalation authorization is always audit-gated, independent of
+			// fail-open for ordinary actions. When the failed write was proven
+			// rolled back, make one best-effort durable record of the deny.
+			if !errors.Is(auditErr, errAuditWriterPoisoned) {
+				if retryErr := p.appendTraceDurable(&trace); retryErr == nil {
+					receipt = receiptForAppendedTrace(&trace)
+				}
+			}
+		} else if p.failClosed && actionProceeds(result.ActionTaken) {
+			applyOperationalDeny(result, "applied action would proceed but audit append failed; downgraded to deny (--fail-closed=true)")
+			syncResultOutcomeToTrace(&trace, result)
+			// A poisoned writer has an ambiguous on-disk tail. Retrying would
+			// append after possible truncated JSON and make recovery harder.
+			if !errors.Is(auditErr, errAuditWriterPoisoned) {
+				_ = p.appendTrace(&trace) // best-effort log of the override
+			}
+		}
+	} else {
+		receipt = receiptForAppendedTrace(&trace)
+		if escalationReservation != nil && !p.escalations.publishReserved(escalationReservation) {
+			// Hidden reservations cannot be evicted or resolved. Treat a failed
+			// publication as an internal safety invariant violation rather than
+			// returning a poll URL that has no pending object.
+			log.Printf("tg-proxy: audited escalation %q could not be published", env.EnvelopeID)
+			applyOperationalDeny(result, "audited escalation could not be published; downgraded to deny")
+			syncResultOutcomeToTrace(&trace, result)
+			receipt = nil
+			escalationReservation = nil
 		}
 	}
 
-	switch result.Decision {
-	case domain.DecisionAllowed:
+	switch result.ActionTaken {
+	case domain.ActionAllowed, domain.ActionAllowedShadow:
 		p.allowCount.Add(1)
-	case domain.DecisionDenied:
+	case domain.ActionDenied:
 		p.denyCount.Add(1)
-	case domain.DecisionEscalated:
+	case domain.ActionEscalated:
 		p.escalateCount.Add(1)
-	case domain.DecisionFlagged:
+	case domain.ActionFlagged:
 		p.flagCount.Add(1)
 	}
 
@@ -414,32 +515,33 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 	// call actually proceeds (allow or flag). Denied and escalated calls
 	// did not execute, so counting them would let a rejected attempt
 	// inflate the window and deny the next legitimate call.
-	if velWindow != nil && velHasAmount &&
-		(result.Decision == domain.DecisionAllowed || result.Decision == domain.DecisionFlagged) {
+	if velWindow != nil && velHasAmount && actionProceeds(result.ActionTaken) {
 		velWindow.record(velNow, velAmount)
 	}
 
-	if result.Decision == domain.DecisionEscalated {
-		writeJSON(w, http.StatusAccepted, map[string]any{
-			"decision":           result.Decision,
-			"action_taken":       result.ActionTaken,
-			"decision_reason":    result.DecisionReason,
-			"effective_mode":     result.EffectiveMode,
-			"policies_matched":   result.PoliciesMatched,
-			"rules_evaluated":    result.RulesEvaluated,
-			"rules_triggered":    result.RulesTriggered,
-			"rule_results":       result.RuleResults,
-			"primary_citation":   result.PrimaryCitation,
-			"is_near_miss":       result.IsNearMiss,
-			"suggested_response": result.SuggestedResponse,
-			"envelope_id":        env.EnvelopeID,
-			"escalation_id":      env.EnvelopeID,
-			"poll_url":           "/escalations/" + env.EnvelopeID,
-		})
+	if result.ActionTaken == domain.ActionEscalated {
+		writeJSON(w, http.StatusAccepted, addDecisionReceipt(map[string]any{
+			"decision":                 result.Decision,
+			"action_taken":             result.ActionTaken,
+			"decision_reason":          result.DecisionReason,
+			"effective_mode":           result.EffectiveMode,
+			"policies_matched":         result.PoliciesMatched,
+			"rules_evaluated":          result.RulesEvaluated,
+			"rules_triggered":          result.RulesTriggered,
+			"rule_results":             result.RuleResults,
+			"applied_rule_results":     result.AppliedRuleResults,
+			"primary_citation":         result.PrimaryCitation,
+			"applied_primary_citation": result.AppliedPrimaryCitation,
+			"is_near_miss":             result.IsNearMiss,
+			"suggested_response":       result.SuggestedResponse,
+			"envelope_id":              env.EnvelopeID,
+			"escalation_id":            env.EnvelopeID,
+			"poll_url":                 "/escalations/" + env.EnvelopeID,
+		}, receipt))
 		return
 	}
 
-	writeJSON(w, http.StatusOK, result)
+	writeJSON(w, http.StatusOK, evaluationResponse{EvaluationResult: result, DecisionReceipt: receipt})
 }
 
 // safeEvaluate calls the engine and recovers a panic into an error instead

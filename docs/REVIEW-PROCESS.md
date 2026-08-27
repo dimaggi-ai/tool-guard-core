@@ -242,6 +242,37 @@ passes have real precedent instead of a starting from scratch.
   are now a load error. → pillar 2: a shape the loader does not
   recognize must fail safe, not fail open.
 
+- **2026-08 · v0.8.0 integrated release review.** Timeline and adversarial
+  release probes found that ordinary green tests did not prove a retry-safe
+  publication: the finalizer lacked explicit repository context, accepted any
+  successful PyPI version endpoint rather than the exact built filenames and
+  digests, and could not recover when promotion succeeded but its read-back
+  failed. A second pass found that GoReleaser did not reuse its staged draft,
+  prerelease-shaped tags could enter a workflow whose signature identity only
+  accepted stable semver, and the changelog still described 0.8 as planned.
+  The final adversarial pass also proved that HTTP 204 responses with no
+  decision body and an empty audit report could pass the nightly stress gate.
+  The workflow now checks release state transitions explicitly, clean rebuilds
+  must produce identical Python artifacts, and the stress harness accepts only
+  contract-valid 200/202 bodies while requiring the audit report to contain at
+  least the corresponding candidate records. → pillars 2, 4, and 6.
+
+- **2026-08 · v0.8.0 exact-head release finalization.** Local seats in panel
+  cycles that could not be stamped because the required cloud seats were
+  unavailable found five more release-gate defects. The runbook required a
+  tag-derived Python version before the local tag existed; the tag preflight
+  accepted any ancestor of `main` instead of the reviewed exact head; the
+  stress response validator accepted impossible decision/action pairs while
+  rejecting legitimate mixed shadow/enforcement outcomes; malformed non-string
+  receipt fields could crash the Python memory adapter; and candidate-only
+  warm-up filled the candidate escalation store before comparison with a fresh
+  baseline. The fixes add transaction-order and annotated-tag preflight tests,
+  a complete response-pair matrix, tolerant receipt-field tests, and a phase
+  plan plus identical-binary probe that compares both proxies before either is
+  warmed independently. → pillars 2, 4, and 6. The panel remains incomplete
+  until all required seats return verdicts; these fixes do not substitute for
+  that gate.
+
 ## Where this fits in the release checklist
 
 `RELEASING.md`'s "Before tagging at all" section should include running

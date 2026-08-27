@@ -36,13 +36,20 @@ type DecisionTrace struct {
 	EnvelopeID string    `json:"envelope_id"`
 
 	// Snapshot of the envelope (with redacted params only)
-	AgentID      string  `json:"agent_id"`
-	AgentVersion string  `json:"agent_version,omitempty"`
-	SessionID    string  `json:"session_id"`
-	TurnNumber   int     `json:"turn_number,omitempty"`
-	ToolName     string  `json:"tool_name"`
-	ToolGroup    string  `json:"tool_group"`
-	Amount       float64 `json:"amount,omitempty"`
+	AgentID      string `json:"agent_id"`
+	AgentVersion string `json:"agent_version,omitempty"`
+	SessionID    string `json:"session_id"`
+	TurnNumber   int    `json:"turn_number,omitempty"`
+	ToolName     string `json:"tool_name"`
+	ToolGroup    string `json:"tool_group"`
+	// Amount must always be serialized. Canonical v2 hashes the exact IEEE-754
+	// bits, including the sign bit on negative zero; omitting a zero value would
+	// make a freshly written -0 record deserialize as +0 and fail verification.
+	Amount float64 `json:"amount"`
+	// AmountParseStatus records whether Amount is the parsed envelope value or
+	// the fail-closed sentinel used when the input amount was malformed. v2
+	// binds both fields so an audit record matches the numeric value evaluated.
+	AmountParseStatus string `json:"amount_parse_status,omitempty"`
 
 	// Evaluation result
 	Decision       Decision    `json:"decision"`
@@ -55,9 +62,14 @@ type DecisionTrace struct {
 	RulesEvaluated  int          `json:"rules_evaluated"`
 	RulesTriggered  int          `json:"rules_triggered"`
 	RuleResults     []RuleResult `json:"rule_results"`
+	// AppliedRuleResults contains only matched rules that contributed to the
+	// action actually taken. It differs from RuleResults when shadow telemetry
+	// has a stricter raw decision than an enforcement policy.
+	AppliedRuleResults []RuleResult `json:"applied_rule_results,omitempty"`
 
-	// Primary citation (the most severe triggered rule's citation)
-	PrimaryCitation *Citation `json:"primary_citation,omitempty"`
+	// Aggregate-decision and applied-action citations can differ in mixed mode.
+	PrimaryCitation        *Citation `json:"primary_citation,omitempty"`
+	AppliedPrimaryCitation *Citation `json:"applied_primary_citation,omitempty"`
 
 	// Suggested response (persisted for audit trail)
 	SuggestedResponse string `json:"suggested_response,omitempty"`
@@ -73,9 +85,19 @@ type DecisionTrace struct {
 	Resolution   string     `json:"resolution,omitempty"` // approved, denied, timeout
 
 	// Integrity (hash chain)
+	// CanonicalVersion selects the byte-exact hash schema. Records written
+	// before v2 omitted this field; verifiers interpret an absent value as v1.
+	CanonicalVersion  string `json:"_canonical_v,omitempty"`
 	TraceHash         string `json:"trace_hash"`
 	PreviousTraceHash string `json:"previous_trace_hash,omitempty"`
 	SignedBy          string `json:"signed_by,omitempty"` // Proxy instance ID
+
+	// Provenance. New audit writers stamp all three before hashing. They are
+	// optional on the wire only so pre-v2 records remain decodable and
+	// verifiable; a v2 canonical record requires every value.
+	EngineVersion string `json:"engine_version,omitempty"`
+	PolicySetHash string `json:"policy_set_hash,omitempty"`
+	SchemaVersion string `json:"schema_version,omitempty"`
 
 	// Redacted parameters
 	ParametersRedacted []byte `json:"parameters_redacted,omitempty"`
@@ -160,15 +182,20 @@ type RuleResult struct {
 
 // EvaluationResult is the output of the policy engine.
 type EvaluationResult struct {
-	Decision          Decision     `json:"decision"`
-	ActionTaken       ActionTaken  `json:"action_taken"`
-	DecisionReason    string       `json:"decision_reason,omitempty"`
-	EffectiveMode     PolicyMode   `json:"effective_mode"`
-	PoliciesMatched   int          `json:"policies_matched"`
-	RulesEvaluated    int          `json:"rules_evaluated"`
-	RulesTriggered    int          `json:"rules_triggered"`
-	RuleResults       []RuleResult `json:"rule_results"`
-	PrimaryCitation   *Citation    `json:"primary_citation,omitempty"`
-	IsNearMiss        bool         `json:"is_near_miss"`
-	SuggestedResponse string       `json:"suggested_response,omitempty"`
+	Decision        Decision     `json:"decision"`
+	ActionTaken     ActionTaken  `json:"action_taken"`
+	DecisionReason  string       `json:"decision_reason,omitempty"`
+	EffectiveMode   PolicyMode   `json:"effective_mode"`
+	PoliciesMatched int          `json:"policies_matched"`
+	RulesEvaluated  int          `json:"rules_evaluated"`
+	RulesTriggered  int          `json:"rules_triggered"`
+	RuleResults     []RuleResult `json:"rule_results"`
+	// AppliedRuleResults and AppliedPrimaryCitation explain the action that
+	// controls execution. PrimaryCitation explains the aggregate raw Decision,
+	// which can be stricter because of shadow telemetry.
+	AppliedRuleResults     []RuleResult `json:"applied_rule_results,omitempty"`
+	PrimaryCitation        *Citation    `json:"primary_citation,omitempty"`
+	AppliedPrimaryCitation *Citation    `json:"applied_primary_citation,omitempty"`
+	IsNearMiss             bool         `json:"is_near_miss"`
+	SuggestedResponse      string       `json:"suggested_response,omitempty"`
 }

@@ -3,6 +3,7 @@ package engine
 import (
 	stdpath "path"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
@@ -54,7 +55,14 @@ func evalPathClassify(p *domain.PathClassify, fields map[string]interface{}) boo
 
 	cleaned := path
 	if p.Require.CleanFirst {
-		if posixAbs {
+		if runtime.GOOS == "windows" {
+			// Agent envelopes and policy YAML conventionally use forward
+			// slashes even on Windows. Clean with Windows semantics first so
+			// native relative paths still collapse dot segments, then convert
+			// to the platform-independent comparison form used by policies.
+			cleaned = filepath.ToSlash(filepath.Clean(path))
+			cleaned = stdpath.Clean(cleaned)
+		} else if posixAbs {
 			// path.Clean (GOOS-independent), not filepath.Clean: on
 			// Windows, filepath.Clean treats a leading "//" as the start
 			// of a UNC path and mangles a plain POSIX double-slash input
@@ -66,6 +74,12 @@ func evalPathClassify(p *domain.PathClassify, fields map[string]interface{}) boo
 		} else {
 			cleaned = filepath.Clean(path)
 		}
+	}
+	if runtime.GOOS == "windows" {
+		// CleanFirst is optional, but separator normalization is not: a
+		// relative "policies\\custom.yaml" must match a portable
+		// "policies/" deny prefix just as an absolute drive path does.
+		cleaned = filepath.ToSlash(cleaned)
 	}
 
 	if p.Require.MaxPathLength > 0 && len(cleaned) > p.Require.MaxPathLength {

@@ -5,7 +5,7 @@ This is the exact, required order. Tagging out of this order is how
 `blob/main/...` link the Release page itself points to (CHANGELOG.md,
 Release-Notes.md, README) — still showed the *previous* version for
 two days. `release.yml` now has a CI guard that refuses to publish a
-release whose tag isn't reachable from `main`, but don't rely on the
+release whose tag is not `main`'s exact current HEAD, but don't rely on the
 guard catching it after the fact — do it right the first time.
 
 ## The order
@@ -36,10 +36,17 @@ guard catching it after the fact — do it right the first time.
    git push origin main
    ```
 
-3. **Tag `main`'s new HEAD:**
+3. **Tag `main`'s new HEAD locally, then verify the tag-derived Python
+   artifacts before publishing the tag:**
    ```bash
    git tag -a vX.Y.Z -m "Tool Guard Core vX.Y.Z"
+   bash scripts/verify-python-reproducible.sh dist/python
+   python scripts/verify-python-dist.py dist/python --expected-version X.Y.Z
    ```
+   `setuptools-scm` derives the final version from the local tag, so this
+   exact-version check cannot run before the tag exists. The tag is still
+   local at this point. If either command fails, delete or correct the local
+   tag and fix the release commit; do not push the tag.
 
 4. **Push the tag** (this triggers `.github/workflows/release.yml`,
    which builds, runs GoReleaser, and publishes the GitHub Release +
@@ -50,12 +57,11 @@ guard catching it after the fact — do it right the first time.
    git push origin vX.Y.Z
    ```
 
-5. **Watch the Release workflow.** Its first real step verifies the
-   tag is reachable from `origin/main` and fails immediately, before
-   any build/publish work, if it isn't. If it fails: `main` is behind
-   the tag — go back to step 1, fast-forward `main`, push it, then
-   either re-run the workflow for the same tag or delete and re-push
-   the tag once `main` is caught up.
+5. **Watch the Release workflow.** Its first real step verifies the tag
+   resolves to `origin/main`'s exact HEAD and fails immediately, before any
+   build/publish work, if it does not. If it fails, delete the unpublishable
+   tag, put the reviewed release commit at `main`'s HEAD, and restart from the
+   local-tag verification in step 3.
 
 ## Before tagging at all
 
@@ -72,6 +78,13 @@ guard catching it after the fact — do it right the first time.
   earlier this session."
 - No `v X.Y.Z` tag already exists locally or on `origin`
   (`git tag --list vX.Y.Z`).
+- PyPI trusted publishing is configured for distribution `toolguard-core`,
+  repository `dimaggi-ai/tool-guard-core`, workflow `release.yml`, and GitHub
+  environment `pypi`. This is a one-time maintainer-side PyPI configuration;
+  the workflow intentionally has no long-lived upload token.
+- `make api-check` is green. If the release intentionally changes the exported
+  Go API, the compatibility impact and baseline refresh followed the process in
+  `docs/api-stability.md`.
 - Any change to policy evaluation, the policy loader, the SDK, audit
   integrity, or a release workflow in this release has been run through
   the internal review checklist in `docs/REVIEW-PROCESS.md` — as a
@@ -80,6 +93,14 @@ guard catching it after the fact — do it right the first time.
   as a top-level PR comment (or, for work landed without a PR, recorded
   in that document's findings log) — and log-worthy findings added to
   the findings log, not left only in PR comments.
+
+After the release workflow succeeds, verify the SDK from a clean environment:
+
+```bash
+python3 -m venv /tmp/toolguard-install-check
+/tmp/toolguard-install-check/bin/pip install "toolguard-core==X.Y.Z"
+/tmp/toolguard-install-check/bin/python -c "import toolguard"
+```
 
 ## Why this exists
 

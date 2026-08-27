@@ -40,6 +40,9 @@ func Load(path string) (domain.Policy, error) {
 	if err != nil {
 		return domain.Policy{}, fmt.Errorf("read policy: %w", err)
 	}
+	if len(bytes.TrimSpace(b)) == 0 {
+		return domain.Policy{}, fmt.Errorf("policy file %q is empty or comment-only; refusing a permissive policy shell", path)
+	}
 
 	// Exactly one YAML document: yaml.Unmarshal would silently take the
 	// first document and drop everything after a `---` separator — a
@@ -61,6 +64,9 @@ func Load(path string) (domain.Policy, error) {
 		if err != nil || extra != nil {
 			return domain.Policy{}, fmt.Errorf("parse policy YAML: a policy file is exactly one YAML document; content after a `---` separator would be silently ignored")
 		}
+	}
+	if raw == nil {
+		return domain.Policy{}, fmt.Errorf("policy file %q is empty or comment-only; refusing a permissive policy shell", path)
 	}
 	raw = normalizeYAML(raw)
 	root, _ := raw.(map[string]any)
@@ -95,6 +101,9 @@ func Load(path string) (domain.Policy, error) {
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&policy); err != nil {
 		return domain.Policy{}, fmt.Errorf("decode policy: %w", err)
+	}
+	if strings.TrimSpace(policy.PolicyID) == "" {
+		return domain.Policy{}, fmt.Errorf("policy file %q: policy_id is required and must not be blank", path)
 	}
 
 	if _, present := root["schema_version"]; !present {

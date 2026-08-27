@@ -34,12 +34,16 @@ JSON `ActionEnvelope`.
 
 ```
 pkg/domain/      Tool-call envelopes, policy / rule / condition types,
-                 decision traces. JSON-tagged; YAML loaders in cmd/tg.
+                 decision traces. JSON-tagged; no loading or I/O.
+
+pkg/policyload/  Strict YAML loading and deterministic policy-set hashing.
+                 Every policy-loading binary uses this package, so schema
+                 acceptance is identical at CLI, hook, and proxy boundaries.
 
 pkg/engine/      Pure policy evaluation. No I/O. Given an envelope and
                  a set of policies, returns a decision in microseconds.
-                 Hosts the path_classify / shell_classify predicates and
-                 the regex compile cache.
+                 Hosts path, shell, write, HTTP, and reversibility
+                 classification plus the regex compile cache.
 
 pkg/sqlguard/    Four-dialect SQL classifier (postgres / mysql / sqlite
                  / mssql). The tokenizer-based lite implementation is
@@ -58,18 +62,22 @@ pkg/audit/       SHA-256 hash-chained traces, offline replay verifier,
                  canonical JSON for stable hashing. The canonical
                  encoder covers the decision and the fields that produce
                  it - identity, tool, amount, decision/action/reason,
-                 mode, the matched rule results, escalation target,
-                 chain links, and signer - so tampering with a hashed
-                 field is detected. Operator annotations and
-                 post-decision metadata (citations, suggested response,
-                 escalation-resolution fields, redacted parameters,
-                 context snapshot, token/cost counters, and diagnostic
-                 fields) are recorded but not hashed; the exact hashed
-                 set is `canonicalTraceV1` in `pkg/audit/canonical.go`.
+                 mode, raw and applied rule results (including citations
+                 and diagnostics), primary citations, suggested response,
+                 escalation target, engine version, normalized policy-set
+                 hash, schema version, chain links, and signer - so tampering
+                 with a hashed field is detected. Escalation-resolution
+                 fields, redacted parameters, context snapshot, and
+                 token/cost counters are recorded but not hashed; the exact
+                 current set is `canonicalTraceV2` in
+                 `pkg/audit/canonical.go`. Marker-less historical records
+                 continue to use the immutable v1 encoder.
                  Escalation approvals are written as their own chained
                  entries.
 
-cmd/tg/          The one-shot CLI: evaluate / verify / lint / benchmark.
+cmd/tg/          The one-shot CLI for policy authoring, local evaluation,
+                 coding-agent protection, and offline audit workflows.
+                 See cli-reference.md for the complete command list.
 
 cmd/tg-proxy/    HTTP service: POST /evaluate, hash-chained JSONL
                  audit with rotation, SIGHUP policy reload, /metrics,
@@ -101,27 +109,42 @@ For every `/evaluate` request the proxy walks this sequence:
 4. **Engine evaluation** - every loaded policy whose scope matches
    the envelope contributes its rules to the evaluation. Each rule
    walks its condition tree (`and` / `or` / `not` plus leaf
-   comparisons or one of the classifiers: `sql_classify`,
-   `path_classify`, `shell_classify`, `llm_classify`).
+   comparisons or one of the six classifier leaves listed below).
 5. **Effect resolution** - among all rules that fired, the strongest
    effect wins by severity hierarchy (`deny` > `escalate` > `flag` >
    `allow`).
 6. **Unknown-tools-deny gate** - if `-unknown-tools-deny` is set and
    the envelope's `tool_name` is not in any enforcement policy's
    `scope.tool_names`, the decision is forced to `denied`.
-7. **Escalation** - if the decision is `escalated`, a pending entry
+7. **Escalation** - if `action_taken` is `escalated`, a pending entry
    is registered in the bounded escalation store. The agent gets a
    `poll_url` back and can long-poll for the operator's decision.
-8. **Audit append** - the full decision trace is canonical-encoded,
-   SHA-256-hashed, linked to the previous trace, and written to the
-   JSONL log. `lastHash` advances BEFORE the durability barrier so a
-   Sync failure cannot fork the chain.
+8. **Audit append** - the versioned decision-bearing projection is
+   canonical-encoded and SHA-256-hashed, then the full trace is linked to
+   the previous record and written to the JSONL log. `lastHash` advances
+   before the durability barrier. If that barrier fails, the complete write is
+   rolled back durably and the prior hash/counters are restored. If rollback
+   cannot be proven, readiness is poisoned and later appends stop until an
+   operator repairs and verifies the uncertain tail.
 9. **Response** - JSON `EvaluationResult` with decision, reason,
    matched rules, citations, escalation poll URL (if applicable).
 
 ## The condition DSL
 
-Conditions are recursive trees. The four leaf shapes are:
+Conditions are recursive trees. A leaf is either a field comparison or one
+of these classifier conditions:
+
+| Classifier condition | Surface governed |
+|---|---|
+| `sql_classify` | SQL statements and dialect-specific safety requirements |
+| `path_classify` | Filesystem paths, traversal, symlinks, and shell metacharacters |
+| `shell_classify` | Parsed argument vectors, executable allowlists, and shell escapes |
+| `llm_classify` | Local-LLM classification of text and multimodal generation requests |
+| `write_classify` | File-write destinations, size ceilings, and denied content |
+| `http_classify` | Outbound HTTP hosts, schemes, methods, and ports |
+
+This table is checked against the classifier fields on `domain.Condition` in
+CI. The recursive shapes are:
 
 ```yaml
 # Leaf: simple field comparison
@@ -136,6 +159,8 @@ conditions:
   path_classify: ...
   shell_classify: ...
   llm_classify: ...
+  write_classify: ...
+  http_classify: ...
 
 # Tree shapes
 conditions:
@@ -149,18 +174,26 @@ and classifier with examples.
 
 ## The audit chain
 
-Every trace's hash covers the canonical JSON of the decision and the
-fields that produce it - `decision_reason`, the matched-rule list, the
-agent identity, the amount, the chain links, and the signer - so
-mutating any of them breaks `tg verify`. Operator annotations and
-post-decision metadata (citations, suggested response, the
-escalation-resolution fields, `parameters_redacted`, `context_snapshot`,
-the token/cost counters, and diagnostic fields) are recorded in the log
-but are not part of the canonical hash; the exact hashed set is defined
-by `canonicalTraceV1` (and its nested `canonicalRuleResultV1` /
-`canonicalDeepEvalV1`) in `pkg/audit/canonical.go`. Escalation approvals
-are written as their own chained entries, so the approval record is
-itself tamper-evident.
+Every v2 trace's hash covers the canonical JSON of the decision and the
+fields that explain both the raw decision and applied action:
+`decision_reason`, raw and applied rule results (including their citations
+and diagnostics), primary citations, suggested response, agent identity,
+exact evaluated amount (as IEEE-754 bits) and its parse status, chain links,
+signer, engine version, normalized policy-set hash, and schema version.
+Mutating any of those fields breaks
+`tg verify`. Escalation-resolution fields, `parameters_redacted`,
+`context_snapshot`, and the top-level agent token/cost counters are recorded
+but are not part of the canonical hash. Deep-evaluation `tokens_in` and
+`tokens_out` remain hash-bearing. The exact hashed sets are the immutable versioned
+structs in `pkg/audit/canonical.go`; records without `_canonical_v` use v1,
+while new records carry `_canonical_v: "v2"`. Escalation approvals are
+written as their own chained entries, so the approval record is itself
+tamper-evident. The v2 writer transition is a coordinated upgrade: 0.8 can
+verify a monotonic v1-to-v2 chain and rejects any later v1 record. A 0.7
+verifier cannot read v2, and although the old hook can physically append a
+markerless v1 record, that downgrade is not a valid chain resumption.
+See the [upgrade path](operating.md#upgrade-path) before enabling a 0.8 writer
+on an existing chain.
 
 On startup, the proxy reads the audit log tail, recomputes its
 canonical hash, and refuses to start if the stored hash doesn't
@@ -168,7 +201,14 @@ match (tamper-on-disk detection).
 
 Rotation is opt-in via `-audit-rotate-bytes`. Three fsync modes:
 `every` (default, strongest durability), `interval` (per N appends),
-`none` (OS-managed). `tg verify` walks the rotation set in order.
+`none` (OS-managed). For a non-empty active file, size-triggered rotation runs
+before writing the trace that would meet or exceed the configured boundary, so
+a rotation failure cannot commit an action that the response later changes.
+Rotation flushes the rename and replacement-file metadata before completing.
+Any uncertain rotation poisons the writer, fails readiness, and blocks later
+appends; the current trace has not been written and no terminal escalation
+state is published. Automatic expiration follows the same audit-before-publish
+ordering as approval and denial. `tg verify` walks the rotation set in order.
 
 ## The escalation flow
 

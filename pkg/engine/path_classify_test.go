@@ -1,11 +1,33 @@
 package engine_test
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/engine"
 )
+
+func TestEvalPathClassify_RelativePolicyPathIsPortable(t *testing.T) {
+	cond := domain.Condition{
+		PathClassify: &domain.PathClassify{
+			Field: "parameters.file_path",
+			Require: domain.PathRequire{
+				CleanFirst:              true,
+				DeniedCanonicalPrefixes: []string{"policies/"},
+			},
+		},
+	}
+	for _, candidate := range []string{
+		"policies/custom.yaml",
+		filepath.Join("policies", "custom.yaml"),
+	} {
+		fields := map[string]interface{}{"parameters.file_path": candidate}
+		if !engine.EvalCondition(cond, fields) {
+			t.Errorf("portable relative policy path %q did not fire deny rule", candidate)
+		}
+	}
+}
 
 func pathFields(p string) map[string]interface{} {
 	return map[string]interface{}{
