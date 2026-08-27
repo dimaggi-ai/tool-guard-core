@@ -34,7 +34,21 @@ def step(job: str, name: str) -> str:
 
 def steps(job: str) -> list[str]:
     """Return every YAML step block, including unnamed action steps."""
-    return [part for part in re.split(r"(?=^      - )", job, flags=re.MULTILINE) if part.startswith("      - ")]
+    return [
+        part
+        for part in re.split(r"(?=^      - (?:name|uses):)", job, flags=re.MULTILINE)
+        if re.match(r"^      - (?:name|uses):", part)
+    ]
+
+
+def matching_step_indices(items: list[str], needle: str) -> list[int]:
+    return [index for index, item in enumerate(items) if needle in item]
+
+
+def publisher_preserves_success_gate(item: str) -> bool:
+    return not re.search(
+        r"^        (?:if|continue-on-error):", item, flags=re.MULTILINE
+    )
 
 
 def active(text: str) -> str:
@@ -56,6 +70,20 @@ publish_step = step(finalizer, "Publish verified GitHub Release")
 python_tag_step = step(python_publish_job, "Verify release tag before PyPI publication")
 release_steps = steps(release_job)
 python_publish_steps = steps(python_publish_job)
+artifact_verifier_name = "      - name: Verify release tag before artifact publication\n"
+pypi_verifier_name = "      - name: Verify release tag before PyPI publication\n"
+goreleaser_indices = matching_step_indices(
+    release_steps, "goreleaser/goreleaser-action@"
+)
+artifact_verifier_indices = matching_step_indices(
+    release_steps, artifact_verifier_name
+)
+pypi_publisher_indices = matching_step_indices(
+    python_publish_steps, "pypa/gh-action-pypi-publish@"
+)
+pypi_verifier_indices = matching_step_indices(
+    python_publish_steps, pypi_verifier_name
+)
 active_finalizer = active(finalizer)
 
 resolve_body = """        id: release-state
@@ -139,28 +167,26 @@ checks = {
         and 0 <= immutable_index < publish_step.find(promote_command)
     ),
     "GoReleaser publication has an exact adjacent immutable-tag gate": (
-        release_tag_step.rstrip() == artifact_tag_gate.rstrip()
-        and sum("goreleaser/goreleaser-action@" in item for item in release_steps) == 1
-        and any(
-            release_steps[index].startswith(
-                "      - name: Verify release tag before artifact publication\n"
-            )
-            and "goreleaser/goreleaser-action@" in release_steps[index + 1]
-            for index in range(len(release_steps) - 1)
-        )
+        len(artifact_verifier_indices) == 1
+        and len(goreleaser_indices) == 1
+        and goreleaser_indices[0] == artifact_verifier_indices[0] + 1
+        and release_steps[artifact_verifier_indices[0]].split(
+            artifact_verifier_name, maxsplit=1
+        )[-1].rstrip() == artifact_tag_gate.rstrip()
+        and publisher_preserves_success_gate(release_steps[goreleaser_indices[0]])
+        and active(workflow).count("goreleaser/goreleaser-action@") == 1
     ),
     "PyPI publication has an exact adjacent immutable-tag gate": (
-        python_tag_step.rstrip() == pypi_tag_gate.rstrip()
-        and sum(
-            "pypa/gh-action-pypi-publish@" in item for item in python_publish_steps
-        ) == 1
-        and any(
-            python_publish_steps[index].startswith(
-                "      - name: Verify release tag before PyPI publication\n"
-            )
-            and "pypa/gh-action-pypi-publish@" in python_publish_steps[index + 1]
-            for index in range(len(python_publish_steps) - 1)
+        len(pypi_verifier_indices) == 1
+        and len(pypi_publisher_indices) == 1
+        and pypi_publisher_indices[0] == pypi_verifier_indices[0] + 1
+        and python_publish_steps[pypi_verifier_indices[0]].split(
+            pypi_verifier_name, maxsplit=1
+        )[-1].rstrip() == pypi_tag_gate.rstrip()
+        and publisher_preserves_success_gate(
+            python_publish_steps[pypi_publisher_indices[0]]
         )
+        and active(workflow).count("pypa/gh-action-pypi-publish@") == 1
         and "      contents: read" in python_publish_job
     ),
     "release refuses to mutate an already-public release": "refusing to rebuild or push release artifacts" in release_job,
