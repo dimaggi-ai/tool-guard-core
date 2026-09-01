@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"encoding/json"
 	"time"
 )
 
@@ -97,6 +98,12 @@ type Policy struct {
 
 	// Rules are the individual evaluation rules
 	Rules []Rule `json:"rules"`
+
+	// DeepEvaluation remains in the Go domain model for compatibility with
+	// the DIMAGGI enterprise evaluator. Tool Guard Core does not evaluate it,
+	// and the strict policy loader rejects it for public policy files. New core
+	// policies should use an llm_classify condition instead.
+	DeepEvaluation *DeepEvalConfig `json:"deep_evaluation,omitempty"`
 
 	// Compliance maps this policy to framework control IDs (e.g.
 	// {"eu_ai_act": ["art_12", "art_14"]}). The mapping is stored
@@ -564,4 +571,34 @@ type Citation struct {
 	Page          int    `json:"page,omitempty"`
 	Line          int    `json:"line,omitempty"`
 	Excerpt       string `json:"excerpt"`
+}
+
+// DeepEvalConfig is the compatibility shape consumed by DIMAGGI's enterprise
+// hybrid evaluator. Tool Guard Core itself does not execute this configuration;
+// use LLMClassify for semantic checks in public core policies.
+type DeepEvalConfig struct {
+	Model               string  `json:"model" yaml:"model"`
+	ContextFile         string  `json:"context_file,omitempty" yaml:"context"`
+	ConfidenceThreshold float64 `json:"confidence_threshold,omitempty" yaml:"confidence_threshold"`
+	ResponseFormat      string  `json:"response_format,omitempty" yaml:"response_format"`
+	FailMode            string  `json:"fail_mode,omitempty" yaml:"fail_mode"`
+}
+
+// UnmarshalJSON accepts both the JSON context_file name and the context alias
+// used by the enterprise YAML-to-JSON compatibility loader.
+func (d *DeepEvalConfig) UnmarshalJSON(b []byte) error {
+	type alias DeepEvalConfig
+	aux := &struct {
+		Context string `json:"context"`
+		*alias
+	}{
+		alias: (*alias)(d),
+	}
+	if err := json.Unmarshal(b, &aux); err != nil {
+		return err
+	}
+	if aux.Context != "" && d.ContextFile == "" {
+		d.ContextFile = aux.Context
+	}
+	return nil
 }

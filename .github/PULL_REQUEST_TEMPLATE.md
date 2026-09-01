@@ -38,6 +38,7 @@ Thanks for opening a PR! A few things to check before requesting review:
 - [ ] New attack-class test added if this closes a bypass class
 - [ ] Public docs updated if public API changed
 - [ ] Followed CONTRIBUTING.md naming + commit-message conventions
+- [ ] Editorial review passed for changed reader-facing prose, or this is a code-only change
 
 ## Related issues
 
