@@ -40,10 +40,10 @@ difference from the shipped refund-cap example is `mode: shadow`.
 
 ## Completeness rule
 
-`TestConformanceCompleteness` (`cmd/tg/conformance_test.go`) fails when
-any `policies/*.yaml` has zero cases here, when two cases share a name,
-or when a case's `name` doesn't match its filename. A new shipped
-policy therefore cannot land without at least one pinned
-decision — the corpus can't silently drift from the policy set the way
-it did between 0.5.0 and 0.6.0. One case is the floor, not the goal:
-cover each outcome class the policy can actually produce.
+`TestConformanceCompleteness` (`cmd/tg/conformance_test.go`) fails if
+any `policies/*.yaml` has zero cases here, if two cases share a name,
+or if a case's `name` doesn't match its filename. A new shipped policy
+therefore cannot land without at least one pinned decision; the corpus
+can't silently drift from the policy set like it did between 0.5.0 and
+0.6.0. One case is the floor, not the goal: cover each outcome class
+the policy can actually produce.

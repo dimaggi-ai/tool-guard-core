@@ -45,8 +45,8 @@ anonymity.
 ## Threat model
 
 Tool Guard is a **policy decision point**, not a sandbox. It evaluates
-a tool call and returns a decision; enforcing that decision (and
-confining the tool itself) is the surrounding system's job. A host- or
+a tool call and returns a decision; enforcing that decision, and
+confining the tool itself, falls to the surrounding system. A host- or
 container-root attacker, or a tool that ignores a `denied` decision,
 is out of scope.
 
@@ -112,7 +112,7 @@ engine does not block on its own:
   pattern match, not understanding. Mitigation: keep values that matter
   in structured fields the policy reads.
 
-Both are documented limits of a deterministic engine, not
+These are documented limits of a deterministic engine, not
 vulnerabilities. A case where the engine misses a structured-field
 bypass that the README or docs claim it blocks is in scope (see "In
 scope" above).

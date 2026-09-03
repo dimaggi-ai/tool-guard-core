@@ -102,7 +102,6 @@ func (v *ChainVerifier) VerifySession(ctx context.Context, sessionID string) (*V
 			})
 		}
 
-		// Verify chain link
 		if trace.PreviousTraceHash != previousHash {
 			result.Valid = false
 			result.Errors = append(result.Errors, VerifyError{

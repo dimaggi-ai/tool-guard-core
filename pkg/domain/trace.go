@@ -54,7 +54,7 @@ type DecisionTrace struct {
 	// Evaluation result
 	Decision       Decision    `json:"decision"`
 	ActionTaken    ActionTaken `json:"action_taken"`
-	DecisionReason string      `json:"decision_reason,omitempty"` // Human-readable explanation
+	DecisionReason string      `json:"decision_reason,omitempty"`
 	Mode           PolicyMode  `json:"mode"`
 
 	// Rule evaluation details

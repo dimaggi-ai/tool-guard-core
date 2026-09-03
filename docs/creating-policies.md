@@ -1,9 +1,9 @@
 # Creating Policies
 
-A Tool Guard policy is a YAML file with three required sections:
-identity (`schema_version`, `policy_id`, `name`, `version`, `status`, `mode`), a
-**scope** that says which tool calls the policy applies to, and a
-list of **rules** that say what to do.
+A Tool Guard policy is a YAML file with three required sections: identity
+(`schema_version`, `policy_id`, `name`, `version`, `status`, `mode`), a
+**scope** that defines which tool calls the policy applies to, and a list of
+**rules** that specify what to do.
 
 ## Anatomy
 
@@ -48,7 +48,7 @@ unknown fields, so a pre-0.7.0 file carrying either needs the migration
 below — run `tg lint` over your whole policy directory before upgrading.
 An explicitly declared version other than 1 is rejected as unsupported.
 
-Because every top-level key must be a policy schema field, there is no
+Every top-level key must be a policy schema field, so there is no
 legal place to declare a standalone YAML anchor at the top level
 (`base: &common {...}` is an unknown-field error). Anchors and aliases
 on schema fields themselves work normally.
@@ -65,7 +65,7 @@ such as `scpoe` or `scope.tool_namse` from being discarded and accidentally
 turning a narrowly scoped policy into a global one.
 
 The former top-level `deep_evaluation` field was removed because no evaluator
-consumed it. Policies that need semantic classification should use an
+consumed it. Policies needing semantic classification should use an
 `llm_classify` condition.
 
 `tg lint -policy <file>` validates the shape and runs eight

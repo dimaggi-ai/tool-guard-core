@@ -13,14 +13,13 @@ tg benchmark -trials 10000
 # {"p50_us": 3, "p95_us": 8, "p99_us": 14, "max_us": 387, "trials": 10000}
 ```
 
-The p99 ≈ 14µs figure quoted in the README and
-[docs/integration.md](integration.md) was measured on an AMD Ryzen 7
-7700 (16 threads). It is a point measurement on one machine, not a
-floor: run `tg benchmark` on your own hardware and use that number.
-The proxy adds one HTTP hop plus JSON marshal/unmarshal on top —
-expect sub-millisecond round trips over loopback TCP on the same host
-(`tg-proxy` listens on a TCP `host:port`) and 1–3 ms across a
-Kubernetes pod.
+The p99 ≈ 14µs figure in the README and
+[docs/integration.md](integration.md) comes from an AMD Ryzen 7 7700
+(16 threads). It is a single point measurement, not a floor. Run
+`tg benchmark` on your hardware and use that result. The proxy adds
+one HTTP hop plus JSON marshal/unmarshal: expect sub-millisecond
+round trips over loopback TCP on the same host (`tg-proxy` listens on
+a TCP `host:port`) and 1–3 ms across a Kubernetes pod.
 
 ## 2. Published `tg-proxy` floor (asserted nightly)
 

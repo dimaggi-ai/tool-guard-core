@@ -131,9 +131,9 @@ independent chains.
 `/reload`, `/policies`, `/metrics`, and the read-only escalation
 listing are all unauthenticated; `/evaluate` and the audit log carry
 tool-call payloads (potentially sensitive). Bind to `127.0.0.1` or a
-private network and put authentication, TLS, and rate limiting at an
-API gateway or service mesh in front of it. The only built-in secret
-is the optional `-approver-token`, which gates the escalation
+private network, then place authentication, TLS, and rate limiting
+at an API gateway or service mesh in front of it. The only built-in
+secret is the optional `-approver-token`, which gates the escalation
 approve/deny endpoints.
 
 ## Flag reference
@@ -202,9 +202,9 @@ The full flag list, copied from `tg-proxy -help`:
 
 ### Self-protection (`-protect-paths` / `-protect-self`)
 
-Any deny rule written inside a policy can be edited away by an agent that
-has write access to the policy directory. `-protect-paths` and `-protect-self`
-close this gap at the operator-flag level, outside the policy:
+An agent with write access to the policy directory can edit away any deny rule
+written inside a policy. `-protect-paths` and `-protect-self` close this gap
+at the operator-flag level, outside the policy:
 
 ```
 tg-proxy \
@@ -379,15 +379,15 @@ are both bound by the canonical hash. Canonical v1 remains byte-identical;
 records written before the on-record `_canonical_v` marker are interpreted by
 the v1 encoder, and the 0.8 verifier accepts mixed v1/v2 chains.
 
-Canonical versions are monotonic within a chain: v1 to v2 is accepted, while
-v2 to v1 is rejected. A 0.7 verifier cannot read a v2 record, so a 0.7 proxy
-cannot resume a chain whose tail is v2. The 0.7 hook does not verify the tail
+Canonical versions are monotonic within a chain: v1 to v2 is accepted, but v2
+to v1 is rejected. A 0.7 verifier cannot read v2 records, so a 0.7 proxy
+cannot resume a chain ending in v2. The 0.7 hook does not verify the tail
 before writing and can physically append a markerless v1 record after v2; the
-0.8 verifier rejects that downgrade, so the append does not constitute valid
-resumption. This intentionally supersedes the 0.7 documentation that described
-a future v2 writer as opt-in. Defaulting to v1 would either omit the
-applied-action attribution or record it outside the integrity commitment,
-which is not a safe default.
+0.8 verifier rejects that downgrade, meaning the append is not valid
+resumption. This intentionally supersedes the 0.7 documentation describing a
+future v2 writer as opt-in. Defaulting to v1 would either omit applied-action
+attribution or record it outside the integrity commitment, which is not a safe
+default.
 
 The 0.8 verifier also requires the first record across the complete active
 file and rotation set to have an empty `previous_trace_hash`. This detects

@@ -6,8 +6,8 @@
 **Engine under test:** `pkg/engine/` (the same code path the proxy runs)
 **Trials:** 5 per scenario × 3 scenarios = 15
 
-Methodology: each trial is one Ollama `/api/generate` round-trip with
-`format: json`; the returned tool call goes through
+Methodology: each trial runs one Ollama `/api/generate` round-trip
+with `format: json`; the returned tool call goes through
 `engine.Evaluator.Evaluate()` against a `domain.Policy`. The model
 output is live Ollama inference.
 
@@ -65,8 +65,8 @@ in addition to / instead of tool names. The shipped
 inline policy intentionally does not, to surface the lesson.
 
 **Why this matters for the OSS demo:** A policy authored against one tool
-name is a foot-gun. This is exactly why `tg lint` ships with
-`scope-no-tool-group` - running it on the example policy here
+name is a foot-gun. That is why `tg lint` ships with
+`scope-no-tool-group`. Running it on the example policy here
 (`policies/refund_cap.yaml`) emits a warning that flags this risk before
 the policy ever reaches enforcement.
 

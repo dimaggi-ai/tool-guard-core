@@ -236,8 +236,8 @@ func collectFilePaths(params map[string]interface{}) []string {
 	return out
 }
 
-// parseParams unmarshals the envelope's Parameters into a string-keyed map.
-// A non-object / absent payload yields an empty map (nothing to protect).
+// parseParams unmarshals the envelope's Parameters into a string-keyed map. A
+// non-object or absent payload yields an empty map (nothing to protect).
 func parseParams(raw json.RawMessage) map[string]interface{} {
 	if len(raw) == 0 {
 		return map[string]interface{}{}
@@ -505,7 +505,6 @@ func commandWords(seg []shellToken) []shellToken {
 			if t.kind == tokWord {
 				continue // this word is the redirect operand, not a command arg
 			}
-			// otherwise fall through: t is another operator, handled below
 		}
 		switch t.kind {
 		case tokRedirWrite, tokRedirDup, tokRedirRead:

@@ -72,9 +72,9 @@ const (
 	// missing field). See engine.evalLeaf for the missing-field contract.
 	OpNotIn       Operator = "not_in"       // fieldVal not present in the list value
 	OpNotContains Operator = "not_contains" // string field does not contain the substring
-	OpStartsWith  Operator = "starts_with"  // string field has the given prefix
-	OpEndsWith    Operator = "ends_with"    // string field has the given suffix
-	OpExists      Operator = "exists"       // field presence; value true=must exist, false=must be absent
+	OpStartsWith  Operator = "starts_with"
+	OpEndsWith    Operator = "ends_with"
+	OpExists      Operator = "exists" // field presence; value true=must exist, false=must be absent
 )
 
 // Policy represents a versioned, citation-backed policy object.
@@ -224,16 +224,16 @@ type Condition struct {
 	HTTPClassify *HTTPClassify `json:"http_classify,omitempty"`
 }
 
-// SQLClassify is the per-rule config for a SQL-aware leaf condition.
-// All Require fields are inclusive — a SQL string must satisfy every
-// listed predicate to pass. Any violation makes the rule fire.
+// SQLClassify is the per-rule config for a SQL-aware leaf condition. All Require fields
+// are inclusive: a SQL string must satisfy every listed predicate to pass. Any
+// violation makes the rule fire.
 type SQLClassify struct {
 	// Field is the dotted envelope path that resolves to the SQL
 	// string. Typically "parameters.sql".
 	Field string `json:"field"`
 
-	// Dialect names which parser to dispatch to. Must match a dialect
-	// registered with the sqlguard package. Unknown dialect = deny.
+	// Dialect names which parser to dispatch to. Must match a dialect registered with the
+	// sqlguard package. Unknown dialect means deny.
 	Dialect string `json:"dialect"`
 
 	Require SQLRequire `json:"require"`
@@ -349,26 +349,23 @@ type PathRequire struct {
 	// "/home/*/.ssh"). No other glob features.
 	DeniedCanonicalPrefixes []string `json:"denied_canonical_prefixes,omitempty"`
 
-	// AllowedCanonicalPrefixes, when non-empty, requires the
-	// canonical path to start with one of these prefixes. Use either
-	// the deny-list OR the allow-list pattern — for high-trust
-	// environments the allow-list is the safer pattern.
+	// AllowedCanonicalPrefixes, when non-empty, requires the canonical path to start with
+	// one of these prefixes. Use either the deny-list OR the allow-list pattern; for
+	// high-trust environments the allow-list is the safer pattern.
 	AllowedCanonicalPrefixes []string `json:"allowed_canonical_prefixes,omitempty"`
 
-	// DenyShellMetas, when true, denies any path containing shell
-	// metacharacters or control bytes:
+	// DenyShellMetas, when true, denies any path containing shell metacharacters or
+	// control bytes:
 	//
 	//   ; & | $ ` newline tab carriage-return NUL redirects
 	//
-	// Filesystem syscalls treat these as literal bytes in filenames,
-	// so a legitimate agent has no reason to ask for a path like
-	// /etc/shadow;cat /tmp/x. The presence of such characters is a
-	// strong attack signal — deny on suspicion, log the attempt.
+	// Filesystem syscalls treat these as literal bytes in filenames, so a legitimate agent
+	// has no reason to ask for a path like /etc/shadow;cat /tmp/x. The presence of such
+	// characters is a strong attack signal; deny on suspicion and log the attempt.
 	//
-	// Backslash ('\') is NOT flagged by default because it's a
-	// legitimate path separator on Windows. Set IncludeBackslash to
-	// add it to the denied-meta set when deploying on Linux-only
-	// installations.
+	// Backslash ('\') is NOT flagged by default because it's a legitimate path separator
+	// on Windows. Set IncludeBackslash to add it to the denied-meta set when deploying on
+	// Linux-only installations.
 	DenyShellMetas bool `json:"deny_shell_metas,omitempty"`
 
 	// IncludeBackslash augments DenyShellMetas to flag '\' as well.
@@ -405,7 +402,7 @@ type ShellRequire struct {
 	// might re-introduce, or sensitive flag values.
 	ArgvDenyPatterns []string `json:"argv_deny_patterns,omitempty"`
 
-	// MaxArgc caps the total number of argv elements. Zero = no cap.
+	// MaxArgc caps the total number of argv elements. Zero means no cap.
 	// Defends against pathologically long arg lists.
 	MaxArgc int `json:"max_argc,omitempty"`
 
@@ -438,10 +435,10 @@ func (c *Condition) IsLeaf() bool {
 		(c.Field != "" && c.Operator != "")
 }
 
-// WriteClassify is the per-rule config for a file-write leaf. All
-// populated Require predicates compose with AND: a write must satisfy
-// every one to PASS; any violation makes the rule fire (deny). Deny-only
-// — it never rewrites or redacts the content (that is Enterprise).
+// WriteClassify is the per-rule config for a file-write leaf. All populated Require
+// predicates compose with AND: a write must satisfy every one to PASS; any violation
+// makes the rule fire (deny). Deny-only, it never rewrites or redacts the content (that
+// is Enterprise).
 type WriteClassify struct {
 	// PathField is the dotted envelope path to the write target. Defaults
 	// to parameters.file_path; parameters.path and array/nested edit
@@ -478,13 +475,13 @@ type WriteRequire struct {
 	// form, never fails open. Setting this flag has no additional effect.
 	ResolveSymlinks bool `json:"resolve_symlinks,omitempty"`
 
-	// MaxBytes, when > 0, fires the rule when the content is larger than
-	// this many bytes — a runaway-write / accidental-dump ceiling.
+	// MaxBytes, when > 0, fires the rule when the content is larger than this many bytes;
+	// a runaway-write / accidental-dump ceiling.
 	MaxBytes int `json:"max_bytes,omitempty"`
 
-	// DeniedContentRegex fires the rule when the content matches any of
-	// these Go RE2 patterns. Deny-only (literal detection, never
-	// redaction). Use for "don't let the agent write a known-bad marker."
+	// DeniedContentRegex fires the rule when content matches any of these Go RE2 patterns.
+	// Deny-only (literal detection, never redaction). Use for "don't let the agent write a
+	// known-bad marker."
 	DeniedContentRegex []string `json:"denied_content_regex,omitempty"`
 }
 
@@ -509,8 +506,8 @@ type HTTPClassify struct {
 type HTTPRequire struct {
 	AllowedHosts   []string `json:"allowed_hosts,omitempty"`
 	DeniedHosts    []string `json:"denied_hosts,omitempty"`
-	AllowedSchemes []string `json:"allowed_schemes,omitempty"` // e.g. [https]
-	AllowedMethods []string `json:"allowed_methods,omitempty"` // e.g. [GET, POST]
+	AllowedSchemes []string `json:"allowed_schemes,omitempty"`
+	AllowedMethods []string `json:"allowed_methods,omitempty"`
 	DeniedMethods  []string `json:"denied_methods,omitempty"`
 	AllowedPorts   []int    `json:"allowed_ports,omitempty"`
 	DeniedPorts    []int    `json:"denied_ports,omitempty"`
@@ -527,10 +524,9 @@ type LLMClassify struct {
 	// generative prompt text. Typically parameters.prompt.
 	PromptField string `json:"prompt_field"`
 
-	// ImageURLField is optional — if set, the engine fetches the
-	// image and includes it in the classification call (Gemma 4
-	// multimodal). Useful for image-to-image / image-edit tools
-	// where the SOURCE image is part of the policy decision.
+	// ImageURLField is optional; if set, the engine fetches the image and includes it in
+	// the classification call (Gemma 4 multimodal). Useful for image-to-image / image-edit
+	// tools where the SOURCE image is part of the policy decision.
 	ImageURLField string `json:"image_url_field,omitempty"`
 
 	// Forbidden is the closed-set of category labels the model may
@@ -540,9 +536,8 @@ type LLMClassify struct {
 	// or "safe"; any non-"safe" label fires the rule.
 	Forbidden []string `json:"forbidden"`
 
-	// Model names the Ollama model tag to use. Defaults to
-	// "gemma4:e4b". Operators can swap to any multimodal Ollama
-	// model — qwen2-vl, llava, etc.
+	// Model names the Ollama model tag to use. Defaults to "gemma4:e4b". Operators can
+	// swap to any multimodal Ollama model (qwen2-vl, llava, etc.).
 	Model string `json:"model,omitempty"`
 
 	// OllamaURL overrides the default http://localhost:11434
@@ -550,8 +545,8 @@ type LLMClassify struct {
 	// runs on a sibling host.
 	OllamaURL string `json:"ollama_url,omitempty"`
 
-	// TimeoutSeconds bounds the classifier call. Default 30s — a
-	// Gemma 4 e4b prompt classification typically lands inside 5s.
+	// TimeoutSeconds bounds the classifier call. Default 30s; a Gemma 4 e4b prompt
+	// classification typically lands inside 5s.
 	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
 }
 

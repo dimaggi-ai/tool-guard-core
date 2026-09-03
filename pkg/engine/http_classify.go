@@ -54,7 +54,7 @@ func evalHTTPClassifyWithDetail(h *domain.HTTPClassify, fields map[string]interf
 	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
 	port := explicitPort(u)
 
-	// Method (optional field).
+	// Method (optional).
 	method := ""
 	mf := h.MethodField
 	if mf == "" {

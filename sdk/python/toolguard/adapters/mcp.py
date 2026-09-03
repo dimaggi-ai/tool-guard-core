@@ -51,7 +51,6 @@ def guard_mcp_tool(
     tool_group : str
         Tool group to stamp on every envelope.  Defaults to ``"mcp"``.
     """
-    # Override framework stamps for MCP
     client.framework = Framework.MCP
     client.integration_type = IntegrationType.MCP_PROXY
 

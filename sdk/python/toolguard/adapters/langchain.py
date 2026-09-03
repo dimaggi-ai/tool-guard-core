@@ -85,7 +85,6 @@ class ToolGuardCallbackHandler(_Base):  # type: ignore[misc]
         # silently doesn't happen. Verified against the installed
         # langchain-core wheel, not assumed from the docs.
         self.raise_error = True
-        # Override framework stamps
         client.framework = Framework.LANGGRAPH
         client.integration_type = IntegrationType.LANGGRAPH_MIDDLEWARE
         self._client = client

@@ -31,7 +31,7 @@ type Escalation struct {
 	CreatedAt      time.Time               `json:"created_at"`
 	ExpiresAt      time.Time               `json:"expires_at"`
 	ResolvedAt     *time.Time              `json:"resolved_at,omitempty"`
-	Approver       string                  `json:"approver,omitempty"` // identity of who approved/denied
+	Approver       string                  `json:"approver,omitempty"`
 	ApproverReason string                  `json:"approver_reason,omitempty"`
 	Envelope       domain.ActionEnvelope   `json:"envelope"`
 	Decision       domain.EvaluationResult `json:"decision"`
@@ -181,7 +181,7 @@ func (s *escalationStore) resolveAudited(
 	}
 	if e.State != EscPending {
 		ec := *e
-		return &ec, false, nil // already resolved
+		return &ec, false, nil
 	}
 	now := s.currentTime()
 	// The reaper may leave a due entry pending when it can prove that the

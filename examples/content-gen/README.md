@@ -1,9 +1,9 @@
 # content-gen — multimodal content-safety bundle
 
-Three policies that close the **generative-AI tool surface**: image,
-audio, and text generators. Each uses a hybrid approach — a fast
-deterministic regex prefilter, then a Gemma 4 classifier (via local
-Ollama) for the semantic gate.
+Three policies close the **generative-AI tool surface** for image,
+audio, and text generators. Each uses a hybrid approach: a fast
+deterministic regex prefilter followed by a Gemma 4 classifier (via
+local Ollama) as the semantic gate.
 
 | Policy | Tools gated | What it catches |
 |---|---|---|
@@ -47,10 +47,10 @@ tools are different:
                         └──────────────────────────────────────
 ```
 
-The classifier framing is deliberately a "routing" task, not "safety"
-— this avoids Gemma's own safety filter refusing to engage. Empty
-responses (Gemma's built-in refusal signal) are interpreted as
-`model_refused` which fires deny (consistent with fail-closed).
+The classifier framing is deliberately a "routing" task, not
+"safety", to avoid Gemma's own safety filter refusing to engage.
+Empty responses (Gemma's built-in refusal signal) are interpreted as
+`model_refused`, which fires deny (consistent with fail-closed).
 
 ## Run locally — two options
 
@@ -123,9 +123,9 @@ accuracy `gemma4:12b` (~2-3 s).
 ## Customising the forbidden taxonomy
 
 Each `llm_classify` rule lists its forbidden categories under
-`forbidden:`. The classifier is told these are the ONLY allowed
-non-"safe" labels — anything else the model returns is treated as
-`unknown_label` and fires deny (label-injection defence).
+`forbidden:`. The classifier treats these as the ONLY allowed
+non-"safe" labels; anything else the model returns becomes
+`unknown_label` and triggers deny (label-injection defence).
 
 ```yaml
 - rule_id: rule-image-llm-classify

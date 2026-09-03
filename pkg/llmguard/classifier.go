@@ -10,8 +10,8 @@ import (
 	"strings"
 )
 
-// ClassifyResult is the model's structured verdict on a prompt /
-// image. The classifier prompt forces JSON output of this shape.
+// ClassifyResult is the model's structured verdict on a prompt or image. The classifier
+// prompt forces JSON output of this shape.
 type ClassifyResult struct {
 	// Category is one of the forbidden labels listed in the policy
 	// (e.g. "csam", "real_person", "weapons", "self_harm") or the

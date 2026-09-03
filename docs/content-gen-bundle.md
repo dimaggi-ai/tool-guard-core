@@ -4,9 +4,9 @@ The `examples/content-gen/` bundle protects the **generative AI tool
 surface** - image, audio, and text generators. It is the only
 shipped bundle that uses an LLM in the evaluation path.
 
-This document walks through what the bundle catches, how the
-`llm_classify` condition works under the hood, and how to adapt it
-to a different forbidden taxonomy.
+This document covers what the bundle catches, how the
+`llm_classify` condition works internally, and how to adapt it for
+a different forbidden taxonomy.
 
 ## What the bundle protects
 
@@ -89,10 +89,10 @@ the proxy / Ollama starts.
 
 ## Customising the forbidden taxonomy
 
-The `forbidden` list is the closed set of labels the model is told
-it may return alongside `safe`. The classifier validates that any
-returned non-`safe` label is in this list (anything else is
-treated as `unknown_label` → deny).
+The `forbidden` list defines the closed set of labels the model
+may return alongside `safe`. The classifier validates that any
+returned non-`safe` label appears in this list; otherwise, it is
+treated as `unknown_label` → deny.
 
 Validation refuses these label shapes at load time:
 
@@ -106,7 +106,7 @@ Validation refuses these label shapes at load time:
 - duplicate labels (case-fold equal)
 - more than 64 labels (prompt size cap)
 
-Good label names: short, lowercase, snake_case, descriptive
+Good label names are short, lowercase, snake_case, and descriptive
 (e.g. `csam`, `weapons`, `self_harm`, `voice_clone_public_figure`).
 Bad: `unsafe` (too broad), `cat1` (opaque), `harm,abuse` (comma).
 
@@ -191,7 +191,7 @@ Expected: `── RESULT: 16 passed, 0 failed ──`.
 
 ## Limitations
 
-The classifier is a single local Gemma model:
+The classifier runs on a single local Gemma model.
 
 - **Single model = single bypass surface.** Adversarial paraphrases
   that slip past Gemma 4 e4b slip past the whole classifier - there

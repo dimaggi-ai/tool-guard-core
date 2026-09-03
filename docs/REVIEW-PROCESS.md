@@ -131,9 +131,9 @@ catches are logged below.
 
 ## Findings log
 
-Entries here are load-bearing history, not a changelog duplicate — they
-record what the checklist above was built to catch, so future review
-passes have real precedent instead of a starting from scratch.
+These entries are load-bearing history, not a changelog duplicate; they
+record what the checklist above was built to catch so future review
+passes have real precedent instead of starting from scratch.
 
 - **2026-07 · SDK, pre-0.5.0.** LangChain adapter never set
   `raise_error = True`; LangChain's real dispatcher catches every

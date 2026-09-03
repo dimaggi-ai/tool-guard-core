@@ -360,11 +360,10 @@ func (p *proxy) evaluate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Tool-name spoof guard. When -unknown-tools-deny is set, any
-	// envelope whose tool_name is not declared in scope.tool_names of
-	// some loaded ENFORCEMENT policy is denied — even if a policy
-	// happened to match via tool_groups. This closes the family of
-	// variant names (DROP_TABLE, drop_tables, drop_table_v2).
+	// Tool-name spoof guard. When -unknown-tools-deny is set, any envelope whose tool_name
+	// is not declared in scope.tool_names of some loaded ENFORCEMENT policy is denied,
+	// even if a policy matched via tool_groups. This closes the family of variant names
+	// (DROP_TABLE, drop_tables, drop_table_v2).
 	if p.unknownToolsDeny && !engine.ToolNameKnown(env.ToolName, policies) {
 		// Counter increment happens once in the final switch, not
 		// here — earlier code double-counted unknown-tool denies.

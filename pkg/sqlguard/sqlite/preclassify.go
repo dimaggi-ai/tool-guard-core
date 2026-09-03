@@ -79,7 +79,6 @@ func firstWordUpper(s string) string {
 		}
 		break
 	}
-	// Take chars until whitespace.
 	end := 0
 	for end < len(s) && !isSpace(s[end]) {
 		end++

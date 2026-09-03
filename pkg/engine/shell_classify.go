@@ -50,11 +50,9 @@ func evalShellClassify(s *domain.ShellClassify, fields map[string]interface{}) b
 		for _, pat := range s.Require.ArgvDenyPatterns {
 			re, err := compiledRegex(pat)
 			if err != nil {
-				// Bad pattern → fail closed for this rule.
-				// ValidatePolicy + PrewarmRegexCache populate the
-				// cache at load so this branch is now reachable
-				// only when a hot reload swapped in a bad pattern
-				// past validation (shouldn't happen).
+				// Bad pattern: fail closed for this rule. ValidatePolicy + PrewarmRegexCache
+				// populate the cache at load so this branch is now reachable only when a hot reload
+				// swapped in a bad pattern past validation (shouldn't happen).
 				return true
 			}
 			for _, arg := range argv {

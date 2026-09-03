@@ -1,6 +1,6 @@
 # business-ops — policy bundle for the non-engineering AI agent surface
 
-Three policies covering the parts of a business an AI agent touches
+Three policies cover the parts of a business an AI agent touches
 that aren't database, shell, or money: **customer data**,
 **outbound mass communication**, and **support-comp issuance**.
 
@@ -10,11 +10,11 @@ that aren't database, shell, or money: **customer data**,
 | `policies/mass_communication_guard.yaml` | Email / SMS / push blast — recipient cap, hard ceiling, banned-content tripwires (guaranteed-returns / medical claims / lifetime warranty), sender-domain allowlist, untargeted-segment flag. |
 | `policies/support_credit_guard.yaml` | Support comp / account credit / gift cards — per-credit cap, per-credit hard ceiling, per-ticket cumulative cap, executive-authority-claim escalation, trial-customer flag. |
 
-All three lint clean (`tg lint`). 26 deterministic assertions in
-`test-policies.sh` exercise every rule, including the bypass
-patterns surfaced during pre-release adversarial review
-(missing-key fail-open on PII gate, suffix-named PII columns,
-obfuscated banned-content claims).
+All three lint clean (`tg lint`). `test-policies.sh` runs 26
+deterministic assertions that exercise every rule, including
+bypass patterns found during pre-release adversarial review
+(missing-key fail-open on the PII gate, suffix-named PII
+columns, obfuscated banned-content claims).
 
 ## What each gate defends against
 

@@ -18,12 +18,13 @@ The modules linked into a binary depend on its build tags:
 | `github.com/rqlite/sql` | v0.0.0-20260224021119-1b2524a41372 | MIT (only linked with `-tags=sqlite_strict`) |
 | `golang.org/x/sys` | v0.47.0 | BSD-3-Clause |
 
-The default-build `tg` binary links `gopkg.in/yaml.v3` plus
-`golang.org/x/sys` for OS advisory file locking. The default-build
-`tg-proxy` binary links `gopkg.in/yaml.v3` only. `pg_query_go` is opt-in
-via `-tags=pg_strict` and links its C library (also Apache-2.0); strict
-variants for MySQL (`-tags=mysql_strict`) and SQLite
-(`-tags=sqlite_strict`) link the additional modules listed below.
+The default-build `tg` binary links `gopkg.in/yaml.v3` and
+`golang.org/x/sys` for OS advisory file locking, while the default-build
+`tg-proxy` binary links only `gopkg.in/yaml.v3`. The opt-in
+`pg_query_go` module (enabled with `-tags=pg_strict`) links its C
+library (also Apache-2.0), and strict variants for MySQL
+(`-tags=mysql_strict`) and SQLite (`-tags=sqlite_strict`) link the
+additional modules listed below.
 
 ## Full module list (47 modules: 6 direct + 41 indirect)
 

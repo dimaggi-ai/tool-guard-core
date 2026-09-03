@@ -39,21 +39,19 @@ func VerifyTraceHash(traceID, envelopeID, decision, actionTaken string, timestam
 	return computed == expectedHash
 }
 
-// ComputeCanonicalTraceHash returns sha256(CanonicalTraceBytes(t)).
-// The hash covers the decision-determining fields: agent identity, tool
-// name and group, amount, decision, action, decision_reason, every
-// rule result, the chain link, and the deep-eval result if any. This
-// is the integrity commitment the README and CHANGELOG promise.
+// ComputeCanonicalTraceHash returns sha256(CanonicalTraceBytes(t)). The hash covers
+// decision-determining fields: agent identity, tool name and group, amount, decision,
+// action, decision_reason, every rule result, the chain link, and the deep-eval result
+// if any. This is the integrity commitment promised in the README and CHANGELOG.
 //
-// The canonical encoder includes the schema version (_canonical_v)
-// as the first hashed byte string. New records also persist that marker;
-// records without it are interpreted as historical v1. Unknown versions
-// fail explicitly instead of silently falling back to another hash shape.
+// The canonical encoder includes the schema version (_canonical_v) as the first hashed
+// byte string. New records persist that marker; records without it are interpreted as
+// historical v1. Unknown versions fail explicitly instead of silently falling back to
+// another hash shape.
 //
-// To compute the trace's own hash, set t.TraceHash to "" before
-// calling — the canonical encoder will then emit "" for that field,
-// matching what the verifier feeds when re-deriving the hash from a
-// stored line.
+// To compute the trace's own hash, set t.TraceHash to "" before calling. The canonical
+// encoder will then emit "" for that field, matching what the verifier feeds when
+// re-deriving the hash from a stored line.
 func ComputeCanonicalTraceHash(t *domain.DecisionTrace) (string, error) {
 	if t == nil {
 		return "", fmt.Errorf("ComputeCanonicalTraceHash: nil trace")

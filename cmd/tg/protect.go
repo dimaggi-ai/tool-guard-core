@@ -502,10 +502,10 @@ func legacyManagedRoot() (string, bool) {
 		return "", false
 	}
 	root := filepath.Join(home, ".config", "tool-guard")
-	// The root itself must also be a real directory: a symlinked
-	// ~/.config/tool-guard would divert every managed write through the link
-	// target. Ancestors above the root (~/.config, $HOME) are the platform's
-	// layout and are deliberately not policed here.
+	// The root itself must be a real directory: a symlinked ~/.config/tool-guard would
+	// divert every managed write through the link target. Ancestors above the root
+	// (~/.config, $HOME) are part of the platform layout and are deliberately not policed
+	// here.
 	evidence := realDirExists(root) &&
 		(realDirExists(filepath.Join(root, "policies")) || realDirExists(filepath.Join(root, "audit")))
 	return root, evidence

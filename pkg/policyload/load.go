@@ -41,10 +41,10 @@ func Load(path string) (domain.Policy, error) {
 		return domain.Policy{}, fmt.Errorf("read policy: %w", err)
 	}
 
-	// Exactly one YAML document: yaml.Unmarshal would silently take the
-	// first document and drop everything after a `---` separator — a
-	// policy whose scope and rules live in a second document would load
-	// as an empty (and therefore permissive) shell.
+	// Exactly one YAML document: yaml.Unmarshal would silently take the first
+	// document and drop everything after a `---` separator. A policy whose scope
+	// and rules live in a second document would load as an empty (and therefore
+	// permissive) shell.
 	dec := yaml.NewDecoder(bytes.NewReader(b))
 	var raw any
 	if err := dec.Decode(&raw); err != nil && err != io.EOF {
@@ -125,13 +125,12 @@ func Load(path string) (domain.Policy, error) {
 	return policy, nil
 }
 
-// rejectUnknownFields walks the decoded document against the target
-// struct's json tags. Known limitations, deliberate for now: a type
-// implementing json.Unmarshaler is not descended into (its unmarshaler
-// owns its shape — adding one to a policy type re-opens unknown-field
-// bypass at that boundary), and embedded/`json:",inline"` fields are
-// not resolved. domain.Policy currently has neither; keep it that way
-// or extend this walker first.
+// rejectUnknownFields walks the decoded document against the target struct's
+// json tags. Known limitations, deliberate for now: a type implementing
+// json.Unmarshaler is not descended into (its unmarshaler owns its shape; adding
+// one to a policy type re-opens unknown-field bypass at that boundary), and
+// embedded/`json:",inline"` fields are not resolved. domain.Policy currently has
+// neither; keep it that way or extend this walker first.
 func rejectUnknownFields(value any, typ reflect.Type, path string) error {
 	for typ.Kind() == reflect.Pointer {
 		typ = typ.Elem()

@@ -55,12 +55,12 @@ or trace-format changes.**
 ### Upgrading
 
 Add `schema_version: 1` to your policies and run `tg lint` on **every**
-file in your policy directory **before** upgrading. Under the strict
-loader a single unknown field fails the whole set: `tg-proxy` refuses to
-start (a failed reload keeps the previous set), but `tg hook` in its
-default fail-open configuration then enforces no policy at all — a deny
-that worked under 0.6.0 would become an allow. The load error is now
-printed on stderr instead of being swallowed. Everything else is
+file in your policy directory **before** upgrading. The strict loader
+fails the whole set if it finds a single unknown field: `tg-proxy`
+refuses to start (a failed reload keeps the previous set), but `tg hook`
+in its default fail-open configuration then enforces no policy at all,
+turning a deny that worked under 0.6.0 into an allow. The load error now
+prints on stderr instead of being swallowed. Everything else is
 additive.
 
 ---
@@ -246,32 +246,30 @@ Bug-fix release. **No breaking changes; no new required config.**
   policies actually matched, silently defeating the fail-closed default
   for any tool name appearing in any non-approved policy.
 
-Both of the last two fixes were found by a blind, parallel cross-review
-(Opus and Codex, neither aware of the other's findings) specifically
-requested before this release shipped, each with its own reproduction
-test now checked in as a permanent regression guard. See
-[CHANGELOG.md](CHANGELOG.md) for full technical detail on every fix in
-this release.
+A blind, parallel cross-review between Opus and Codex found both of
+these fixes before this release shipped; neither reviewer saw the
+other's findings. Each fix now has its own reproduction test checked in
+as a permanent regression guard. See [CHANGELOG.md](CHANGELOG.md) for
+full technical detail on every fix in this release.
 
 ### Upgrade notes
 
-If you're relying on the previous exact-match behavior to deliberately
-exclude a differently-cased tool name from a `matchesScope`-governed
-policy, this release changes that — the fix makes that specific check
-**strictly more permissive** (more calls now match an existing policy than
-before), never less, so it cannot newly deny anything that was previously
-allowed. Reconcile duplicate same-tool entries differing only by case in
-your own `tool_names` lists; they're now redundant. `-unknown-tools-deny`
-stays exact-match (unchanged from before this release), but now also
-requires the declaring policy to be **approved**: if you have a tool
-name that appears ONLY in a draft/review/archived policy's
-`tool_names` — nowhere in an approved one — a call using that name
-previously passed `-unknown-tools-deny` (because the draft made it
-"known") and will now be **denied** as unrecognized. This is the
-correct, intended behavior (that tool was never actually governed by
-anything), but approve the relevant policy, or add the tool name to an
-already-approved policy's scope, if you see a new denial after
-upgrading.
+If you rely on previous exact-match behavior to deliberately exclude
+differently-cased tool names from `matchesScope`-governed policies, this
+release changes that. The fix makes that specific check **strictly more
+permissive** (more calls now match an existing policy than before), never
+less, so it cannot newly deny anything previously allowed. Reconcile
+duplicate same-tool entries in your own `tool_names` lists that differ
+only by case; they are now redundant. `-unknown-tools-deny` stays
+exact-match (unchanged from before this release) but now also requires the
+declaring policy to be **approved**: if a tool name appears ONLY in a
+draft/review/archived policy's `tool_names` and nowhere in an approved
+one, calls using that name previously passed `-unknown-tools-deny`
+(because the draft made it "known") and will now be **denied** as
+unrecognized. This is the correct, intended behavior (that tool was never
+actually governed by anything), but approve the relevant policy or add the
+tool name to an already-approved policy's scope if you see a new denial
+after upgrading.
 
 ---
 
@@ -376,11 +374,11 @@ A correctness fix and a release-process fix — no new policy surface.
 
 ## 0.3.0 — 2026-07-12
 
-Extends the deterministic engine to the two surfaces our own machine-guard
-audit log showed passing ungoverned — file writes and outbound HTTP — plus a
-tamper-evident audit log for the coding-agent hook path and a coverage metric
-to measure the gap this closes. **No breaking changes**; the Enterprise
-boundary is unchanged (deny-only, no redaction/inference/signing).
+Extends the deterministic engine to file writes and outbound HTTP, the two
+surfaces our machine-guard audit log showed passing ungoverned. It also adds
+a tamper-evident audit log for the coding-agent hook path and a coverage
+metric to measure the gap this closes. **No breaking changes**; the
+Enterprise boundary is unchanged (deny-only, no redaction/inference/signing).
 
 ### Highlights
 
@@ -471,9 +469,9 @@ both are governed now.
 
 ### 5. `not:` refusal extended to both new leaves
 
-Both `write_classify` and `http_classify` are fail-closed classifiers and,
-consistent with the four existing ones, are refused under a `not:` node —
-negating a fail-closed check would flip it fail-open.
+Both `write_classify` and `http_classify` are fail-closed classifiers.
+Like the four existing ones, they refuse under a `not:` node because
+negating a fail-closed check would flip it to fail-open.
 
 ### Deferred
 
@@ -498,9 +496,10 @@ first-class way to guard coding agents, and makes the guard able to protect
 itself. **No breaking changes** — every 0.1.0 policy and audit chain evaluates
 and verifies identically, and every new behavior is opt-in.
 
-The Enterprise boundary is unchanged: no cryptographic signing, no PII
-redaction, no semantic classification beyond the existing opt-in
-`llm_classify`. Everything below is deterministic and dependency-free.
+The Enterprise boundary stays the same: no cryptographic signing, no
+PII redaction, and no semantic classification beyond the existing
+opt-in `llm_classify`. Everything below is deterministic and
+dependency-free.
 
 ### Highlights
 

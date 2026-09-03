@@ -196,9 +196,9 @@ type server struct {
 }
 
 func (s *server) handle(req *jsonRPCRequest) {
-	// JSON-RPC 2.0 notifications have no `id` field — the server
-	// MUST NOT respond. MCP `notifications/initialized`, `notifications/cancelled`,
-	// and `notifications/progress` arrive here and silently no-op.
+	// JSON-RPC 2.0 notifications have no `id` field; the server MUST NOT respond. MCP
+	// `notifications/initialized`, `notifications/cancelled`, and `notifications/progress`
+	// arrive here and silently no-op.
 	if len(req.ID) == 0 {
 		log.Printf("notification: %s", req.Method)
 		return

@@ -36,8 +36,8 @@ var (
 
 const llmClientCacheMaxEntries = 64
 
-// llmHookMu protects LLMClassifyHook against concurrent set/read from
-// test goroutines and (eventually) operator reload paths.
+// llmHookMu protects LLMClassifyHook against concurrent set/read operations from test
+// goroutines and eventual operator reload paths.
 var llmHookMu sync.RWMutex
 
 // LLMClassifyHook lets operators short-circuit the Ollama call —
@@ -73,7 +73,6 @@ func evalLLMClassifyWithDetail(s *domain.LLMClassify, fields map[string]interfac
 	if s == nil {
 		return false, ""
 	}
-	// Resolve the prompt text from the envelope.
 	rawPrompt, ok := resolveField(s.PromptField, fields)
 	if !ok {
 		return true, fmt.Sprintf("llm_classify: prompt field %q missing — fail closed", s.PromptField)
@@ -104,7 +103,7 @@ func evalLLMClassifyWithDetail(s *domain.LLMClassify, fields map[string]interfac
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	// Test / dry-run hook path: skip the network call entirely.
+	// Test / dry-run hook: skip the network call.
 	if h := GetLLMClassifyHook(); h != nil {
 		res, err := h(ctx, prompt, imageURL, s.Forbidden, model)
 		return interpretClassifyResult(res, err)

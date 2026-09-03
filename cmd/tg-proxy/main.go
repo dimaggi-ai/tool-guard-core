@@ -43,14 +43,13 @@ import (
 	"github.com/dimaggi-ai/tool-guard-core/pkg/engine"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/sqlguard"
 
-	// Default SQL dialect classifiers: tokenizer-based lite package
-	// covers postgres/mysql/sqlite; mssql lives in its own package
-	// (already tokenizer-based). All pure Go, no cgo.
+	// Default SQL dialect classifiers: the tokenizer-based lite package covers
+	// postgres/mysql/sqlite; mssql lives in its own package (already tokenizer-based). All
+	// pure Go, no cgo.
 	//
-	// Strict variants (pg_query_go via cgo, tidb/parser, rqlite/sql)
-	// are opt-in via build tags pg_strict / mysql_strict / sqlite_strict.
-	// Their init() runs after lite's and overrides the same dialect
-	// name via sqlguard.Register's last-write-wins semantic.
+	// Strict variants (pg_query_go via cgo, tidb/parser, rqlite/sql) are opt-in via build
+	// tags pg_strict / mysql_strict / sqlite_strict. Their init() runs after lite's and
+	// overrides the same dialect name via sqlguard.Register's last-write-wins semantic.
 	_ "github.com/dimaggi-ai/tool-guard-core/pkg/sqlguard/lite"
 	_ "github.com/dimaggi-ai/tool-guard-core/pkg/sqlguard/mssql"
 )
@@ -131,7 +130,7 @@ type proxy struct {
 
 	startedAt time.Time
 
-	// counters — observed via /metrics
+	// counters observed via /metrics
 	evalCount         atomic.Int64
 	allowCount        atomic.Int64
 	denyCount         atomic.Int64

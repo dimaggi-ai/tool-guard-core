@@ -251,7 +251,6 @@ func validateCondition(c *domain.Condition, ctx string, depth int, underNot bool
 		}
 	}
 
-	// Recurse into branches.
 	for i := range c.And {
 		if err := validateCondition(&c.And[i], fmt.Sprintf("%s/and[%d]", ctx, i), depth+1, underNot); err != nil {
 			return err

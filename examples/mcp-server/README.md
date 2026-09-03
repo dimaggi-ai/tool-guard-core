@@ -5,17 +5,17 @@ call through Tool Guard before invoking the upstream tool.
 
 The server speaks JSON-RPC 2.0 over stdio (the standard MCP
 transport) and implements three methods: `initialize`,
-`tools/list`, and `tools/call`. It exposes two example tools —
-`issue_refund` and `export_customer_data` — and every `tools/call`
+`tools/list`, and `tools/call`. It exposes two example tools,
+`issue_refund` and `export_customer_data`, and every `tools/call`
 goes to `tg-proxy /evaluate` first.
 
 If Tool Guard says `allowed`, the (mocked) tool runs. If it says
 `denied`, the MCP response is an error with the policy's reason. If
 it says `escalated`, the client is told a human needs to approve.
 
-This is the integration pattern any MCP-capable agent (Claude
-Desktop, Continue.dev, the MCP-rs reference client, or your own
-agent runtime) can use.
+Any MCP-capable agent (Claude Desktop, Continue.dev, the MCP-rs
+reference client, or your own agent runtime) can use this
+integration pattern.
 
 ## Run it
 

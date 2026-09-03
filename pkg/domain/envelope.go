@@ -79,7 +79,7 @@ type VerifiedContext struct {
 	CustomerID             string  `json:"customer_id,omitempty"`
 	OrderID                string  `json:"order_id,omitempty"`
 
-	// Order details (semantic fraud detection)
+	// Order details used for semantic fraud detection
 	OrderItemCount          int     `json:"order_item_count,omitempty"`
 	ProductCategory         string  `json:"product_category,omitempty"`
 	ProductCategoryAvgPrice float64 `json:"product_category_avg_price,omitempty"`

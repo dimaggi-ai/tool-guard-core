@@ -49,8 +49,8 @@ func appendHookAudit(path string, env *domain.ActionEnvelope, result *domain.Eva
 		trace.Decision, trace.ActionTaken = hookDecisionToDomain(decision)
 		trace.DecisionReason = reason
 	} else {
-		// Preserve the engine's complete result. Reducing this to the hook's
-		// allow|ask|deny response discards shadow-mode telemetry: a raw deny with
+		// Preserve the complete engine result. Reducing it to the hook's allow|ask|deny
+		// response discards shadow-mode telemetry: a raw deny with
 		// action_taken=allowed_shadow must remain visible in the audit record.
 		trace.Decision = result.Decision
 		trace.ActionTaken = result.ActionTaken
@@ -112,9 +112,9 @@ func appendHookAudit(path string, env *domain.ActionEnvelope, result *domain.Eva
 	return f.Sync()
 }
 
-// appendHookAuditBestEffort preserves the hook decision when audit persistence
-// fails, but reports the lost record so operators do not mistake a silent gap
-// for a complete audit trail.
+// appendHookAuditBestEffort preserves the hook decision when audit persistence fails
+// but reports the lost record so operators do not mistake a silent gap for a complete
+// audit trail.
 func appendHookAuditBestEffort(stderr io.Writer, path string, env *domain.ActionEnvelope, result *domain.EvaluationResult, decision, reason string) {
 	if err := appendHookAudit(path, env, result, decision, reason); err != nil {
 		fmt.Fprintf(stderr, "tg hook: audit append failed — decision unchanged, record not written: %v\n", err)

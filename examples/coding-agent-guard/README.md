@@ -25,8 +25,8 @@ agent on the machine inherits the same guardrail.
 
 ## What it stops
 
-The bundled `policy.yaml` is a "machine guard" - the general form of what a
-`git push` gate does, applied to every shell command:
+The bundled `policy.yaml` acts as a "machine guard" - the general form of
+what a `git push` gate does, applied to every shell command:
 
 - recursive `rm` of `/`, a top-level system dir, or `$HOME`/`~` — in **any**
   flag spelling (`rm -rf /`, `rm -r -f /`, `rm --recursive --force /`,
@@ -102,8 +102,9 @@ If you prefer to wire it by hand, the ready-to-merge snippets are in
 
 ## The hook contract, per agent
 
-All three agents hand the hook a JSON object on stdin. The only differences
-are where the shell command lives and how the hook signals a block:
+All three agents pass a JSON object to the hook on stdin. The only
+differences are where the shell command lives and how the hook signals a
+block:
 
 **Claude Code / Codex** (`hooks/anthropic-hook.sh`)
 
@@ -125,7 +126,7 @@ are where the shell command lives and how the hook signals a block:
 Each adapter normalizes its input into a Tool Guard call envelope, runs
 `tg evaluate -policy policy.yaml -mode enforcement`, and translates the
 engine's `decision` field back into the agent's signal. That is all an
-adapter does - the policy logic lives entirely in the engine.
+adapter does; the policy logic lives entirely in the engine.
 
 ## Customizing the policy
 
@@ -157,8 +158,8 @@ to allow-on-error instead. Both adapters honor `TG_FAIL`, `TG_BIN`, and
 
 The hand-rolled shell adapters in `hooks/` exist to show how the hook
 protocol works. For a new deployment, `tg hook` (the built-in hook verb
-added in v0.2.0) is the simpler choice — one binary, no `jq` dependency,
-and `-protect-self` built in:
+added in v0.2.0) is the simpler choice: one binary, no `jq` dependency,
+and `-protect-self` built in.
 
 ```json
 {
@@ -179,10 +180,10 @@ and `-protect-self` built in:
 ```
 
 `tg hook` reads one PreToolUse JSON from stdin, evaluates it, and writes the
-`hookSpecificOutput` JSON to stdout. Always exits 0. The shell adapters in
-this directory remain as a reference implementation showing how to translate
-the engine's output into each agent's native signal if you need the extra
-flexibility.
+`hookSpecificOutput` JSON to stdout. It always exits 0. The shell adapters
+in this directory remain as a reference implementation showing how to
+translate the engine's output into each agent's native signal if you need
+the extra flexibility.
 
 ## Why hooks (and how this relates to the proxy)
 

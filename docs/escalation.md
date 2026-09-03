@@ -85,8 +85,8 @@ pending  ──── approve ───▶  approved
    └──── uncertain audit durability ───────────────▶  indeterminate
 ```
 
-The reaper sweeps every 30 seconds; any pending entry past its
-`expires_at` becomes `expired`. The agent's poll loop should treat
+The reaper runs every 30 seconds and marks any pending entry past
+its `expires_at` as `expired`. The agent's poll loop should treat
 `expired` the same as `denied`.
 
 Expiry is also audit-before-publish. A proven pre-write audit failure leaves
@@ -126,9 +126,9 @@ rules:
       timeout_minutes: 30
 ```
 
-`denied_top_level_kinds` fires the rule when the SQL IS one of the
-listed kinds (the inverse of `top_level_kinds`). For escalation
-policies this is the natural shape: "escalate writes" rather than
+`denied_top_level_kinds` fires when the SQL IS one of the listed
+kinds, which is the inverse of `top_level_kinds`. For escalation
+policies, this shape fits naturally: "escalate writes" rather than
 "only allow reads."
 
 ## Agent-side resume
@@ -193,14 +193,14 @@ records.
 
 ## Storage
 
-The pending-escalation store is in-memory (bounded)
-(`defaultEscalationMaxEntries = 10_000`) with LRU eviction of the
-oldest **resolved** entries - pending requests are never silently
-dropped, only ones already approved or denied. A proxy restart
+The in-memory, bounded pending-escalation store
+(`defaultEscalationMaxEntries = 10_000`) uses LRU eviction to remove
+the oldest **resolved** entries; it never silently drops pending
+requests, only those already approved or denied. Restarting the proxy
 discards all pending entries (the agent's poll returns 404, which the
-client treats as expired). File-backed persistence so restarts
-preserve outstanding approvals is a known gap; until it exists,
-drain pending escalations before restarting the proxy.
+client treats as expired). File-backed persistence that would
+preserve outstanding approvals across restarts is a known gap; until
+it exists, drain pending escalations before restarting the proxy.
 
 ## Metrics
 

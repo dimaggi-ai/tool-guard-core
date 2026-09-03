@@ -124,10 +124,10 @@ func (v *velocityTracker) sweepIdleLocked() {
 	}
 }
 
-// windowFor returns (creating if needed) the window for a key. An empty
+// windowFor returns the window for a key, creating it if needed. An empty
 // key shares a single "_unknown" bucket so a client cannot dodge
-// velocity accounting by omitting the key field — same defence the rate
-// limiter uses.
+// velocity accounting by omitting the key field; same defence as the rate
+// limiter.
 func (v *velocityTracker) windowFor(key string) *velocityWindow {
 	if v == nil {
 		return nil

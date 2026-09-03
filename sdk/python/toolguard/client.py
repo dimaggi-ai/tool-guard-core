@@ -306,7 +306,6 @@ class ToolGuard:
                 f"tg evaluate exited {proc.returncode}: {proc.stderr.strip()}"
             )
 
-        # Parse the JSON result printed to stdout
         stdout = proc.stdout.strip()
         if stdout:
             try:
@@ -323,9 +322,8 @@ class ToolGuard:
                         f"unparseable stdout — cannot determine a decision "
                         f"(fail-closed): {stdout[:500]!r}"
                     ) from exc
-                # Known exit code, just no/bad stdout for it — fall through
-                # to the exit-code fallback below, same as the empty-stdout
-                # case.
+                # Known exit code with no/bad stdout: fall through to the exit-code
+                # fallback below, same as the empty-stdout case.
 
         # Fallback: map exit code → decision. Only trusted for the exit
         # codes cmd/tg/main.go's cmdEvaluate actually documents (0/3/4;

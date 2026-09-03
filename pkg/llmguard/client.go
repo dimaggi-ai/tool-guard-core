@@ -64,9 +64,8 @@ type ChatResponse struct {
 	Done    bool    `json:"done"`
 }
 
-// Chat posts a non-streaming chat request and returns the model's
-// response message. Errors propagate verbatim — the caller decides
-// fail-open vs fail-closed semantics.
+// Chat posts a non-streaming chat request and returns the model's response message.
+// Errors propagate verbatim; the caller decides fail-open vs fail-closed semantics.
 func (c *Client) Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
 	req.Stream = false
 	body, err := json.Marshal(req)

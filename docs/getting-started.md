@@ -57,8 +57,8 @@ Exit codes for `tg lint`:
   -call examples/call_over_cap.json
 ```
 
-Output: a JSON `EvaluationResult` whose `decision` field is `denied`,
-because the call's `parameters.amount = 1000` violates the policy's
+Output: a JSON `EvaluationResult` with a `denied` `decision`, because
+the call's `parameters.amount = 1000` violates the policy's
 `amount > 500` threshold. Exit code 3.
 
 For a $85 refund (`call_under_cap.json`), the same command exits 0
@@ -87,9 +87,9 @@ curl -s -X POST -H 'Content-Type: application/json' -d '{
 }' http://127.0.0.1:9090/evaluate
 ```
 
-The proxy's response is the same `EvaluationResult` as `tg evaluate`,
-and every decision is appended to the SHA-256 hash-chained audit log
-at `-audit-log`.
+The proxy returns the same `EvaluationResult` as `tg evaluate`, and
+appends every decision to the SHA-256 hash-chained audit log at
+`-audit-log`.
 
 ## 5. Verify the audit chain offline
 
@@ -176,8 +176,9 @@ Tool Guard coverage — 3 policies, 3705 tool calls
     monitor    4 calls with no governing policy
 ```
 
-`-min-coverage 90` exits 3 when coverage drops below the threshold (a CI gate
-against a growing agent outrunning its policy); `-json` for machines.
+`-min-coverage 90` exits with code 3 if coverage falls below the threshold,
+acting as a CI gate to stop an agent from outpacing its policy; use `-json`
+for machine-readable output.
 
 ## 6. Guard Claude Code with `tg protect`
 
@@ -192,8 +193,8 @@ The native workflow is preview-first and reversible:
 It merges one managed `PreToolUse` entry into `~/.claude/settings.json`,
 preserves unrelated settings and hooks, installs a starter policy, enables
 self-protection and consequential-tool fail-closed behavior, and records a
-hash-chained audit log. Preview shows the complete proposed configuration and
-writes nothing.
+hash-chained audit log. Preview shows the complete proposed configuration
+without writing anything.
 
 To remove it, preview and then apply rollback:
 

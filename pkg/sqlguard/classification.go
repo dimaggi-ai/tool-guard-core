@@ -3,7 +3,7 @@ package sqlguard
 import "strings"
 
 // Kind names the top-level statement type of a parsed SQL string.
-// The set is dialect-neutral on purpose — each backend maps its native
+// The set is dialect-neutral on purpose; each backend maps its native
 // parser output to this small enum.
 type Kind string
 
@@ -25,14 +25,14 @@ const (
 	KindPrepare     Kind = "PREPARE"
 	KindCopy        Kind = "COPY" // PG bulk-load (FROM/TO PROGRAM is the danger)
 	KindLoad        Kind = "LOAD" // PG load shared library
-	KindSet         Kind = "SET"  // SET ROLE etc.
+	KindSet         Kind = "SET"
 	KindDiscard     Kind = "DISCARD"
 	KindTransaction Kind = "TRANSACTION" // BEGIN/COMMIT/ROLLBACK
 	KindOther       Kind = "OTHER"
 )
 
 // Classification is the dialect-neutral output of a parser. Policies
-// reason about these fields only — they never see the native AST.
+// reason about these fields only; they never see the native AST.
 type Classification struct {
 	// Dialect that produced this classification. Echoed for debugging
 	// and audit traces.
@@ -47,10 +47,9 @@ type Classification struct {
 	// callers want len == 1 and TopLevelKinds[0] == KindSelect.
 	TopLevelKinds []Kind `json:"top_level_kinds"`
 
-	// Functions is the de-duplicated list of function names invoked
-	// anywhere in the statement tree. Use last-name only (no schema
-	// qualifier) for simple allowlist matching; the FunctionsQualified
-	// slice retains the full dotted form for the operator who wants it.
+	// Functions is the de-duplicated list of function names invoked anywhere in the
+	// statement tree. Use last-name only (no schema qualifier) for simple allowlist
+	// matching; the FunctionsQualified slice retains the full dotted form.
 	Functions          []string `json:"functions,omitempty"`
 	FunctionsQualified []string `json:"functions_qualified,omitempty"`
 
@@ -80,12 +79,11 @@ type Classification struct {
 	// the common shape so policies are uniform.
 	MutatesViaCTE bool `json:"mutates_via_cte,omitempty"`
 
-	// Tables names every table referenced anywhere in the statement —
-	// from FROM, JOIN, INTO, USING, TABLE-shorthand, and DML targets.
-	// Schema-qualified names appear as schema.table; unqualified just
-	// table. Use AllowedTables / DeniedTables in SQLRequire to gate.
-	// Catches `TABLE pg_authid` (a single-word SELECT shorthand that
-	// would otherwise classify as a clean SELECT) and any
+	// Tables lists every table referenced in the statement from FROM, JOIN, INTO, USING,
+	// TABLE-shorthand, and DML targets. Schema-qualified names appear as schema.table;
+	// unqualified names appear as just table. Use AllowedTables / DeniedTables in
+	// SQLRequire to gate access. Catches `TABLE pg_authid` (a single-word SELECT shorthand
+	// that would otherwise classify as a clean SELECT) and any
 	// information_schema/pg_catalog probe.
 	Tables []string `json:"tables,omitempty"`
 }

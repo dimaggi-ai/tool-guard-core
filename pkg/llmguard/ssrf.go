@@ -106,7 +106,7 @@ func isPublicUnicast(ip net.IP) bool {
 		if v4[0] == 100 && v4[1] >= 64 && v4[1] <= 127 {
 			return false
 		}
-		// 169.254.0.0/16 — link-local; covers AWS metadata at .169.254
+		// 169.254.0.0/16 link-local; covers AWS metadata at .169.254
 		if v4[0] == 169 && v4[1] == 254 {
 			return false
 		}
@@ -114,7 +114,7 @@ func isPublicUnicast(ip net.IP) bool {
 		if v4[0] == 0 {
 			return false
 		}
-		// 192.0.0.0/24 IETF, 192.0.2.0/24 docs (TEST-NET-1) — overcautious deny
+		// 192.0.0.0/24 IETF, 192.0.2.0/24 docs (TEST-NET-1) - overcautious deny
 		if v4[0] == 192 && v4[1] == 0 && (v4[2] == 0 || v4[2] == 2) {
 			return false
 		}

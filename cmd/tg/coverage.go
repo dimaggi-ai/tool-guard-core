@@ -21,20 +21,18 @@ type covToolStat struct {
 	Policies map[string]bool
 }
 
-// cmdCoverage answers a question tg simulate does not: of the tool calls an
-// agent actually makes, what fraction has ANY governing policy — versus what
-// passes only because nothing governs it. Coverage is scope-match: a call is
-// "governed" when at least one approved policy's scope selects it. The
-// ungoverned remainder is the blind spot (in our own dogfood: file writes and
-// http passed ungoverned until 0.3.0).
+// cmdCoverage answers a question tg simulate does not: of the tool calls an agent
+// actually makes, what fraction has ANY governing policy versus what passes only
+// because nothing governs it. Coverage is scope-match: a call is "governed" when at
+// least one approved policy's scope selects it. The ungoverned remainder is the blind
+// spot (in our own dogfood: file writes and http passed ungoverned until 0.3.0).
 //
-// Input is a JSONL stream where each line is an ActionEnvelope OR a
-// DecisionTrace — only the identity fields (agent_id, org_id, tool_name,
-// tool_group) are needed, and both shapes carry them — so you can point it
-// straight at an existing audit log.
+// Input is a JSONL stream where each line is an ActionEnvelope OR a DecisionTrace; only
+// the identity fields (agent_id, org_id, tool_name, tool_group) are needed, and both
+// shapes carry them, so you can point it straight at an existing audit log.
 //
-// Exit: 0 normally; 3 when -min-coverage is set and coverage is below it (a CI
-// gate); 1 internal error; 2 usage error.
+// Exit: 0 normally; 3 when -min-coverage is set and coverage is below it (a CI gate); 1
+// internal error; 2 usage error.
 func cmdCoverage(args []string) int {
 	fs := flag.NewFlagSet("coverage", flag.ExitOnError)
 	policyDir := fs.String("policy-dir", "", "directory of *.yaml/*.yml policies (mutually exclusive with -policy)")

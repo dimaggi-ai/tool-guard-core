@@ -445,8 +445,8 @@ chain = my_chain.with_config({"callbacks": [handler]})
 ```
 
 The handler intercepts `on_tool_start` and raises `ToolDenied` /
-`ToolEscalated` on a block, which stops the chain.  Allowed and flagged
-calls proceed normally.  See `sdk/python/README.md` for full examples.
+`ToolEscalated` on a block, stopping the chain. Allowed and flagged
+calls proceed normally. See `sdk/python/README.md` for full examples.
 
 ### 3.3 Microsoft AutoGen
 

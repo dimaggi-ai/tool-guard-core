@@ -305,11 +305,11 @@ func (p *proxy) appendTraceWithDurability(t *domain.DecisionTrace, forceDurable 
 	if err != nil {
 		return err
 	}
-	// Resolve size-triggered rotation before writing the current trace. If a
-	// post-write rotation failed, the durable record could still say "allowed"
-	// even though fail-closed changed the response to "denied". Pre-rotation
-	// keeps the current action transactional: either rotation completes first,
-	// or no bytes for this trace reach the audit set.
+	// Resolve size-triggered rotation before writing the current trace. If post-write
+	// rotation failed, the durable record could still say "allowed" even though
+	// fail-closed changed the response to "denied". Pre-rotation keeps the current action
+	// transactional: either rotation completes first, or no bytes for this trace reach the
+	// audit set.
 	st, err := p.auditLog.Stat()
 	if err != nil {
 		return fmt.Errorf("stat audit log before append: %w", err)
@@ -478,9 +478,9 @@ func (p *proxy) rotateAuditLocked() error {
 		return fmt.Errorf("sync before rotate: %w", err)
 	}
 	if err := p.auditLog.Close(); err != nil {
-		// Close may have released the descriptor despite returning an error.
-		// Treat its usability as uncertain instead of claiming that appends can
-		// continue on the current handle.
+		// Close may have released the descriptor despite returning an error. Treat its
+		// usability as uncertain instead of assuming appends can continue on the current
+		// handle.
 		return fmt.Errorf("%w: close before rotate: %v", errAuditRotationStateUncertain, err)
 	}
 	// From this point on, best-effort recovery should leave p.auditLog pointing
@@ -503,9 +503,8 @@ func (p *proxy) rotateAuditLocked() error {
 	}
 	f, err := openDiskAuditLog(p.auditPath)
 	if err != nil {
-		// Rename succeeded but new-active open failed. Re-open the
-		// rotated tail so we don't break the chain — appends will
-		// continue into the previous file rather than vanish.
+		// Rename succeeded but new-active open failed. Re-open the rotated tail so we don't
+		// break the chain; appends will continue into the previous file rather than vanish.
 		p.reopenRotatedLocked(idx)
 		return fmt.Errorf("%w: open new active: %v", errAuditRotationStateUncertain, err)
 	}
@@ -526,11 +525,10 @@ func (p *proxy) rotateAuditLocked() error {
 	return nil
 }
 
-// reopenAuditLocked re-opens p.auditPath in append mode after a
-// failed rotation. Best-effort: if even the re-open fails (disk full,
-// permissions changed), we leave p.auditLog as the closed file and
-// every subsequent append returns an error tracked via
-// auditFailureCount — explicit failure, not silent corruption.
+// reopenAuditLocked re-opens p.auditPath in append mode after a failed rotation.
+// Best-effort: if even the re-open fails (disk full, permissions changed), we leave
+// p.auditLog as the closed file and every subsequent append returns an error tracked
+// via auditFailureCount; explicit failure, not silent corruption.
 func (p *proxy) reopenAuditLocked() {
 	f, err := openDiskAuditLog(p.auditPath)
 	if err != nil {

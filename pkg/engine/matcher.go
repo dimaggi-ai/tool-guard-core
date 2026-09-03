@@ -21,13 +21,12 @@ func MatchPolicies(envelope *domain.ActionEnvelope, policies []domain.Policy) []
 	return matched
 }
 
-// matchesScope checks if an envelope falls within a policy's scope.
-// Empty scope fields mean "match all" for that dimension; the policy
-// matches when every set scope dimension matches. The tool dimension is
-// satisfied if EITHER ToolNames or ToolGroups matches when at least one
-// is set — important because a policy author who scopes only by
-// tool_group must NOT also match every tool call (regression TG-001;
-// pinned by TestMatchesScope_AllPaths).
+// matchesScope checks if an envelope falls within a policy's scope. Empty scope fields
+// mean "match all" for that dimension; the policy matches when every set scope
+// dimension matches. The tool dimension is satisfied if EITHER ToolNames or ToolGroups
+// matches when at least one is set, because a policy author who scopes only by
+// tool_group must NOT also match every tool call (regression TG-001; pinned by
+// TestMatchesScope_AllPaths).
 func matchesScope(env *domain.ActionEnvelope, scope domain.PolicyScope) bool {
 	if len(scope.OrgIDs) > 0 && !containsStr(scope.OrgIDs, env.OrgID) {
 		return false

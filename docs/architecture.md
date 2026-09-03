@@ -244,9 +244,9 @@ The image-fetch path is SSRF-hardened: dial-time private-CIDR /
 loopback / link-local / CGNAT blocking, no redirects ever, scheme
 allowlist (http/https only), no userinfo in URLs.
 
-See [content-gen-bundle.md](content-gen-bundle.md) for the
-end-to-end demo with three policies (image / audio / text gen) and
-16 deterministic E2E assertions against real Gemma 4 e4b.
+See [content-gen-bundle.md](content-gen-bundle.md) for an
+end-to-end demo featuring three policies (image / audio / text
+gen) and 16 deterministic E2E assertions against real Gemma 4 e4b.
 
 ## Scope boundary
 

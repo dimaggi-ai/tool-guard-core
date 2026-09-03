@@ -61,7 +61,7 @@ Rules:
 - After you have either successfully refunded the customer OR explained
   why you cannot, emit a "respond" and stop.`
 
-// modelTurn is the JSON object we ask the model to emit on every turn.
+// modelTurn is the JSON object the model emits on every turn.
 type modelTurn struct {
 	Action    string         `json:"action"`              // "call_tool" | "respond"
 	Tool      string         `json:"tool,omitempty"`      // only when action=call_tool
@@ -163,8 +163,6 @@ func main() {
 		hiccups = 0
 		fmt.Printf("[model]   (%dms) %s\n", elapsed.Milliseconds(), oneLine(raw))
 
-		// Append the assistant turn to the conversation history so the
-		// model sees what it said.
 		messages = append(messages, message{Role: "assistant", Content: raw})
 
 		// 2. Parse the model's JSON. If it goes off-script, tell it so
@@ -330,9 +328,9 @@ func hr() {
 	fmt.Fprintln(os.Stdout, strings.Repeat("─", 72))
 }
 
-// oneLine collapses a multi-line string into a single line for terminal
-// readability. The full transcript still lives in the conversation
-// history; this is only for the live print.
+// oneLine collapses a multi-line string into a single line for terminal readability.
+// The full transcript remains in the conversation history; this is only for live
+// printing.
 func oneLine(s string) string {
 	s = strings.ReplaceAll(s, "\n", " ")
 	s = strings.ReplaceAll(s, "\r", " ")

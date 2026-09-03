@@ -90,13 +90,11 @@ CLI flags on the agent directly:
 
 ## JSON-mode vs native tool calling
 
-Ollama supports a `tools` parameter on `/api/chat`, but its quality
-varies wildly per model template. For a demo that should run on whatever model the user has pulled,
-this agent
-asks the model to emit a strict JSON envelope via `format: "json"` and
-parses that. The flow is identical to native tool calling; the
-integration pattern in [`docs/integration.md`](../../docs/integration.md)
-covers the native-tools shape for production deployments.
+Ollama supports a `tools` parameter on `/api/chat`, but quality varies wildly per model template.
+For a demo that should run on whatever model the user has pulled, this agent asks the model to emit
+a strict JSON envelope via `format: "json"` and parses it. The flow is identical to native tool
+calling; the integration pattern in [`docs/integration.md`](../../docs/integration.md) covers the
+native-tools shape for production deployments.
 
 ## Limits
 

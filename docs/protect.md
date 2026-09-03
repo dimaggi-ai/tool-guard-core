@@ -1,7 +1,7 @@
 # Protect a coding agent
 
 `tg protect` safely manages a coding agent's pre-tool hook. The first native
-target is Claude Code 2.1.139 or newer; that version introduced shell-free
+target is Claude Code 2.1.139 or newer, which introduced shell-free
 exec-form hooks. Codex, Junie, `agy`, and MCP wrapping are not yet native
 targets.
 
@@ -13,7 +13,7 @@ tg protect claude -apply
 tg status claude
 ```
 
-Preview is the default. It prints the target paths and complete proposed JSON
+Preview is the default; it prints the target paths and complete proposed JSON
 without writing anything. `-apply` performs the change.
 
 The managed hook stores the current absolute `tg` executable in `command` and
@@ -85,11 +85,12 @@ when paths contain spaces. A default-profile install detects Claude Code and
 refuses versions older than 2.1.139. Passing an explicit `-config` is the
 advanced/test-profile path and bypasses local Claude installation detection.
 
-Configuration and state writes are atomic. On POSIX systems files are mode
-`0600` and Tool Guard-created parent directories are mode `0700`. On Windows,
-files inherit the user-profile ACLs; Go permission bits do not create Windows
-ACLs. The selected binary must exist and be executable; the selected policy
-must parse and pass engine validation before the hook is activated.
+Configuration and state writes are atomic. On POSIX systems, files use mode
+`0600`, and Tool Guard-created parent directories use mode `0700`. On
+Windows, files inherit user-profile ACLs; Go permission bits do not create
+Windows ACLs. The selected binary must exist and be executable, and the
+selected policy must parse and pass engine validation before the hook
+activates.
 
 ## Safety and reversibility
 

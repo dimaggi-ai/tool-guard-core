@@ -34,12 +34,10 @@ type classifier struct{}
 func (classifier) Dialect() string { return Dialect }
 
 func (c classifier) Classify(in string) (sqlguard.Classification, error) {
-	// Pre-classifier: rqlite/sql doesn't grammar-parse some SQLite
-	// statements that are nevertheless real (VACUUM, ATTACH DATABASE,
-	// DETACH DATABASE, SAVEPOINT — though savepoint is now supported).
-	// Detect their first keyword and surface them as explicit Kinds so
-	// policies can route them, rather than letting them fall through
-	// to a parse-error fail-closed.
+	// Pre-classifier: rqlite/sql doesn't grammar-parse some real SQLite statements
+	// (VACUUM, ATTACH DATABASE, DETACH DATABASE; SAVEPOINT is now supported). Detect their
+	// first keyword and surface them as explicit Kinds so policies can route them, rather
+	// than letting them fall through to a parse-error fail-closed.
 	if cl, hit := preClassify(in); hit {
 		return cl, nil
 	}

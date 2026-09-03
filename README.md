@@ -86,9 +86,9 @@ an **irreversibility floor**: calls classified `irreversible` or `unknown` are
 not silently allowed by the reference policy.
 
 `engine.ClassifyReversibility` is deterministic (no network, no LLM). It
-derives a class from the tool name/group and the shape of the parameters,
-reusing the existing destructive-operation detectors (the four-dialect SQL
-classifier, the quote-aware shell tokenizer, HTTP method):
+derives a class from the tool name/group and parameter shape by reusing
+existing destructive-operation detectors: the four-dialect SQL classifier,
+the quote-aware shell tokenizer, and HTTP method.
 
 | Class | Meaning | Examples |
 |-------|---------|----------|
@@ -109,13 +109,13 @@ effect: escalate        # human-in-the-loop; an irreversible action is never aut
 ```
 
 The shipped [`policies/irreversibility_floor.yaml`](policies/irreversibility_floor.yaml)
-is an approved, enforcement-mode reference policy that escalates every
-`irreversible` **and** every `unknown` action to a human reviewer (mapped to
-**EU AI Act Article 14 — human oversight**), and allows `reversible` and
-`recoverable` ones. Escalating `unknown` is the fail-safe that makes this a
-*floor*: an action the classifier cannot positively recognize as safe is never
-waved through to the engine's default-allow, so novelty or obfuscation
-escalates rather than slipping past a gap in name/parameter coverage.
+is an approved, enforcement-mode reference policy that escalates every `irreversible`
+**and** every `unknown` action to a human reviewer (mapped to **EU AI Act Article 14 —
+human oversight**), while allowing `reversible` and `recoverable` ones. Escalating
+`unknown` acts as the fail-safe that makes this a *floor*: an action the classifier
+cannot positively recognize as safe is never waved through to the engine's
+default-allow, so novelty or obfuscation escalates rather than slipping past a gap in
+name/parameter coverage.
 
 The parameter-shape detectors are adversarially hardened: destructive commands
 hidden behind wrappers (`sudo`/`env`/`timeout … rm -rf`), command substitution
@@ -683,9 +683,9 @@ Features absent from this repo today:
   reflect Gemma's failure modes specifically; other models will
   fail differently.
 
-For the precise Core / Enterprise boundary — and the list of things
-that exist in neither edition — see
-[docs/oss-vs-enterprise.md](docs/oss-vs-enterprise.md).
+See [docs/oss-vs-enterprise.md](docs/oss-vs-enterprise.md) for the
+precise Core / Enterprise boundary and the list of things that
+exist in neither edition.
 
 ## Where it fits
 

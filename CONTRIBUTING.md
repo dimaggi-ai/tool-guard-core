@@ -71,8 +71,8 @@ Requires **Go 1.25+**. No external services. No database.
 5. Add a unit test in `pkg/engine/condition_test.go`.
 
 The AST test (`cmd/tg/main_test.go:TestLint_AllDomainOperatorsRegistered`)
-parses `pkg/domain/policy.go` at test time and verifies step 3. If you
-skip it your PR will fail CI.
+parses `pkg/domain/policy.go` at test time to verify step 3. Skipping it
+will fail your PR in CI.
 
 ## Naming conventions
 
@@ -124,7 +124,7 @@ Areas: `engine`, `audit`, `domain`, `tg`, `battle-test`, `docs`, `ci`,
 ## Releasing
 
 Maintainers only. See [RELEASING.md](RELEASING.md) — the exact,
-required order (merge to `main` before tagging, not after). A CI
+required order: merge to `main` before tagging, not after. A CI
 guard in `release.yml` refuses to publish a release whose tag isn't
 reachable from `main`, but the doc explains why that order matters
 regardless.

@@ -53,10 +53,11 @@ print(result.decision)  # "allowed"
 ```
 
 CLI mode evaluates the whole policy directory as one set. Each policy's YAML
-mode owns its contribution: a `mode: shadow` policy remains observe-only under
-the CLI's default `enforcement` call-site mode, while a `mode: enforcement`
-policy cannot be downgraded by a shadow default. Mixed-mode behavior is pinned
-against the real Go engine in `tests/test_contract.py`.
+mode controls its contribution: a `mode: shadow` policy stays observe-only
+under the CLI's default `enforcement` call-site mode, while a
+`mode: enforcement` policy cannot be downgraded by a shadow default.
+Mixed-mode behavior is pinned against the real Go engine in
+`tests/test_contract.py`.
 
 `evaluate()` raises `ToolDenied` or `ToolEscalated` on a block.
 `evaluate_raw()` always returns the `EvaluationResult` without raising.
@@ -206,8 +207,9 @@ the engine reports `decision="denied"` (what *would* happen) alongside
 mode never enforces); `evaluate()` never raises for that case, since
 shadow mode exists specifically to observe without blocking.
 
-Both carry a `.result` attribute with the full `EvaluationResult`:
-`result.decision_reason`, `result.suggested_response`, `result.rule_results`, etc.
+Both expose a `.result` attribute containing the full `EvaluationResult`:
+`result.decision_reason`, `result.suggested_response`, `result.rule_results`, and
+so on.
 
 ---
 
