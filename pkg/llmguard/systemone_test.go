@@ -521,7 +521,7 @@ func TestValidateSystemOneBaseURL(t *testing.T) {
 		"api.typesafe.ai",
 		"ftp://api.typesafe.ai",
 		"http://api.typesafe.ai",   // cleartext key to a remote host
-		"http://192.168.4.10:8095", // private but not loopback
+		"http://10.20.30.40:8095", // private but not loopback
 		"https://user:pw@api.typesafe.ai",
 		"https://api.typesafe.ai/?x=1",
 		"https://api.typesafe.ai/#frag",
