@@ -24,10 +24,9 @@ self-hosted endpoint) in the environment of `tg-proxy` or `tg`. Setup,
 verdict rules and limits are in
 [creating-policies.md](docs/creating-policies.md#system-one-backend).
 
-For this release, the backend was tested end to end against a self-hosted
-endpoint. Against hosted Jev, a request without a key returns HTTP 403 and
-the rule fails closed. A classification with a valid key against hosted Jev
-is still untested.
+For this release the backend was tested with real calls to two targets:
+the hosted Jev service and a self-hosted judge running the open-source
+[Laya](https://huggingface.co/convaiinnovations/laya) model (Apache-2.0).
 
 ### What breaks
 
