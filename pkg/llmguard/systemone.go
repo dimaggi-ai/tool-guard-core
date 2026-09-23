@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 )
@@ -21,9 +22,9 @@ import (
 // TypeSafe System One models (Jev, and any endpoint that serves the same
 // contract, such as a self-hosted Laya judge) answer typed questions over a
 // state instead of generating text. The classifier asks one Choice question
-// whose options are the policy's forbidden labels plus "safe", so the answer
-// is always a label from the closed set with a probability distribution.
-// Nothing is parsed out of free text.
+// whose options are the policy's forbidden labels plus "safe". An answer is
+// accepted only if it picks one of those options and carries a probability
+// for each; nothing is parsed out of free text.
 //
 // The endpoint and API key come from the operator's environment, never from
 // the policy file: a policy that could name the endpoint could also send the
@@ -43,9 +44,10 @@ const (
 
 	systemOnePath       = "/v1/systemone"
 	systemOneQuestionID = "category"
-	// systemOneMinConfidence matches the Ollama classifier's threshold:
-	// below it, any answer (safe included) is treated as ambiguous.
-	systemOneMinConfidence = 0.6
+	// The API rounds probabilities, so the distribution may sum to
+	// slightly off 1 and near-equal options may tie.
+	systemOneSumTolerance = 0.01
+	systemOneTieTolerance = 1e-3
 	// systemOneMaxAttempts bounds retries on 429/503/529. The request
 	// context deadline still caps total time.
 	systemOneMaxAttempts = 3
@@ -153,7 +155,6 @@ type systemOneAnswer struct {
 	Type          string             `json:"type"`
 	Choice        string             `json:"choice"`
 	Probabilities map[string]float64 `json:"probabilities"`
-	Confidence    *float64           `json:"confidence"`
 }
 
 // SystemOneClassifier classifies a prompt with one System One Choice question.
@@ -169,10 +170,11 @@ func NewSystemOneClassifier(c *SystemOneClient, model string, forbidden []string
 }
 
 // ClassifyPrompt asks the model which label fits the prompt. It follows the
-// same fail-closed contract as Classifier.ClassifyPrompt: errors return
-// category "error", an answer below the confidence threshold becomes
-// "ambiguous", and an option outside the closed set becomes "unknown_label".
-// Reasoning records the model identity the endpoint reported and P(safe).
+// same fail-closed contract as Classifier.ClassifyPrompt: errors and
+// malformed answers return category "error", an option outside the closed
+// set becomes "unknown_label", and a picked option with probability below
+// the floor becomes "ambiguous". Reasoning records the model identity the
+// endpoint reported, the picked option's probability, and P(safe).
 func (c *SystemOneClassifier) ClassifyPrompt(ctx context.Context, prompt string) (*ClassifyResult, error) {
 	if c.Client == nil {
 		return nil, fmt.Errorf("system one classifier: nil client")
@@ -213,20 +215,26 @@ func (c *SystemOneClassifier) ClassifyPrompt(ctx context.Context, prompt string)
 	return res, nil
 }
 
-// labels returns the forbidden list normalised the same way the Ollama path
-// compares labels: trimmed and lowercased.
+// labels returns the forbidden list normalised and de-duplicated, so each
+// offered option appears once.
 func (c *SystemOneClassifier) labels() []string {
 	out := make([]string, 0, len(c.Forbidden))
 	for _, l := range c.Forbidden {
-		if n := strings.ToLower(strings.TrimSpace(l)); n != "" && n != "safe" {
+		if n := normLabel(l); n != "" && n != "safe" && !slices.Contains(out, n) {
 			out = append(out, n)
 		}
 	}
 	return out
 }
 
-// interpretSystemOneAnswer turns a raw response into a ClassifyResult. Any
-// malformed answer is an error, so the caller fails closed.
+// interpretSystemOneAnswer turns a raw response into a ClassifyResult. The
+// answer must pick an offered option and carry a probability for every
+// option, and the picked option must be the most probable; anything else is
+// an error, so the caller fails closed. The verdict floor applies to the
+// picked option's probability. The API's confidence field is not used: it
+// measures how concentrated the whole distribution is, and it stays low for
+// a clear safe answer when the rest of the mass is spread over several
+// labels.
 func interpretSystemOneAnswer(resp *systemOneResponse, labels []string) (*ClassifyResult, error) {
 	ans, ok := resp.Answers[systemOneQuestionID]
 	if !ok {
@@ -235,45 +243,59 @@ func interpretSystemOneAnswer(resp *systemOneResponse, labels []string) (*Classi
 	if ans.Type != "choice" {
 		return nil, fmt.Errorf("system one: answer type %q, want choice", ans.Type)
 	}
-	if ans.Confidence == nil {
-		return nil, fmt.Errorf("system one: answer has no confidence")
-	}
-	conf := *ans.Confidence
-	if math.IsNaN(conf) || conf < 0 || conf > 1 {
-		return nil, fmt.Errorf("system one: confidence %v outside [0,1]", conf)
-	}
-	choice := strings.ToLower(strings.TrimSpace(ans.Choice))
+	choice := normLabel(ans.Choice)
 	if choice == "" {
 		return nil, fmt.Errorf("system one: empty choice")
 	}
-	known := choice == "safe"
-	for _, l := range labels {
-		if choice == l {
-			known = true
-			break
+	probs, err := systemOneDistribution(ans.Probabilities, labels)
+	if err != nil {
+		return nil, err
+	}
+	p, offered := probs[choice]
+	if !offered {
+		return &ClassifyResult{
+			Category:  "unknown_label",
+			Reasoning: capReasoning(fmt.Sprintf("system one model=%s choice outside the offered options", modelID(resp.Model))),
+		}, nil
+	}
+	for _, q := range probs {
+		if q > p+systemOneTieTolerance {
+			return nil, fmt.Errorf("system one: choice %q is not the most probable option", choice)
 		}
 	}
-	out := &ClassifyResult{Category: choice, Confidence: conf}
-	if !known {
-		out.Category = "unknown_label"
-	}
-	// The threshold applies to safe and unsafe answers alike, as in the
-	// Ollama path: an attacker who can flatten the distribution must not
-	// get a low-confidence "safe" through.
-	if conf < systemOneMinConfidence {
-		out.Category = "ambiguous"
-	}
-	pSafe, hasSafe := ans.Probabilities["safe"]
-	if !hasSafe || math.IsNaN(pSafe) || pSafe < 0 || pSafe > 1 {
-		// Without a usable P(safe) the distribution cannot back a safe
-		// verdict. Non-safe verdicts fire regardless.
-		if out.Category == "safe" {
-			out.Category = "ambiguous"
+	return &ClassifyResult{
+		Category:   verdict(choice, p, labels),
+		Confidence: p,
+		Reasoning: capReasoning(fmt.Sprintf("system one model=%s choice=%s p=%.3f p_safe=%.3f",
+			modelID(resp.Model), choice, p, probs["safe"])),
+	}, nil
+}
+
+// systemOneDistribution checks that raw has exactly one probability per
+// offered option (labels plus safe), each in [0,1], summing to 1.
+func systemOneDistribution(raw map[string]float64, labels []string) (map[string]float64, error) {
+	out := make(map[string]float64, len(labels)+1)
+	sum := 0.0
+	for k, v := range raw {
+		n := normLabel(k)
+		if n != "safe" && !slices.Contains(labels, n) {
+			return nil, fmt.Errorf("system one: probability for an option that was not offered")
 		}
-		out.Reasoning = capReasoning(fmt.Sprintf("system one model=%s choice=%s", modelID(resp.Model), choice))
-		return out, nil
+		if _, dup := out[n]; dup {
+			return nil, fmt.Errorf("system one: duplicate probability for %q", n)
+		}
+		if math.IsNaN(v) || v < 0 || v > 1 {
+			return nil, fmt.Errorf("system one: probability for %q outside [0,1]", n)
+		}
+		out[n] = v
+		sum += v
 	}
-	out.Reasoning = capReasoning(fmt.Sprintf("system one model=%s choice=%s p_safe=%.3f", modelID(resp.Model), choice, pSafe))
+	if len(out) != len(labels)+1 {
+		return nil, fmt.Errorf("system one: %d of %d option probabilities present", len(out), len(labels)+1)
+	}
+	if math.Abs(sum-1) > systemOneSumTolerance {
+		return nil, fmt.Errorf("system one: probabilities sum to %.3f, want 1", sum)
+	}
 	return out, nil
 }
 
@@ -299,8 +321,10 @@ func modelID(s string) string {
 	return b.String()
 }
 
-// errRetryable marks HTTP statuses the API documents as transient.
-var errRetryable = errors.New("retryable")
+// retryableStatus is an HTTP status the API documents as transient.
+type retryableStatus int
+
+func (s retryableStatus) Error() string { return fmt.Sprintf("system one HTTP %d", int(s)) }
 
 func (c *SystemOneClient) do(ctx context.Context, req *systemOneRequest) (*systemOneResponse, error) {
 	body, err := json.Marshal(req)
@@ -315,7 +339,8 @@ func (c *SystemOneClient) do(ctx context.Context, req *systemOneRequest) (*syste
 			return out, nil
 		}
 		lastErr = err
-		if !errors.Is(err, errRetryable) || attempt == systemOneMaxAttempts {
+		var rs retryableStatus
+		if !errors.As(err, &rs) || attempt == systemOneMaxAttempts {
 			break
 		}
 		t := time.NewTimer(backoff)
@@ -362,7 +387,7 @@ func (c *SystemOneClient) once(ctx context.Context, body []byte) (*systemOneResp
 	switch {
 	case resp.StatusCode == http.StatusOK:
 	case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == 529:
-		return nil, fmt.Errorf("system one HTTP %d: %w", resp.StatusCode, errRetryable)
+		return nil, retryableStatus(resp.StatusCode)
 	default:
 		// The body is not echoed: an error page could carry anything,
 		// and the status is enough to diagnose 401/422.

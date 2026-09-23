@@ -95,26 +95,12 @@ separate release artifacts.
 
 ### System One classifier backend
 
-`llm_classify` can now use a TypeSafe System One model instead of Ollama.
-Set `backend: systemone` in the condition and configure the endpoint in the
-environment of the process that evaluates policies (`tg-proxy` or `tg`):
-
-```sh
-export TYPESAFE_API_KEY=...                        # hosted Jev (TypeSafe System One)
-export TYPESAFE_BASE_URL=http://127.0.0.1:8095     # optional: self-hosted endpoint
-```
-
-```yaml
-conditions:
-  llm_classify:
-    backend: systemone
-    prompt_field: parameters.prompt
-    forbidden: [weapons_instructions, self_harm_encouragement]
-```
-
-The rule fails closed in the same cases as the Ollama backend. Test the
-classifier on your own prompts before you rely on it. The 0.6 confidence
-threshold is fixed and generic; it is not calibrated for your domain.
+`llm_classify` can use a TypeSafe System One model, such as hosted Jev or
+a self-hosted endpoint, instead of Ollama. Add `backend: systemone` to the
+condition and set `TYPESAFE_API_KEY` (and `TYPESAFE_BASE_URL` for a
+self-hosted endpoint) in the environment of `tg-proxy` or `tg`. Setup,
+verdict rules and limits are in
+[creating-policies.md](docs/creating-policies.md#system-one-backend).
 
 ### Staged publication and recovery
 

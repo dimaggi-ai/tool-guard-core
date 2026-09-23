@@ -167,23 +167,17 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 ### System One classifier backend
 
 - `llm_classify` accepts `backend: systemone`, which classifies the prompt
-  with a TypeSafe System One model (default `jev-latest`) or any endpoint
-  that serves the same API, such as a self-hosted judge. The model picks
-  one label from the policy's `forbidden` labels plus `safe`, so the verdict
-  is always a label from that set; no free text is parsed. As with the
-  Ollama backend, the rule fails closed: errors, malformed answers, labels
-  outside the set, and confidence below 0.6 all fire it. The audit detail
-  records the model name the endpoint returned.
-- The endpoint and key come from the operator environment, never from the
-  policy file. A policy cannot send the key elsewhere.
-  `TYPESAFE_BASE_URL` defaults to `https://api.typesafe.ai`;
-  `TYPESAFE_API_KEY` has no default. Plain `http` is accepted only for
-  loopback hosts (`localhost`, `127.0.0.0/8`, `::1`). Redirects are not
-  followed. 429, 503, and 529 responses are retried within the rule's
-  `timeout_seconds`. The backend is text-only, so `ollama_url` and
-  `image_url_field` are rejected at load. Unknown `backend` values are
-  rejected. Policies without `backend` keep the Ollama behavior
-  unchanged.
+  with a TypeSafe System One model (default `jev-latest`) or a self-hosted
+  endpoint that serves the same API. The rule fires unless the model picks
+  `safe` with a probability of at least 0.6. Errors, labels outside the
+  policy's set, and incomplete or inconsistent probability distributions
+  also fire the rule. See
+  [creating-policies.md](docs/creating-policies.md#system-one-backend).
+- The endpoint and key come from `TYPESAFE_BASE_URL` and
+  `TYPESAFE_API_KEY` in the operator environment, never from the policy
+  file, so a policy cannot send the key elsewhere. The backend is
+  text-only: `ollama_url` and `image_url_field` are rejected at load, as
+  are unknown `backend` values. Policies without `backend` are unchanged.
 
 ### Documentation integrity
 

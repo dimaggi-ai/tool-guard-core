@@ -30,16 +30,14 @@ func systemOneEndpoint(t *testing.T, choice string, conf float64) *recordedSyste
 		rec.body = raw
 		rec.calls++
 		rec.mu.Unlock()
+		// The picked option gets conf; the other two share the rest.
+		probs := map[string]float64{"weapons": (1 - conf) / 2, "self_harm": (1 - conf) / 2, "safe": (1 - conf) / 2}
+		probs[choice] = conf
 		resp := map[string]any{
 			"model": "laya-test",
 			"answers": map[string]any{"category": map[string]any{
-				"type": "choice", "choice": choice,
-				"probabilities": map[string]float64{"safe": 1 - conf, choice: conf},
-				"confidence":    conf,
+				"type": "choice", "choice": choice, "probabilities": probs, "confidence": 0.3,
 			}},
-		}
-		if choice == "safe" {
-			resp["answers"].(map[string]any)["category"].(map[string]any)["probabilities"] = map[string]float64{"safe": conf}
 		}
 		_ = json.NewEncoder(w).Encode(resp)
 	}))
@@ -153,6 +151,24 @@ func TestLLMClassify_SystemOne_MissingPrompt_FailsClosedWithoutCall(t *testing.T
 	defer rec.mu.Unlock()
 	if rec.calls != 0 {
 		t.Errorf("endpoint called %d times for a missing prompt", rec.calls)
+	}
+}
+
+func TestLLMClassify_SystemOne_KeyChangeReplacesClient(t *testing.T) {
+	rec := systemOneEndpoint(t, "safe", 0.97)
+	in := map[string]interface{}{"parameters.prompt": "x"}
+	EvalConditionWithDetail(systemOneCondition(), in)
+	t.Setenv(llmguard.EnvSystemOneAPIKey, "rotated-key")
+	EvalConditionWithDetail(systemOneCondition(), in)
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if rec.auth != "Bearer rotated-key" {
+		t.Errorf("authorization after rotation = %q", rec.auth)
+	}
+	systemOneClientMu.Lock()
+	defer systemOneClientMu.Unlock()
+	if systemOneClientCfg[1] != "rotated-key" {
+		t.Error("the old key is still cached")
 	}
 }
 

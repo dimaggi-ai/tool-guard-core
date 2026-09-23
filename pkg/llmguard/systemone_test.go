@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -70,9 +71,12 @@ func newFake(t *testing.T, body string, status ...int) (*fakeSystemOne, *SystemO
 	return f, NewSystemOneClassifier(cli, DefaultSystemOneModel, []string{"Weapons", "self_harm"})
 }
 
-func choiceBody(choice string, pSafe, conf float64) string {
+// choiceBody builds a response over the fake classifier's three options.
+// Its confidence field is deliberately low: the engine must not use it.
+func choiceBody(choice string, pWeapons, pSelfHarm, pSafe float64) string {
 	return `{"model":"jev-1.13.0","answers":{"category":{"type":"choice","choice":"` + choice +
-		`","probabilities":{"weapons":0.01,"self_harm":0.01,"safe":` + ftoa(pSafe) + `},"confidence":` + ftoa(conf) + `}},"usage":{"input_tokens":10,"output_tokens":1}}`
+		`","probabilities":{"weapons":` + ftoa(pWeapons) + `,"self_harm":` + ftoa(pSelfHarm) + `,"safe":` + ftoa(pSafe) +
+		`},"confidence":0.3}},"usage":{"input_tokens":10,"output_tokens":1}}`
 }
 
 func ftoa(f float64) string {
@@ -81,7 +85,7 @@ func ftoa(f float64) string {
 }
 
 func TestSystemOne_RequestContract(t *testing.T) {
-	f, c := newFake(t, choiceBody("safe", 0.98, 0.9))
+	f, c := newFake(t, choiceBody("safe", 0.01, 0.01, 0.98))
 	res, err := c.ClassifyPrompt(context.Background(), "a lighthouse at dawn")
 	if err != nil {
 		t.Fatalf("ClassifyPrompt: %v", err)
@@ -128,7 +132,7 @@ func TestSystemOne_RequestContract(t *testing.T) {
 }
 
 func TestSystemOne_NoAPIKey_OmitsAuthorization(t *testing.T) {
-	f, c := newFake(t, choiceBody("safe", 0.98, 0.9))
+	f, c := newFake(t, choiceBody("safe", 0.01, 0.01, 0.98))
 	c.Client.APIKey = ""
 	if _, err := c.ClassifyPrompt(context.Background(), "x"); err != nil {
 		t.Fatal(err)
@@ -146,16 +150,18 @@ func TestSystemOne_Verdicts(t *testing.T) {
 		body string
 		want string
 	}{
-		{"forbidden label", choiceBody("weapons", 0.01, 0.95), "weapons"},
-		{"label case-insensitive", choiceBody("SELF_HARM", 0.01, 0.95), "self_harm"},
-		{"low confidence safe is ambiguous", choiceBody("safe", 0.55, 0.3), "ambiguous"},
-		{"low confidence unsafe is ambiguous", choiceBody("weapons", 0.4, 0.5), "ambiguous"},
-		{"threshold is inclusive", choiceBody("safe", 0.9, 0.6), "safe"},
-		{"label outside closed set", choiceBody("totally_fine", 0.0, 0.99), "unknown_label"},
-		{"safe without P(safe) is ambiguous",
-			`{"model":"m","answers":{"category":{"type":"choice","choice":"safe","probabilities":{},"confidence":0.99}}}`, "ambiguous"},
+		{"forbidden label", choiceBody("weapons", 0.95, 0.04, 0.01), "weapons"},
+		{"label case-insensitive", choiceBody("SELF_HARM", 0.02, 0.95, 0.03), "self_harm"},
+		{"low-probability safe is ambiguous", choiceBody("safe", 0.25, 0.2, 0.55), "ambiguous"},
+		{"low-probability unsafe is ambiguous", choiceBody("weapons", 0.45, 0.2, 0.35), "ambiguous"},
+		{"floor is inclusive", choiceBody("safe", 0.2, 0.2, 0.6), "safe"},
+		// Observed on a local judge: P(safe)=0.72 with confidence 0.39.
+		{"floor uses P(choice), not the confidence field", choiceBody("safe", 0.18, 0.1, 0.72), "safe"},
+		{"rounded distribution accepted", choiceBody("safe", 0.0149, 0.01, 0.975), "safe"},
+		{"tie within rounding accepted", choiceBody("weapons", 0.5, 0.0, 0.5), "ambiguous"},
+		{"label outside closed set", choiceBody("totally_fine", 0.01, 0.01, 0.98), "unknown_label"},
 		{"extra answer fields ignored",
-			`{"model":"laya","answers":{"category":{"type":"choice","choice":"safe","probabilities":{"safe":0.99},"confidence":0.95,"action":{"act_probability":1.0}}}}`, "safe"},
+			`{"model":"laya","answers":{"category":{"type":"choice","choice":"safe","probabilities":{"weapons":0.01,"self_harm":0.01,"safe":0.98},"confidence":0.95,"action":{"act_probability":1.0}}}}`, "safe"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -173,14 +179,21 @@ func TestSystemOne_Verdicts(t *testing.T) {
 
 func TestSystemOne_MalformedResponses_FailClosed(t *testing.T) {
 	cases := map[string]string{
-		"not json":           `nope`,
-		"no answer":          `{"model":"m","answers":{}}`,
-		"wrong answer type":  `{"model":"m","answers":{"category":{"type":"noul","noul":0.1}}}`,
-		"missing confidence": `{"model":"m","answers":{"category":{"type":"choice","choice":"safe","probabilities":{"safe":1}}}}`,
-		"confidence > 1":     choiceBody("safe", 0.99, 1.5),
-		"negative conf":      choiceBody("safe", 0.99, -0.1),
-		"empty choice":       `{"model":"m","answers":{"category":{"type":"choice","choice":"","probabilities":{"safe":1},"confidence":0.9}}}`,
-		"trailing object":    choiceBody("safe", 0.99, 0.9) + choiceBody("weapons", 0.0, 0.9),
+		"not json":          `nope`,
+		"no answer":         `{"model":"m","answers":{}}`,
+		"wrong answer type": `{"model":"m","answers":{"category":{"type":"noul","noul":0.1}}}`,
+		"empty choice":      choiceBody("", 0.01, 0.01, 0.98),
+		"trailing object":   choiceBody("safe", 0.01, 0.01, 0.98) + choiceBody("weapons", 0.98, 0.01, 0.01),
+		// A safe choice the distribution contradicts must not allow.
+		"safe with P(safe)=0":         `{"model":"m","answers":{"category":{"type":"choice","choice":"safe","probabilities":{"safe":0},"confidence":0.99}}}`,
+		"safe not most probable":      choiceBody("safe", 0.5, 0.1, 0.4),
+		"missing label probabilities": `{"model":"m","answers":{"category":{"type":"choice","choice":"safe","probabilities":{"safe":0.99}}}}`,
+		"no probabilities":            `{"model":"m","answers":{"category":{"type":"choice","choice":"safe"}}}`,
+		"unoffered option":            `{"model":"m","answers":{"category":{"type":"choice","choice":"safe","probabilities":{"weapons":0,"self_harm":0,"safe":0.9,"other":0.1}}}}`,
+		"duplicate option":            `{"model":"m","answers":{"category":{"type":"choice","choice":"safe","probabilities":{"weapons":0,"WEAPONS":0,"self_harm":0,"safe":1}}}}`,
+		"not normalised":              choiceBody("safe", 0.3, 0.3, 0.9),
+		"probability > 1":             choiceBody("weapons", 1.5, -0.25, -0.25),
+		"negative probability":        choiceBody("safe", -0.1, 0.1, 1.0),
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -213,7 +226,7 @@ func TestSystemOne_HTTPErrors_NoRetry_NoBodyEcho(t *testing.T) {
 }
 
 func TestSystemOne_RetriesTransientThenSucceeds(t *testing.T) {
-	f, c := newFake(t, choiceBody("safe", 0.99, 0.9), 429, 529, 200)
+	f, c := newFake(t, choiceBody("safe", 0.005, 0.005, 0.99), 429, 529, 200)
 	res, err := c.ClassifyPrompt(context.Background(), "p")
 	if err != nil || res.Category != "safe" {
 		t.Fatalf("res=%+v err=%v", res, err)
@@ -231,6 +244,25 @@ func TestSystemOne_RetriesExhausted_FailClosed(t *testing.T) {
 	}
 	if got := f.calls.Load(); got != systemOneMaxAttempts {
 		t.Errorf("calls = %d, want %d", got, systemOneMaxAttempts)
+	}
+	if err.Error() != "system one HTTP 503" {
+		t.Errorf("error = %q, want the bare status", err)
+	}
+}
+
+// Labels that normalise to the same option are offered once, so a full
+// distribution over the offered options is accepted.
+func TestSystemOne_DuplicateLabelsOfferedOnce(t *testing.T) {
+	f, c := newFake(t, choiceBody("safe", 0.01, 0.01, 0.98))
+	c.Forbidden = []string{"weapons", " Weapons ", "self_harm", "safe"}
+	res, err := c.ClassifyPrompt(context.Background(), "p")
+	if err != nil || res.Category != "safe" {
+		t.Fatalf("res=%+v err=%v", res, err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if n := len(f.lastReq.Questions["category"].Criteria); n != 3 {
+		t.Errorf("criteria has %d options, want 3", n)
 	}
 }
 
@@ -265,7 +297,7 @@ func TestSystemOne_RedirectNotFollowed_KeyNotForwarded(t *testing.T) {
 		if r.Header.Get("Authorization") != "" {
 			leaked.Store(true)
 		}
-		_, _ = io.WriteString(w, choiceBody("safe", 1, 1))
+		_, _ = io.WriteString(w, choiceBody("safe", 0, 0, 1))
 	}))
 	t.Cleanup(sink.Close)
 	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -294,7 +326,7 @@ func TestSystemOne_OversizedResponse_FailClosed(t *testing.T) {
 }
 
 func TestSystemOne_ModelIDSanitised(t *testing.T) {
-	body := `{"model":"<script>alert(1)</script>` + strings.Repeat("x", 200) + `","answers":{"category":{"type":"choice","choice":"weapons","probabilities":{"safe":0},"confidence":0.9}}}`
+	body := `{"model":"<script>alert(1)</script>` + strings.Repeat("x", 200) + `","answers":{"category":{"type":"choice","choice":"weapons","probabilities":{"weapons":0.9,"self_harm":0.05,"safe":0.05}}}}`
 	_, c := newFake(t, body)
 	res, err := c.ClassifyPrompt(context.Background(), "p")
 	if err != nil {
@@ -354,12 +386,13 @@ func TestSystemOneBaseURLFromEnv(t *testing.T) {
 }
 
 // FuzzInterpretSystemOneAnswer checks the fail-closed invariant: whatever
-// the endpoint returns, a "safe" verdict requires a well-formed choice
-// answer with choice=safe, confidence >= threshold, and a valid P(safe).
+// the endpoint returns, a "safe" verdict requires a choice answer picking
+// safe, a probability in [0,1] for exactly the offered options summing to
+// about 1, safe as the most probable option, and P(safe) at the floor.
 func FuzzInterpretSystemOneAnswer(f *testing.F) {
-	f.Add(choiceBody("safe", 0.98, 0.9))
-	f.Add(choiceBody("weapons", 0.01, 0.95))
-	f.Add(`{"answers":{"category":{"type":"choice","choice":"safe","confidence":0.9}}}`)
+	f.Add(choiceBody("safe", 0.01, 0.01, 0.98))
+	f.Add(choiceBody("weapons", 0.95, 0.04, 0.01))
+	f.Add(`{"answers":{"category":{"type":"choice","choice":"safe","probabilities":{"safe":1}}}}`)
 	f.Add(`{"answers":{"category":{"type":"noul","noul":0}}}`)
 	f.Fuzz(func(t *testing.T, body string) {
 		var resp systemOneResponse
@@ -371,11 +404,26 @@ func FuzzInterpretSystemOneAnswer(f *testing.F) {
 			return
 		}
 		a := resp.Answers[systemOneQuestionID]
-		p, hasP := a.Probabilities["safe"]
-		if a.Type != "choice" || strings.ToLower(strings.TrimSpace(a.Choice)) != "safe" ||
-			a.Confidence == nil || *a.Confidence < systemOneMinConfidence || *a.Confidence > 1 ||
-			!hasP || p < 0 || p > 1 {
-			t.Fatalf("safe verdict from malformed answer: %s", body)
+		if a.Type != "choice" || strings.ToLower(strings.TrimSpace(a.Choice)) != "safe" {
+			t.Fatalf("safe verdict without a safe choice: %s", body)
+		}
+		seen := map[string]bool{}
+		sum, pSafe, pMax := 0.0, -1.0, 0.0
+		for k, v := range a.Probabilities {
+			n := strings.ToLower(strings.TrimSpace(k))
+			if seen[n] || (n != "safe" && n != "weapons" && n != "self_harm") || !(v >= 0 && v <= 1) {
+				t.Fatalf("safe verdict from invalid distribution: %s", body)
+			}
+			seen[n] = true
+			sum += v
+			pMax = math.Max(pMax, v)
+			if n == "safe" {
+				pSafe = v
+			}
+		}
+		if len(seen) != 3 || math.Abs(sum-1) > systemOneSumTolerance ||
+			pSafe < minConfidence || pSafe+systemOneTieTolerance < pMax {
+			t.Fatalf("safe verdict from inconsistent distribution: %s", body)
 		}
 		if len(res.Reasoning) > maxReasoningLen {
 			t.Fatalf("reasoning not capped: %d", len(res.Reasoning))
@@ -387,6 +435,9 @@ func FuzzInterpretSystemOneAnswer(f *testing.F) {
 // It uses TYPESAFE_BASE_URL / TYPESAFE_API_KEY like the engine does, so it
 // works against hosted Jev or a local Laya judge. Skipped in CI.
 func TestSystemOne_Live(t *testing.T) {
+	if os.Getenv("CI") != "" {
+		t.Skip("live System One test never runs in CI")
+	}
 	if os.Getenv("TG_SYSTEMONE_LIVE") != "1" {
 		t.Skip("set TG_SYSTEMONE_LIVE=1 (plus TYPESAFE_BASE_URL / TYPESAFE_API_KEY) to run against a real System One endpoint")
 	}

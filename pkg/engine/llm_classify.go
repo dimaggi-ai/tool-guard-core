@@ -183,12 +183,13 @@ func getOrCreateClassifier(endpoint, model string, forbidden []string) *llmguard
 	return llmguard.NewClassifier(cli, model, forbidden)
 }
 
-// systemOneClients memoises one client per (base URL, API key) pair read
-// from the environment, so a changed environment takes effect without a
-// stale client.
+// systemOneClient holds the client for the current TYPESAFE_BASE_URL /
+// TYPESAFE_API_KEY pair. A changed environment replaces it, so a rotated
+// key is not kept.
 var (
-	systemOneClientMu sync.Mutex
-	systemOneClients  = map[[2]string]*llmguard.SystemOneClient{}
+	systemOneClientMu  sync.Mutex
+	systemOneClientCfg [2]string
+	systemOneClient    *llmguard.SystemOneClient
 )
 
 func evalSystemOneClassify(ctx context.Context, model string, forbidden []string, prompt string) (bool, string) {
@@ -201,21 +202,19 @@ func evalSystemOneClassify(ctx context.Context, model string, forbidden []string
 }
 
 func getSystemOneClient() (*llmguard.SystemOneClient, error) {
-	key := [2]string{llmguard.SystemOneBaseURLFromEnv(), os.Getenv(llmguard.EnvSystemOneAPIKey)}
+	cfg := [2]string{llmguard.SystemOneBaseURLFromEnv(), os.Getenv(llmguard.EnvSystemOneAPIKey)}
 	systemOneClientMu.Lock()
 	defer systemOneClientMu.Unlock()
-	if cli, ok := systemOneClients[key]; ok {
-		return cli, nil
+	if systemOneClient != nil && cfg == systemOneClientCfg {
+		return systemOneClient, nil
 	}
-	cli, err := llmguard.NewSystemOneClient(key[0], key[1])
+	cli, err := llmguard.NewSystemOneClient(cfg[0], cfg[1])
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", llmguard.EnvSystemOneBaseURL, err)
 	}
-	// The environment is operator-controlled, so this map stays tiny;
-	// the bound only guards against unbounded growth.
-	if len(systemOneClients) >= llmClientCacheMaxEntries {
-		return cli, nil
+	if systemOneClient != nil {
+		systemOneClient.HTTP.CloseIdleConnections()
 	}
-	systemOneClients[key] = cli
+	systemOneClientCfg, systemOneClient = cfg, cli
 	return cli, nil
 }

@@ -338,12 +338,17 @@ conditions:
       - self_harm_encouragement
 ```
 
-The engine asks the model to pick the one label, from the `forbidden`
-labels or `safe`, that fits the text at `prompt_field`. The answer is always
-one of those options, with a probability for each. The rule stays silent
-only when the model picks `safe` with confidence of at least 0.6 and
-reports a probability for `safe`. Any other outcome fires it, including
-errors and timeouts.
+The engine asks the model which option fits the text at `prompt_field`:
+one of the `forbidden` labels, or `safe`. Labels become the option names,
+so use descriptive ones such as `weapons_instructions`. The rule stays
+silent only when the model picks `safe`, `safe` is the most probable
+option, and its probability is at least 0.6. The answer must give a
+probability for every option, and the probabilities must sum to 1.
+Anything else fires the rule, including errors and timeouts. The audit
+detail records the model name the endpoint returned.
+
+The 0.6 floor is fixed and generic, not calibrated for your prompts.
+Test the classifier on your own traffic before you rely on it.
 
 The endpoint is configured by the operator, not the policy:
 
@@ -353,10 +358,10 @@ The endpoint is configured by the operator, not the policy:
 | `TYPESAFE_API_KEY` | (unset) | Bearer key. Omit it for a self-hosted endpoint that does not check keys. |
 
 Plain `http` is accepted only for loopback hosts (`localhost`,
-`127.0.0.0/8`, `::1`) because the request carries the key. Redirects are not followed. The backend is text-only, so
-`ollama_url` and `image_url_field` are rejected at load. Label names
-are sent to the model as the option names, so choose descriptive ones
-(`weapons_instructions` works better than `w1`).
+`127.0.0.0/8`, `::1`) because the request carries the key. Redirects are
+not followed. Responses with status 429, 503 or 529 are retried within
+`timeout_seconds`. The backend is text-only, so `ollama_url` and
+`image_url_field` are rejected at load.
 
 See [content-gen-bundle.md](content-gen-bundle.md) for a full
 walk-through of the Ollama backend.
