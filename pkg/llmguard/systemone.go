@@ -279,6 +279,7 @@ func (c *SystemOneClassifier) ClassifyPrompt(ctx context.Context, prompt string)
 	if err != nil {
 		return &ClassifyResult{Category: "error", Reasoning: capReasoning(err.Error())}, err
 	}
+	resp.Model = c.Client.reportedModel(resp.Model)
 	res, err := interpretSystemOneAnswer(resp, labels)
 	if err != nil {
 		return &ClassifyResult{Category: "error", Reasoning: capReasoning(err.Error())}, err
@@ -395,6 +396,32 @@ func modelID(s string) string {
 	}
 	return b.String()
 }
+
+// reportedModel returns the sanitised model name, or "redacted" when it
+// looks like an echo of the request: it shares a run of
+// systemOneEchoWindow characters with the API key, or contains the
+// endpoint host. An endpoint that reflects the Authorization header into
+// "model" would otherwise put the key in the audit detail.
+func (c *SystemOneClient) reportedModel(s string) string {
+	m := modelID(s)
+	if key := modelID(c.APIKey); c.APIKey != "" && key != "unreported" {
+		w := min(systemOneEchoWindow, len(key))
+		for i := 0; i+w <= len(m); i++ {
+			if strings.Contains(key, m[i:i+w]) {
+				return "redacted"
+			}
+		}
+	}
+	if u, err := url.Parse(c.BaseURL); err == nil && u.Hostname() != "" &&
+		strings.Contains(strings.ToLower(m), strings.ToLower(u.Hostname())) {
+		return "redacted"
+	}
+	return m
+}
+
+// systemOneEchoWindow is the shortest run of API-key characters in a
+// reported model name that counts as an echo of the key.
+const systemOneEchoWindow = 8
 
 // retryableStatus is an HTTP status the API documents as transient.
 type retryableStatus int

@@ -338,6 +338,47 @@ func TestSystemOne_OversizedResponse_FailClosed(t *testing.T) {
 	}
 }
 
+// An endpoint that echoes the request into "model" must not put the key or
+// the endpoint address in the audit detail.
+func TestSystemOne_ReportedModelEchoRedacted(t *testing.T) {
+	for name, model := range map[string]string{
+		"whole key":     "Bearer test-key",
+		"key fragment":  "xx-live-SecretKey1234-yy",
+		"endpoint host": "http://127.0.0.1:1234/v1/systemone",
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := &fakeSystemOne{t: t}
+			srv := httptest.NewServer(http.HandlerFunc(f.handler))
+			t.Cleanup(srv.Close)
+			f.body = `{"model":` + jsonString(model) + `,"answers":{"category":{"type":"choice","choice":"weapons","probabilities":{"weapons":0.9,"self_harm":0.05,"safe":0.05}}}}`
+			cli, err := NewSystemOneClient(srv.URL, "ts-live-SecretKey123456789")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if name == "whole key" {
+				cli.APIKey = "test-key"
+			}
+			res, err := NewSystemOneClassifier(cli, DefaultSystemOneModel, []string{"weapons", "self_harm"}).ClassifyPrompt(context.Background(), "p")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.Category != "weapons" || !strings.Contains(res.Reasoning, "model=redacted ") {
+				t.Errorf("result = %+v", res)
+			}
+		})
+	}
+	// A normal model name is kept.
+	_, c := newFake(t, choiceBody("weapons", 0.9, 0.05, 0.05))
+	if res, _ := c.ClassifyPrompt(context.Background(), "p"); !strings.Contains(res.Reasoning, "model=jev-1.13.0 ") {
+		t.Errorf("reasoning = %q", res.Reasoning)
+	}
+}
+
+func jsonString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
 func TestSystemOne_ModelIDSanitised(t *testing.T) {
 	body := `{"model":"<script>alert(1)</script>` + strings.Repeat("x", 200) + `","answers":{"category":{"type":"choice","choice":"weapons","probabilities":{"weapons":0.9,"self_harm":0.05,"safe":0.05}}}}`
 	_, c := newFake(t, body)

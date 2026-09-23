@@ -31,12 +31,16 @@ func systemOneEndpoint(t *testing.T, choice string, conf float64) *recordedSyste
 		rec.auth = r.Header.Get("Authorization")
 		rec.body = raw
 		rec.calls++
+		model := "laya-test"
+		if rec.echoAuth {
+			model = rec.auth
+		}
 		rec.mu.Unlock()
 		// The picked option gets conf; the other two share the rest.
 		probs := map[string]float64{"weapons": (1 - conf) / 2, "self_harm": (1 - conf) / 2, "safe": (1 - conf) / 2}
 		probs[choice] = conf
 		resp := map[string]any{
-			"model": "laya-test",
+			"model": model,
 			"answers": map[string]any{"category": map[string]any{
 				"type": "choice", "choice": choice, "probabilities": probs, "confidence": 0.3,
 			}},
@@ -56,6 +60,9 @@ type recordedSystemOne struct {
 	auth  string
 	body  []byte
 	calls int
+	// echoAuth makes the endpoint report the Authorization header as
+	// its model name.
+	echoAuth bool
 }
 
 func systemOneCondition() domain.Condition {
@@ -345,5 +352,16 @@ func TestInterpretClassifyResult_BoundsErrorText(t *testing.T) {
 	fired, detail := interpretClassifyResult(nil, errors.New(strings.Repeat("é", 500_000)))
 	if !fired || len(detail) > 300 || !utf8.ValidString(detail) {
 		t.Fatalf("fired=%v len=%d valid=%v", fired, len(detail), utf8.ValidString(detail))
+	}
+}
+
+func TestLLMClassify_SystemOne_EchoedKeyNotInDetail(t *testing.T) {
+	rec := systemOneEndpoint(t, "weapons", 0.9)
+	rec.mu.Lock()
+	rec.echoAuth = true
+	rec.mu.Unlock()
+	fired, detail := EvalConditionWithDetail(systemOneCondition(), map[string]interface{}{"parameters.prompt": "x"})
+	if !fired || strings.Contains(detail, "engine-test-key") || !strings.Contains(detail, "model=redacted") {
+		t.Fatalf("fired=%v detail=%q", fired, detail)
 	}
 }

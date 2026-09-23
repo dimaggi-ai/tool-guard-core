@@ -347,6 +347,7 @@ probability for every option, and the probabilities must sum to 1.
 Anything else fires the rule, including errors and timeouts. When the
 rule fires, the audit detail records the model name the endpoint returned,
 cut to 64 characters of letters, digits and `._:/-`.
+If the name repeats part of the API key or the endpoint host, it is recorded as `redacted`.
 
 The 0.6 floor is fixed and generic, not calibrated for your prompts.
 Test the classifier on your own traffic before you rely on it.
