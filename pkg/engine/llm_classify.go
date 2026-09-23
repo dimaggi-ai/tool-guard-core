@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -93,9 +94,13 @@ func evalLLMClassifyWithDetail(s *domain.LLMClassify, fields map[string]interfac
 		}
 	}
 
+	systemOne := s.Backend == domain.LLMBackendSystemOne
 	model := s.Model
 	if model == "" {
 		model = "gemma4:e4b"
+		if systemOne {
+			model = llmguard.DefaultSystemOneModel
+		}
 	}
 	timeout := time.Duration(s.TimeoutSeconds) * time.Second
 	if timeout <= 0 {
@@ -108,6 +113,10 @@ func evalLLMClassifyWithDetail(s *domain.LLMClassify, fields map[string]interfac
 	if h := GetLLMClassifyHook(); h != nil {
 		res, err := h(ctx, prompt, imageURL, s.Forbidden, model)
 		return interpretClassifyResult(res, err)
+	}
+
+	if systemOne {
+		return evalSystemOneClassify(ctx, model, s.Forbidden, prompt)
 	}
 
 	endpoint := s.OllamaURL
@@ -172,4 +181,41 @@ func getOrCreateClassifier(endpoint, model string, forbidden []string) *llmguard
 		llmClientCache[endpoint] = cli
 	}
 	return llmguard.NewClassifier(cli, model, forbidden)
+}
+
+// systemOneClients memoises one client per (base URL, API key) pair read
+// from the environment, so a changed environment takes effect without a
+// stale client.
+var (
+	systemOneClientMu sync.Mutex
+	systemOneClients  = map[[2]string]*llmguard.SystemOneClient{}
+)
+
+func evalSystemOneClassify(ctx context.Context, model string, forbidden []string, prompt string) (bool, string) {
+	cli, err := getSystemOneClient()
+	if err != nil {
+		return true, fmt.Sprintf("llm_classify: %v — fail closed", err)
+	}
+	res, err := llmguard.NewSystemOneClassifier(cli, model, forbidden).ClassifyPrompt(ctx, prompt)
+	return interpretClassifyResult(res, err)
+}
+
+func getSystemOneClient() (*llmguard.SystemOneClient, error) {
+	key := [2]string{llmguard.SystemOneBaseURLFromEnv(), os.Getenv(llmguard.EnvSystemOneAPIKey)}
+	systemOneClientMu.Lock()
+	defer systemOneClientMu.Unlock()
+	if cli, ok := systemOneClients[key]; ok {
+		return cli, nil
+	}
+	cli, err := llmguard.NewSystemOneClient(key[0], key[1])
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", llmguard.EnvSystemOneBaseURL, err)
+	}
+	// The environment is operator-controlled, so this map stays tiny;
+	// the bound only guards against unbounded growth.
+	if len(systemOneClients) >= llmClientCacheMaxEntries {
+		return cli, nil
+	}
+	systemOneClients[key] = cli
+	return cli, nil
 }

@@ -193,7 +193,8 @@ type Condition struct {
 	ShellClassify *ShellClassify `json:"shell_classify,omitempty"`
 
 	// LLMClassify, if non-nil, asks a local Ollama-served model
-	// (Gemma 4 multimodal variants by default) to classify a
+	// (Gemma 4 multimodal variants by default) or a TypeSafe System
+	// One model (backend: systemone) to classify a
 	// generative prompt — text only or text+image — against a list
 	// of forbidden content categories. Implemented in
 	// pkg/llmguard.Classifier. Fail-closed: any error or low-
@@ -509,10 +510,18 @@ type HTTPRequire struct {
 	DeniedPorts    []int    `json:"denied_ports,omitempty"`
 }
 
-// LLMClassify configures a Gemma-class content classifier for
-// generative tool prompts (image_gen, audio_gen, video_gen, text_gen).
-// The engine calls an Ollama-served model (default Gemma 4 e4b) and
-// asks for a strict-JSON verdict against the Forbidden category list.
+// LLMClassify backends.
+const (
+	LLMBackendOllama    = "ollama"
+	LLMBackendSystemOne = "systemone"
+)
+
+// LLMClassify configures a content classifier for generative tool
+// prompts (image_gen, audio_gen, video_gen, text_gen). With the default
+// ollama backend the engine calls an Ollama-served model (default Gemma 4
+// e4b) and asks for a strict-JSON verdict against the Forbidden category
+// list. With the systemone backend it asks a TypeSafe System One model
+// one Choice question whose options are the Forbidden labels plus "safe".
 // Returning a category from that list — or an error / low confidence
 // — makes the rule fire.
 type LLMClassify struct {
@@ -533,9 +542,19 @@ type LLMClassify struct {
 	// or "safe"; any non-"safe" label fires the rule.
 	Forbidden []string `json:"forbidden"`
 
-	// Model names the Ollama model tag to use. Defaults to
-	// "gemma4:e4b". Operators can swap to any multimodal Ollama
-	// model — qwen2-vl, llava, etc.
+	// Backend selects the classifier: "ollama" (the default when empty)
+	// or "systemone" for a TypeSafe System One model such as Jev, or a
+	// self-hosted endpoint that serves the same API. The System One
+	// endpoint and API key come from the operator's TYPESAFE_BASE_URL
+	// and TYPESAFE_API_KEY environment variables, never from the policy.
+	// The systemone backend is text-only: ImageURLField and OllamaURL
+	// are rejected at load.
+	Backend string `json:"backend,omitempty"`
+
+	// Model names the model to use. For the ollama backend it is an
+	// Ollama tag and defaults to "gemma4:e4b"; operators can swap to
+	// any multimodal Ollama model (qwen2-vl, llava, etc.). For the
+	// systemone backend it defaults to "jev-latest".
 	Model string `json:"model,omitempty"`
 
 	// OllamaURL overrides the default http://localhost:11434

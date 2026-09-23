@@ -461,6 +461,8 @@ load.
 | `/readyz` returns 503 and reports a poisoned audit writer | An audit append failed and the proxy could not durably prove rollback to the pre-write boundary, or rotation changed the on-disk topology without completing its metadata barrier | Stop the proxy; preserve the log and complete rotation set for incident review; repair or restore the uncertain state; run `tg verify`; restart only after verification succeeds |
 | Proxy returns 503 on every `/evaluate` | `-fail-closed=true` and no policies loaded | Check `-policy-dir` exists and contains a valid `*.yaml` |
 | Every `llm_classify` rule times out | Ollama unreachable; check `-ollama_url` in policy or that Ollama is running on the configured endpoint | `curl http://localhost:11434/api/tags` |
+| Every `backend: systemone` rule fires with `system one HTTP 401` | `TYPESAFE_API_KEY` is missing or wrong in the environment of the process that evaluates policies | Check the environment of `tg-proxy` or `tg`; the key is read from the environment, never from the policy |
+| `backend: systemone` rules fire with `TYPESAFE_BASE_URL: ...` | The base URL is invalid, or uses plain `http` for a host other than `localhost`, `127.0.0.0/8` or `::1` | Use `https`, or a loopback address for a local endpoint |
 | Latency suddenly 10x worse | Cold-start of a freshly-pulled Ollama model | First call after model swap is ~5-20s; subsequent calls are ~600ms |
 | Escalation poll returns 404 | The proxy restarted (in-memory store) or the entry expired | Restart agent; the agent's next call will re-evaluate |
 | Rate limit fires on the wrong agent | Multiple agents share the same `agent_id` | Make the agent_id unique per logical agent identity |

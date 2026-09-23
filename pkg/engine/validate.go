@@ -215,6 +215,21 @@ func validateCondition(c *domain.Condition, ctx string, depth int, underNot bool
 		if c.LLMClassify.PromptField == "" {
 			return fmt.Errorf("%s/llm_classify: prompt_field is required", ctx)
 		}
+		switch c.LLMClassify.Backend {
+		case "", domain.LLMBackendOllama:
+		case domain.LLMBackendSystemOne:
+			// The endpoint and key come from the operator environment;
+			// a policy-supplied URL would let a policy author redirect
+			// the bearer key. System One takes text state only.
+			if c.LLMClassify.OllamaURL != "" {
+				return fmt.Errorf("%s/llm_classify: ollama_url is not used by backend %q; set TYPESAFE_BASE_URL in the operator environment instead", ctx, domain.LLMBackendSystemOne)
+			}
+			if c.LLMClassify.ImageURLField != "" {
+				return fmt.Errorf("%s/llm_classify: image_url_field is not supported by backend %q (text only)", ctx, domain.LLMBackendSystemOne)
+			}
+		default:
+			return fmt.Errorf("%s/llm_classify: unknown backend %q (want %q or %q)", ctx, c.LLMClassify.Backend, domain.LLMBackendOllama, domain.LLMBackendSystemOne)
+		}
 		if c.LLMClassify.OllamaURL != "" {
 			if err := validateOllamaURL(c.LLMClassify.OllamaURL); err != nil {
 				return fmt.Errorf("%s/llm_classify/ollama_url: %w", ctx, err)

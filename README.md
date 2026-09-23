@@ -179,7 +179,7 @@ not depend on it.
 - Shell classifier (env-rewrap detection, argv path resolution)
 - Write classifier (file-write path allow/deny-lists, byte ceiling, denied-content regex)
 - HTTP classifier (egress host/scheme/method/port allow/deny-lists)
-- Local LLM content classifier (Gemma 4 via Ollama — image/audio/text gen)
+- LLM content classifier (Gemma 4 via Ollama — image/audio/text gen — or a TypeSafe System One model such as Jev, text only)
 - Reversibility classifier + irreversibility floor — deterministically class every call reversible / recoverable / irreversible / unknown, and gate irreversible actions to human oversight ([`policies/irreversibility_floor.yaml`](policies/irreversibility_floor.yaml))
 - `tg coverage` — measures what fraction of an agent's tool calls have any governing policy
 - Battle-test harness (`cmd/battle-test`)

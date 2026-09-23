@@ -321,8 +321,45 @@ the rule. Empty model responses are treated as `model_refused`
 (fail-closed). Confidence below 0.6 is `ambiguous` (also
 fail-closed). Image URLs are fetched through an SSRF-hardened client.
 
+#### System One backend
+
+Set `backend: systemone` to classify with a TypeSafe System One model
+(Jev by default) instead of Ollama:
+
+```yaml
+conditions:
+  llm_classify:
+    backend: systemone
+    prompt_field: parameters.prompt
+    model: jev-latest        # optional; default jev-latest
+    timeout_seconds: 10
+    forbidden:
+      - weapons_instructions
+      - self_harm_encouragement
+```
+
+The engine asks the model to pick the one label, from the `forbidden`
+labels or `safe`, that fits the text at `prompt_field`. The answer is always
+one of those options, with a probability for each. The rule stays silent
+only when the model picks `safe` with confidence of at least 0.6 and
+reports a probability for `safe`. Any other outcome fires it, including
+errors and timeouts.
+
+The endpoint is configured by the operator, not the policy:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | Base URL; the engine posts to `/v1/systemone`. Use it for a self-hosted endpoint that serves the TypeSafe System One API. |
+| `TYPESAFE_API_KEY` | (unset) | Bearer key. Omit it for a self-hosted endpoint that does not check keys. |
+
+Plain `http` is accepted only for loopback hosts (`localhost`,
+`127.0.0.0/8`, `::1`) because the request carries the key. Redirects are not followed. The backend is text-only, so
+`ollama_url` and `image_url_field` are rejected at load. Label names
+are sent to the model as the option names, so choose descriptive ones
+(`weapons_instructions` works better than `w1`).
+
 See [content-gen-bundle.md](content-gen-bundle.md) for a full
-walk-through.
+walk-through of the Ollama backend.
 
 ## Condition trees
 
@@ -445,7 +482,9 @@ refuse:
 - glob with > 2 `**` segments
 - LLM-classify with empty `forbidden` list, `safe` as a forbidden
   label, duplicates, comma/newline/quote in a label, > 64 labels,
-  bad `ollama_url` scheme, `timeout_seconds` outside `[0, 120]`
+  bad `ollama_url` scheme, `timeout_seconds` outside `[0, 120]`,
+  an unknown `backend`, or `ollama_url` / `image_url_field` with
+  `backend: systemone`
 
 A policy that fails any of these gates is rejected at load; the
 previously loaded policy set stays live.

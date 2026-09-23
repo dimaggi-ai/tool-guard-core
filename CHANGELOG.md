@@ -164,6 +164,27 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   verifier: an exact-maximum record is accepted and a larger record is rejected
   before JSON decoding.
 
+### System One classifier backend
+
+- `llm_classify` accepts `backend: systemone`, which classifies the prompt
+  with a TypeSafe System One model (default `jev-latest`) or any endpoint
+  that serves the same API, such as a self-hosted judge. The model picks
+  one label from the policy's `forbidden` labels plus `safe`, so the verdict
+  is always a label from that set; no free text is parsed. As with the
+  Ollama backend, the rule fails closed: errors, malformed answers, labels
+  outside the set, and confidence below 0.6 all fire it. The audit detail
+  records the model name the endpoint returned.
+- The endpoint and key come from the operator environment, never from the
+  policy file. A policy cannot send the key elsewhere.
+  `TYPESAFE_BASE_URL` defaults to `https://api.typesafe.ai`;
+  `TYPESAFE_API_KEY` has no default. Plain `http` is accepted only for
+  loopback hosts (`localhost`, `127.0.0.0/8`, `::1`). Redirects are not
+  followed. 429, 503, and 529 responses are retried within the rule's
+  `timeout_seconds`. The backend is text-only, so `ollama_url` and
+  `image_url_field` are rejected at load. Unknown `backend` values are
+  rejected. Policies without `backend` keep the Ollama behavior
+  unchanged.
+
 ### Documentation integrity
 
 - The complete `tg` command reference, classifier list, and lint-check table
