@@ -273,6 +273,23 @@ passes have real precedent instead of a starting from scratch.
   until all required seats return verdicts; these fixes do not substitute for
   that gate.
 
+- **2026-09 · `pkg/llmguard` System One backend, 0.8.0.** Maintainer-run
+  panel cycles and five further model review rounds found fail-open and
+  key-exposure paths in the response handling. `encoding/json` keeps the
+  last of repeated keys and matches struct fields without regard to case,
+  so a repeated or case-aliased `probabilities`, `choice` or answer could
+  replace a forbidden verdict with `safe`, and a null probability could
+  decode as 0. An endpoint could also echo the bearer key into the audit detail
+  through the answer type or the reported model name, or into the process
+  log through bytes sent on an idle keep-alive connection. The client now
+  rejects any repeated key, folded as `encoding/json` folds it, before
+  decoding; its errors carry no response text; a reported model name that
+  repeats the key or the endpoint host is recorded as `redacted`; and
+  connections are not reused. Each fix has a regression test that fails
+  without it, and the fuzz test runs the real decode path. Two docs claims
+  were also corrected: the recorded model name is sanitised, and the
+  probability sum is checked within 0.01. → pillars 1, 4, and 5.
+
 ## Where this fits in the release checklist
 
 `RELEASING.md`'s "Before tagging at all" section should include running

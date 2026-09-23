@@ -6,7 +6,7 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.8.0] — 2026-08-26
+## [0.8.0] — 2026-09-23
 
 ### Breaking mode-precedence correction
 
@@ -120,6 +120,21 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   This is an intentional pre-1.0 source break. The hook signature and runtime
   behavior are unchanged.
 
+### System One classifier backend
+
+- `llm_classify` accepts `backend: systemone`, which classifies the prompt
+  with a TypeSafe System One model (default `jev-latest`) or a self-hosted
+  endpoint that serves the same API. The rule fires unless the model picks
+  `safe` with a probability of at least 0.6. Errors, labels outside the
+  policy's set, and incomplete or inconsistent probability distributions
+  also fire the rule. See
+  [creating-policies.md](docs/creating-policies.md#system-one-backend).
+- The endpoint and key come from `TYPESAFE_BASE_URL` and
+  `TYPESAFE_API_KEY` in the operator environment, never from the policy
+  file, so a policy cannot send the key elsewhere. The backend is
+  text-only: `ollama_url` and `image_url_field` are rejected at load, as
+  are unknown `backend` values. Policies without `backend` are unchanged.
+
 ### Release verification
 
 - Tag-triggered releases now call the complete CI workflow and cannot build or
@@ -163,21 +178,6 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 - Export uses the same 4 MiB logical-record boundary as audit writers and the
   verifier: an exact-maximum record is accepted and a larger record is rejected
   before JSON decoding.
-
-### System One classifier backend
-
-- `llm_classify` accepts `backend: systemone`, which classifies the prompt
-  with a TypeSafe System One model (default `jev-latest`) or a self-hosted
-  endpoint that serves the same API. The rule fires unless the model picks
-  `safe` with a probability of at least 0.6. Errors, labels outside the
-  policy's set, and incomplete or inconsistent probability distributions
-  also fire the rule. See
-  [creating-policies.md](docs/creating-policies.md#system-one-backend).
-- The endpoint and key come from `TYPESAFE_BASE_URL` and
-  `TYPESAFE_API_KEY` in the operator environment, never from the policy
-  file, so a policy cannot send the key elsewhere. The backend is
-  text-only: `ollama_url` and `image_url_field` are rejected at load, as
-  are unknown `backend` values. Policies without `backend` are unchanged.
 
 ### Documentation integrity
 

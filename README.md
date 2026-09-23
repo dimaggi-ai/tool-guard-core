@@ -629,6 +629,9 @@ Comprehensive docs live in [`docs/`](docs/README.md):
 > duplicate policy/rule identities are rejected; new audit writes use canonical
 > v2 and must not be resumed by a 0.7 writer; and direct access to
 > `engine.LLMClassifyHook` is replaced by its synchronized getter/setter.
+> `llm_classify` gains a System One backend (`backend: systemone`). It is
+> text-only, makes a network call for each classified prompt, and its fixed 0.6
+> floor is not calibrated for your traffic.
 > Upgrade every writer and verifier that shares a chain together, run `tg lint`
 > and `tg simulate` before rollout, and follow the exact migration checklist in
 > [Release-Notes.md](Release-Notes.md).

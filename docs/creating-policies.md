@@ -361,8 +361,8 @@ The endpoint is configured by the operator, not the policy:
 
 Plain `http` is accepted only for loopback hosts (`localhost`,
 `127.0.0.0/8`, `::1`) because the request carries the key. Redirects are
-not followed. Responses with status 429, 503 or 529 are retried within
-`timeout_seconds`. The backend is text-only, so `ollama_url` and
+not followed, and connections are not reused between calls. Responses
+with status 429, 503 or 529 are retried within `timeout_seconds`. The backend is text-only, so `ollama_url` and
 `image_url_field` are rejected at load.
 
 See [content-gen-bundle.md](content-gen-bundle.md) for a full
