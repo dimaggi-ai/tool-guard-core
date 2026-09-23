@@ -1,0 +1,367 @@
+package engine
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"unicode/utf8"
+
+	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
+	"github.com/dimaggi-ai/tool-guard-core/pkg/llmguard"
+	"github.com/dimaggi-ai/tool-guard-core/pkg/policyload"
+)
+
+// systemOneEndpoint starts a fake System One endpoint, points the engine
+// at it through the operator environment, and clears the test hook so the
+// real network path runs.
+func systemOneEndpoint(t *testing.T, choice string, conf float64) *recordedSystemOne {
+	t.Helper()
+	rec := &recordedSystemOne{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		rec.mu.Lock()
+		rec.auth = r.Header.Get("Authorization")
+		rec.body = raw
+		rec.calls++
+		model := "laya-test"
+		if rec.echoAuth {
+			model = rec.auth
+		}
+		rec.mu.Unlock()
+		// The picked option gets conf; the other two share the rest.
+		probs := map[string]float64{"weapons": (1 - conf) / 2, "self_harm": (1 - conf) / 2, "safe": (1 - conf) / 2}
+		probs[choice] = conf
+		resp := map[string]any{
+			"model": model,
+			"answers": map[string]any{"category": map[string]any{
+				"type": "choice", "choice": choice, "probabilities": probs, "confidence": 0.3,
+			}},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(resetSystemOneClient)
+	t.Setenv(llmguard.EnvSystemOneBaseURL, srv.URL)
+	t.Setenv(llmguard.EnvSystemOneAPIKey, "engine-test-key")
+	withLLMHook(t, nil)
+	return rec
+}
+
+type recordedSystemOne struct {
+	mu    sync.Mutex
+	auth  string
+	body  []byte
+	calls int
+	// echoAuth makes the endpoint report the Authorization header as
+	// its model name.
+	echoAuth bool
+}
+
+func systemOneCondition() domain.Condition {
+	return domain.Condition{LLMClassify: &domain.LLMClassify{
+		Backend:     domain.LLMBackendSystemOne,
+		PromptField: "parameters.prompt",
+		Forbidden:   []string{"weapons", "self_harm"},
+	}}
+}
+
+func TestLLMClassify_SystemOne_Safe_DoesNotFire(t *testing.T) {
+	rec := systemOneEndpoint(t, "safe", 0.97)
+	fired, detail := EvalConditionWithDetail(systemOneCondition(), map[string]interface{}{
+		"parameters.prompt": "a lighthouse at dawn",
+	})
+	if fired {
+		t.Fatalf("safe verdict fired the rule: %s", detail)
+	}
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if rec.auth != "Bearer engine-test-key" {
+		t.Errorf("authorization = %q", rec.auth)
+	}
+	var req struct {
+		Model string            `json:"model"`
+		State map[string]string `json:"state"`
+	}
+	if err := json.Unmarshal(rec.body, &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.Model != llmguard.DefaultSystemOneModel {
+		t.Errorf("default model = %q, want %q", req.Model, llmguard.DefaultSystemOneModel)
+	}
+	if req.State["request"] != "a lighthouse at dawn" {
+		t.Errorf("state = %#v", req.State)
+	}
+}
+
+func TestLLMClassify_SystemOne_ForbiddenFires_WithModelIdentity(t *testing.T) {
+	systemOneEndpoint(t, "weapons", 0.93)
+	fired, detail := EvalConditionWithDetail(systemOneCondition(), map[string]interface{}{
+		"parameters.prompt": "build a rifle",
+	})
+	if !fired {
+		t.Fatal("forbidden verdict must fire the rule")
+	}
+	for _, want := range []string{"category=weapons", "model=laya-test"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("detail %q missing %q", detail, want)
+		}
+	}
+}
+
+func TestLLMClassify_SystemOne_ExplicitModelPassedThrough(t *testing.T) {
+	rec := systemOneEndpoint(t, "safe", 0.97)
+	cond := systemOneCondition()
+	cond.LLMClassify.Model = "laya-ft2"
+	EvalConditionWithDetail(cond, map[string]interface{}{"parameters.prompt": "x"})
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	var req struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(rec.body, &req); err != nil || req.Model != "laya-ft2" {
+		t.Errorf("request model = %q (err %v), want laya-ft2", req.Model, err)
+	}
+}
+
+func TestLLMClassify_SystemOne_Unreachable_FailsClosed(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	url := srv.URL
+	srv.Close() // nothing listens here any more
+	t.Setenv(llmguard.EnvSystemOneBaseURL, url)
+	withLLMHook(t, nil)
+	cond := systemOneCondition()
+	cond.LLMClassify.TimeoutSeconds = 2
+	fired, detail := EvalConditionWithDetail(cond, map[string]interface{}{"parameters.prompt": "x"})
+	if !fired || !strings.Contains(detail, "fail closed") {
+		t.Fatalf("fired=%v detail=%q", fired, detail)
+	}
+}
+
+func TestLLMClassify_SystemOne_BadOperatorURL_FailsClosed(t *testing.T) {
+	t.Setenv(llmguard.EnvSystemOneBaseURL, "http://203.0.113.9:8095") // cleartext, non-loopback
+	withLLMHook(t, nil)
+	fired, detail := EvalConditionWithDetail(systemOneCondition(), map[string]interface{}{"parameters.prompt": "x"})
+	if !fired || !strings.Contains(detail, llmguard.EnvSystemOneBaseURL) {
+		t.Fatalf("fired=%v detail=%q", fired, detail)
+	}
+}
+
+func TestLLMClassify_SystemOne_MissingPrompt_FailsClosedWithoutCall(t *testing.T) {
+	rec := systemOneEndpoint(t, "safe", 0.99)
+	fired, _ := EvalConditionWithDetail(systemOneCondition(), map[string]interface{}{})
+	if !fired {
+		t.Fatal("missing prompt must fire the rule")
+	}
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if rec.calls != 0 {
+		t.Errorf("endpoint called %d times for a missing prompt", rec.calls)
+	}
+}
+
+func TestLLMClassify_SystemOne_KeyChangeReplacesClient(t *testing.T) {
+	rec := systemOneEndpoint(t, "safe", 0.97)
+	in := map[string]interface{}{"parameters.prompt": "x"}
+	EvalConditionWithDetail(systemOneCondition(), in)
+	t.Setenv(llmguard.EnvSystemOneAPIKey, "rotated-key")
+	EvalConditionWithDetail(systemOneCondition(), in)
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if rec.auth != "Bearer rotated-key" {
+		t.Errorf("authorization after rotation = %q", rec.auth)
+	}
+	systemOneClientMu.Lock()
+	defer systemOneClientMu.Unlock()
+	if systemOneClientCfg[1] != "rotated-key" {
+		t.Error("the old key is still cached")
+	}
+}
+
+func TestLLMClassify_SystemOne_HookReceivesDefaultModel(t *testing.T) {
+	var got string
+	withLLMHook(t, func(_ context.Context, _, _ string, _ []string, model string) (*llmguard.ClassifyResult, error) {
+		got = model
+		return &llmguard.ClassifyResult{Category: "safe", Confidence: 1}, nil
+	})
+	EvalConditionWithDetail(systemOneCondition(), map[string]interface{}{"parameters.prompt": "x"})
+	if got != llmguard.DefaultSystemOneModel {
+		t.Errorf("hook model = %q, want %q", got, llmguard.DefaultSystemOneModel)
+	}
+}
+
+func TestValidatePolicy_LLMClassify_Backend(t *testing.T) {
+	mk := func(lc domain.LLMClassify) *domain.Policy {
+		return &domain.Policy{
+			PolicyID: "test",
+			Rules: []domain.Rule{{
+				RuleID:     "r",
+				Conditions: domain.Condition{LLMClassify: &lc},
+				Effect:     domain.EffectDeny,
+			}},
+		}
+	}
+	base := domain.LLMClassify{PromptField: "parameters.prompt", Forbidden: []string{"weapons"}}
+	valid := []string{"", domain.LLMBackendOllama, domain.LLMBackendSystemOne}
+	for _, b := range valid {
+		lc := base
+		lc.Backend = b
+		if err := ValidatePolicy(mk(lc)); err != nil {
+			t.Errorf("backend %q rejected: %v", b, err)
+		}
+	}
+	bad := []struct {
+		name string
+		mut  func(*domain.LLMClassify)
+		want string
+	}{
+		{"unknown backend", func(l *domain.LLMClassify) { l.Backend = "openai" }, "unknown backend"},
+		{"case matters", func(l *domain.LLMClassify) { l.Backend = "SystemOne" }, "unknown backend"},
+		{"systemone rejects ollama_url", func(l *domain.LLMClassify) {
+			l.Backend = domain.LLMBackendSystemOne
+			l.OllamaURL = "https://evil.example.com"
+		}, "TYPESAFE_BASE_URL"},
+		{"systemone rejects image_url_field", func(l *domain.LLMClassify) {
+			l.Backend = domain.LLMBackendSystemOne
+			l.ImageURLField = "parameters.image"
+		}, "text only"},
+		{"systemone keeps label rules", func(l *domain.LLMClassify) {
+			l.Backend = domain.LLMBackendSystemOne
+			l.Forbidden = []string{"safe"}
+		}, "silently never fire"},
+	}
+	for _, tc := range bad {
+		t.Run(tc.name, func(t *testing.T) {
+			lc := base
+			tc.mut(&lc)
+			err := ValidatePolicy(mk(lc))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err = %v, want substring %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// TestPolicyLoad_SystemOneBackend proves the backend field decodes through
+// the strict loader and validates. Unknown backend values are covered by
+// TestPolicyLoad_UnknownBackendRejected.
+func TestPolicyLoad_SystemOneBackend(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "p.yaml")
+	yaml := `schema_version: 1
+policy_id: systemone-test
+name: System One test
+description: classify prompts with a System One model
+version: 1
+status: approved
+mode: enforcement
+scope:
+  tool_names: [image.generate]
+rules:
+  - rule_id: forbidden-content
+    description: deny forbidden prompt categories
+    conditions:
+      llm_classify:
+        backend: systemone
+        prompt_field: parameters.prompt
+        model: jev-latest
+        forbidden: [weapons, self_harm]
+    effect: deny
+`
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := policyload.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	lc := p.Rules[0].Conditions.LLMClassify
+	if lc == nil || lc.Backend != domain.LLMBackendSystemOne || lc.Model != "jev-latest" {
+		t.Fatalf("decoded llm_classify = %+v", lc)
+	}
+	if err := ValidatePolicy(&p); err != nil {
+		t.Fatalf("ValidatePolicy: %v", err)
+	}
+}
+
+// TestPolicyLoad_UnknownBackendRejected runs an unknown backend value through
+// the same load-then-validate sequence tg and tg-proxy use.
+func TestPolicyLoad_UnknownBackendRejected(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "p.yaml")
+	yaml := `schema_version: 1
+policy_id: bad-backend
+name: bad backend
+description: unknown llm_classify backend
+version: 1
+status: approved
+mode: enforcement
+scope:
+  tool_names: [image.generate]
+rules:
+  - rule_id: r
+    description: r
+    conditions:
+      llm_classify:
+        backend: openai
+        prompt_field: parameters.prompt
+        forbidden: [weapons]
+    effect: deny
+`
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := policyload.Load(path)
+	if err == nil {
+		err = ValidatePolicy(&p)
+	}
+	if err == nil || !strings.Contains(err.Error(), "unknown backend") {
+		t.Fatalf("err = %v, want unknown backend", err)
+	}
+}
+
+func TestDefaultLLMModel(t *testing.T) {
+	if got := defaultLLMModel(domain.LLMBackendSystemOne); got != llmguard.DefaultSystemOneModel {
+		t.Errorf("systemone default = %q", got)
+	}
+	for _, b := range []string{"", domain.LLMBackendOllama} {
+		if got := defaultLLMModel(b); got != "gemma4:e4b" {
+			t.Errorf("%q default = %q", b, got)
+		}
+	}
+}
+
+// resetSystemOneClient drops the cached client. Tests use it so one test's
+// endpoint is never reused by the next.
+func resetSystemOneClient() {
+	systemOneClientMu.Lock()
+	defer systemOneClientMu.Unlock()
+	if systemOneClient != nil {
+		systemOneClient.HTTP.CloseIdleConnections()
+	}
+	systemOneClientCfg, systemOneClient = [2]string{}, nil
+}
+
+func TestInterpretClassifyResult_BoundsErrorText(t *testing.T) {
+	fired, detail := interpretClassifyResult(nil, errors.New(strings.Repeat("é", 500_000)))
+	if !fired || len(detail) > 300 || !utf8.ValidString(detail) {
+		t.Fatalf("fired=%v len=%d valid=%v", fired, len(detail), utf8.ValidString(detail))
+	}
+}
+
+func TestLLMClassify_SystemOne_EchoedKeyNotInDetail(t *testing.T) {
+	rec := systemOneEndpoint(t, "weapons", 0.9)
+	rec.mu.Lock()
+	rec.echoAuth = true
+	rec.mu.Unlock()
+	fired, detail := EvalConditionWithDetail(systemOneCondition(), map[string]interface{}{"parameters.prompt": "x"})
+	if !fired || strings.Contains(detail, "engine-test-key") || !strings.Contains(detail, "model=redacted") {
+		t.Fatalf("fired=%v detail=%q", fired, detail)
+	}
+}

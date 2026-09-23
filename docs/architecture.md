@@ -139,7 +139,7 @@ of these classifier conditions:
 | `sql_classify` | SQL statements and dialect-specific safety requirements |
 | `path_classify` | Filesystem paths, traversal, symlinks, and shell metacharacters |
 | `shell_classify` | Parsed argument vectors, executable allowlists, and shell escapes |
-| `llm_classify` | Local-LLM classification of text and multimodal generation requests |
+| `llm_classify` | LLM classification of generation requests, with a local Ollama model (text and images) or a TypeSafe System One model (text only) |
 | `write_classify` | File-write destinations, size ceilings, and denied content |
 | `http_classify` | Outbound HTTP hosts, schemes, methods, and ports |
 
@@ -255,7 +255,13 @@ conditions:
       - real_person_likeness
 ```
 
-The classifier is framed as a routing task (not a "content safety"
+With `backend: systemone` the same condition calls a TypeSafe System
+One model, which returns the picked label and a probability for each
+option as structured fields. The Ollama-specific handling below (JSON
+parsing, refusal detection, delimiters) does not apply. See
+[creating-policies.md](creating-policies.md#system-one-backend).
+
+The Ollama classifier is framed as a routing task (not a "content safety"
 task) so the underlying Gemma's own safety filter doesn't refuse to
 engage. Empty model responses are interpreted as `model_refused`
 which fires deny (fail-closed). User prompts are wrapped in

@@ -5,14 +5,29 @@ per-change record see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## 0.8.0 — 2026-08-26
+## 0.8.0 — 2026-09-23
 
-"Decision evidence you can carry" — canonical v2 extends what new audit
+The main feature is System One model support: `llm_classify` can classify
+prompts with a TypeSafe System One model, such as hosted Jev or a
+self-hosted endpoint, instead of a local Ollama model. The release also
+expands decision evidence: canonical v2 extends what new audit
 records hash-bind, proxy responses gain correlation receipts, and verified
 JSONL export becomes available. This is an intentionally breaking pre-1.0
 release. Runtime audit records remain SHA-256 hash-chained, not externally
 signed; supply-chain attestations and container signatures described below are
 separate release artifacts.
+
+### System One classifier backend
+
+Add `backend: systemone` to an `llm_classify` condition and set `TYPESAFE_API_KEY` (and `TYPESAFE_BASE_URL` for a
+self-hosted endpoint) in the environment of `tg-proxy` or `tg`. Setup,
+verdict rules and limits are in
+[creating-policies.md](docs/creating-policies.md#system-one-backend).
+
+For this release, the backend was tested end to end against a self-hosted
+endpoint. Against hosted Jev, a request without a key returns HTTP 403 and
+the rule fails closed. A classification with a valid key against hosted Jev
+is still untested.
 
 ### What breaks
 

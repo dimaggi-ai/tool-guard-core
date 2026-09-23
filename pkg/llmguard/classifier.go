@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 )
 
@@ -108,29 +109,7 @@ func (c *Classifier) ClassifyPrompt(ctx context.Context, prompt string, imageBas
 	if err != nil {
 		return &ClassifyResult{Category: "error", Reasoning: "parse: " + err.Error()}, err
 	}
-	// Normalise the category to lowercase + reject if it's not in the
-	// allowed set (label-injection defence — the model could try to
-	// answer with a label that the policy treats as safe).
-	out.Category = strings.ToLower(strings.TrimSpace(out.Category))
-	if out.Category != "safe" && out.Category != "model_refused" {
-		known := false
-		for _, lbl := range c.Forbidden {
-			if out.Category == strings.ToLower(lbl) {
-				known = true
-				break
-			}
-		}
-		if !known {
-			out.Category = "unknown_label"
-		}
-	}
-	// Confidence threshold applies to BOTH safe and unsafe verdicts.
-	// Asymmetric handling (allowing low-confidence safe) would let an
-	// attacker who can perturb the prompt downgrade to safe with low
-	// confidence and bypass the rule.
-	if out.Confidence < 0.6 {
-		out.Category = "ambiguous"
-	}
+	out.Category = verdict(out.Category, out.Confidence, c.Forbidden, "model_refused")
 	// Cap the reasoning text. Free-text from the model lands in
 	// RuleResult.Details / decision_reason / audit log — a hostile
 	// prompt-injected response could include thousands of bytes of
@@ -138,6 +117,35 @@ func (c *Classifier) ClassifyPrompt(ctx context.Context, prompt string, imageBas
 	// dashboards may render unsafely.
 	out.Reasoning = capReasoning(out.Reasoning)
 	return out, nil
+}
+
+// minConfidence is the verdict floor shared by every backend.
+const minConfidence = 0.6
+
+// verdict maps a model's label and its confidence to the category the
+// engine acts on. Both backends use it.
+//
+// A label other than safe, a forbidden label, or one of extra becomes
+// "unknown_label" (label-injection defence: the model could try to answer
+// with a label the policy treats as safe). The confidence floor applies
+// to safe and unsafe verdicts alike; asymmetric handling would let an
+// attacker who can perturb the prompt downgrade to a low-confidence safe
+// and bypass the rule.
+func verdict(label string, conf float64, forbidden []string, extra ...string) string {
+	c := normLabel(label)
+	if c != "safe" && !containsLabel(forbidden, c) && !slices.Contains(extra, c) {
+		c = "unknown_label"
+	}
+	if conf < minConfidence {
+		c = "ambiguous"
+	}
+	return c
+}
+
+func normLabel(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
+
+func containsLabel(labels []string, label string) bool {
+	return slices.ContainsFunc(labels, func(l string) bool { return strings.ToLower(l) == label })
 }
 
 // capReasoning bounds the model's free-text reasoning field so audit

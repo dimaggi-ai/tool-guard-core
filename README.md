@@ -179,7 +179,7 @@ not depend on it.
 - Shell classifier (env-rewrap detection, argv path resolution)
 - Write classifier (file-write path allow/deny-lists, byte ceiling, denied-content regex)
 - HTTP classifier (egress host/scheme/method/port allow/deny-lists)
-- Local LLM content classifier (Gemma 4 via Ollama — image/audio/text gen)
+- LLM content classifier for image, audio and text generation prompts, using Gemma 4 via Ollama or a TypeSafe System One model such as Jev (text only)
 - Reversibility classifier + irreversibility floor — deterministically class every call reversible / recoverable / irreversible / unknown, and gate irreversible actions to human oversight ([`policies/irreversibility_floor.yaml`](policies/irreversibility_floor.yaml))
 - `tg coverage` — measures what fraction of an agent's tool calls have any governing policy
 - Battle-test harness (`cmd/battle-test`)
@@ -629,6 +629,9 @@ Comprehensive docs live in [`docs/`](docs/README.md):
 > duplicate policy/rule identities are rejected; new audit writes use canonical
 > v2 and must not be resumed by a 0.7 writer; and direct access to
 > `engine.LLMClassifyHook` is replaced by its synchronized getter/setter.
+> `llm_classify` gains a System One backend (`backend: systemone`). It is
+> text-only, makes a network call for each classified prompt, and its fixed 0.6
+> floor is not calibrated for your traffic.
 > Upgrade every writer and verifier that shares a chain together, run `tg lint`
 > and `tg simulate` before rollout, and follow the exact migration checklist in
 > [Release-Notes.md](Release-Notes.md).

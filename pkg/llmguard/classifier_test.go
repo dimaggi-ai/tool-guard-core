@@ -84,3 +84,14 @@ func TestEncodeImageBase64_Roundtrip(t *testing.T) {
 		t.Errorf("expected 8 chars for 6 bytes, got %d (%q)", len(out), out)
 	}
 }
+
+// The Ollama path matches forbidden labels as it did before System One:
+// lowercased, not trimmed. System One offers labels already normalised.
+func TestVerdict_ForbiddenLabelNotTrimmed(t *testing.T) {
+	if got := verdict("weapons", 0.9, []string{" weapons "}); got != "unknown_label" {
+		t.Errorf("verdict = %q, want unknown_label", got)
+	}
+	if got := verdict("weapons", 0.9, []string{"Weapons"}); got != "weapons" {
+		t.Errorf("verdict = %q, want weapons", got)
+	}
+}

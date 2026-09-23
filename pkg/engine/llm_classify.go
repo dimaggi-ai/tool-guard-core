@@ -3,8 +3,10 @@ package engine
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/llmguard"
@@ -95,7 +97,7 @@ func evalLLMClassifyWithDetail(s *domain.LLMClassify, fields map[string]interfac
 
 	model := s.Model
 	if model == "" {
-		model = "gemma4:e4b"
+		model = defaultLLMModel(s.Backend)
 	}
 	timeout := time.Duration(s.TimeoutSeconds) * time.Second
 	if timeout <= 0 {
@@ -108,6 +110,10 @@ func evalLLMClassifyWithDetail(s *domain.LLMClassify, fields map[string]interfac
 	if h := GetLLMClassifyHook(); h != nil {
 		res, err := h(ctx, prompt, imageURL, s.Forbidden, model)
 		return interpretClassifyResult(res, err)
+	}
+
+	if s.Backend == domain.LLMBackendSystemOne {
+		return evalSystemOneClassify(ctx, model, s.Forbidden, prompt)
 	}
 
 	endpoint := s.OllamaURL
@@ -139,7 +145,7 @@ func evalLLMClassifyWithDetail(s *domain.LLMClassify, fields map[string]interfac
 
 func interpretClassifyResult(res *llmguard.ClassifyResult, err error) (bool, string) {
 	if err != nil {
-		return true, fmt.Sprintf("llm_classify: %v — fail closed", err)
+		return true, fmt.Sprintf("llm_classify: %s — fail closed", boundedErr(err))
 	}
 	if res == nil {
 		return true, "llm_classify: nil result — fail closed"
@@ -154,6 +160,21 @@ func interpretClassifyResult(res *llmguard.ClassifyResult, err error) (bool, str
 		return true, fmt.Sprintf("llm_classify: category=%s confidence=%.2f reason=%s", res.Category, res.Confidence, res.Reasoning)
 	}
 	return true, fmt.Sprintf("llm_classify: category=%s confidence=%.2f", res.Category, res.Confidence)
+}
+
+// maxClassifyErrLen bounds classifier error text in the audit detail.
+const maxClassifyErrLen = 240
+
+func boundedErr(err error) string {
+	s := err.Error()
+	if len(s) <= maxClassifyErrLen {
+		return s
+	}
+	s = s[:maxClassifyErrLen]
+	for len(s) > 0 && !utf8.ValidString(s) {
+		s = s[:len(s)-1]
+	}
+	return s + "…"
 }
 
 func getOrCreateClassifier(endpoint, model string, forbidden []string) *llmguard.Classifier {
@@ -172,4 +193,49 @@ func getOrCreateClassifier(endpoint, model string, forbidden []string) *llmguard
 		llmClientCache[endpoint] = cli
 	}
 	return llmguard.NewClassifier(cli, model, forbidden)
+}
+
+// defaultLLMModel is the model used when the condition names none. Each
+// backend has its own: an Ollama tag means nothing to a System One endpoint.
+func defaultLLMModel(backend string) string {
+	if backend == domain.LLMBackendSystemOne {
+		return llmguard.DefaultSystemOneModel
+	}
+	return "gemma4:e4b"
+}
+
+// systemOneClient holds the client for the current TYPESAFE_BASE_URL /
+// TYPESAFE_API_KEY pair. A changed environment replaces it, so a rotated
+// key is not kept.
+var (
+	systemOneClientMu  sync.Mutex
+	systemOneClientCfg [2]string
+	systemOneClient    *llmguard.SystemOneClient
+)
+
+func evalSystemOneClassify(ctx context.Context, model string, forbidden []string, prompt string) (bool, string) {
+	cli, err := getSystemOneClient()
+	if err != nil {
+		return true, fmt.Sprintf("llm_classify: %s — fail closed", boundedErr(err))
+	}
+	res, err := llmguard.NewSystemOneClassifier(cli, model, forbidden).ClassifyPrompt(ctx, prompt)
+	return interpretClassifyResult(res, err)
+}
+
+func getSystemOneClient() (*llmguard.SystemOneClient, error) {
+	cfg := [2]string{llmguard.SystemOneBaseURLFromEnv(), os.Getenv(llmguard.EnvSystemOneAPIKey)}
+	systemOneClientMu.Lock()
+	defer systemOneClientMu.Unlock()
+	if systemOneClient != nil && cfg == systemOneClientCfg {
+		return systemOneClient, nil
+	}
+	cli, err := llmguard.NewSystemOneClient(cfg[0], cfg[1])
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", llmguard.EnvSystemOneBaseURL, err)
+	}
+	if systemOneClient != nil {
+		systemOneClient.HTTP.CloseIdleConnections()
+	}
+	systemOneClientCfg, systemOneClient = cfg, cli
+	return cli, nil
 }

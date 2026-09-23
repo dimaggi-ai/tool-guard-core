@@ -321,8 +321,52 @@ the rule. Empty model responses are treated as `model_refused`
 (fail-closed). Confidence below 0.6 is `ambiguous` (also
 fail-closed). Image URLs are fetched through an SSRF-hardened client.
 
+#### System One backend
+
+Set `backend: systemone` to classify with a TypeSafe System One model
+(Jev by default) instead of Ollama:
+
+```yaml
+conditions:
+  llm_classify:
+    backend: systemone
+    prompt_field: parameters.prompt
+    model: jev-latest        # optional; default jev-latest
+    timeout_seconds: 10
+    forbidden:
+      - weapons_instructions
+      - self_harm_encouragement
+```
+
+The engine asks the model which option fits the text at `prompt_field`:
+one of the `forbidden` labels, or `safe`. Labels become the option names,
+so use descriptive ones such as `weapons_instructions`. The rule stays
+silent only when the model picks `safe`, `safe` is the most probable
+option, and its probability is at least 0.6. The answer must give a
+probability for every option, and the probabilities must sum to 1 within 0.01.
+Anything else fires the rule, including errors and timeouts. When the
+rule fires, the audit detail records the model name the endpoint returned,
+cut to 64 characters of letters, digits and `._:/-`.
+The name is recorded as `redacted` if it contains the endpoint host or any 8 consecutive characters of the API key (the whole key, if shorter than 8), ignoring case.
+
+The 0.6 floor is fixed and generic, not calibrated for your prompts.
+Test the classifier on your own traffic before you rely on it.
+
+The endpoint is configured by the operator, not the policy:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | Base URL; the engine posts to `/v1/systemone`. Use it for a self-hosted endpoint that serves the TypeSafe System One API. |
+| `TYPESAFE_API_KEY` | (unset) | Bearer key. Omit it for a self-hosted endpoint that does not check keys. |
+
+Plain `http` is accepted only for loopback hosts (`localhost`,
+`127.0.0.0/8`, `::1`) because the request carries the key. Redirects are
+not followed, and connections are not reused between calls. Responses
+with status 429, 503 or 529 are retried within `timeout_seconds`. The backend is text-only, so `ollama_url` and
+`image_url_field` are rejected at load.
+
 See [content-gen-bundle.md](content-gen-bundle.md) for a full
-walk-through.
+walk-through of the Ollama backend.
 
 ## Condition trees
 
@@ -445,7 +489,9 @@ refuse:
 - glob with > 2 `**` segments
 - LLM-classify with empty `forbidden` list, `safe` as a forbidden
   label, duplicates, comma/newline/quote in a label, > 64 labels,
-  bad `ollama_url` scheme, `timeout_seconds` outside `[0, 120]`
+  bad `ollama_url` scheme, `timeout_seconds` outside `[0, 120]`,
+  an unknown `backend`, or `ollama_url` / `image_url_field` with
+  `backend: systemone`
 
 A policy that fails any of these gates is rejected at load; the
 previously loaded policy set stays live.
