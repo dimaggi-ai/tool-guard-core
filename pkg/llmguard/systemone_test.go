@@ -305,11 +305,11 @@ func TestSystemOne_ContextDeadline_FailClosed(t *testing.T) {
 }
 
 func TestSystemOne_RedirectNotFollowed_KeyNotForwarded(t *testing.T) {
-	var leaked atomic.Bool
+	// The sink returns a valid safe answer, so the test fails if the
+	// redirect is followed, with or without the key.
+	var reached atomic.Bool
 	sink := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "" {
-			leaked.Store(true)
-		}
+		reached.Store(true)
 		_, _ = io.WriteString(w, choiceBody("safe", 0, 0, 1))
 	}))
 	t.Cleanup(sink.Close)
@@ -321,12 +321,12 @@ func TestSystemOne_RedirectNotFollowed_KeyNotForwarded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := NewSystemOneClassifier(cli, "jev-latest", []string{"x"}).ClassifyPrompt(context.Background(), "p")
+	res, err := NewSystemOneClassifier(cli, "jev-latest", []string{"weapons", "self_harm"}).ClassifyPrompt(context.Background(), "p")
 	if err == nil || res.Category != "error" {
 		t.Fatalf("redirect must fail closed, got res=%+v err=%v", res, err)
 	}
-	if leaked.Load() {
-		t.Fatal("bearer key forwarded across a redirect")
+	if reached.Load() {
+		t.Fatal("redirect followed")
 	}
 }
 
@@ -345,6 +345,7 @@ func TestSystemOne_ReportedModelEchoRedacted(t *testing.T) {
 		"whole key":     "Bearer test-key",
 		"key fragment":  "xx-live-SecretKey1234-yy",
 		"endpoint host": "http://127.0.0.1:1234/v1/systemone",
+		"long key tail": "privateSuffix9876543210",
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := &fakeSystemOne{t: t}
@@ -355,8 +356,11 @@ func TestSystemOne_ReportedModelEchoRedacted(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if name == "whole key" {
+			switch name {
+			case "whole key":
 				cli.APIKey = "test-key"
+			case "long key tail":
+				cli.APIKey = strings.Repeat("a", 64) + "privateSuffix9876543210"
 			}
 			res, err := NewSystemOneClassifier(cli, DefaultSystemOneModel, []string{"weapons", "self_harm"}).ClassifyPrompt(context.Background(), "p")
 			if err != nil {

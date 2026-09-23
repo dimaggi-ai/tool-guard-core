@@ -378,21 +378,23 @@ func systemOneDistribution(raw map[string]*float64, labels []string) (map[string
 // modelID bounds the endpoint-reported model name before it reaches the
 // audit detail.
 func modelID(s string) string {
-	s = strings.TrimSpace(s)
+	s = modelChars(s, systemOneMaxModelID)
 	if s == "" {
 		return "unreported"
 	}
+	return s
+}
+
+// modelChars keeps the letters, digits and ._:-/ of s, up to limit bytes.
+func modelChars(s string, limit int) string {
 	var b strings.Builder
-	for _, r := range s {
-		if b.Len() >= systemOneMaxModelID {
+	for _, r := range strings.TrimSpace(s) {
+		if b.Len() >= limit {
 			break
 		}
 		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || strings.ContainsRune("._:-/", r) {
 			b.WriteRune(r)
 		}
-	}
-	if b.Len() == 0 {
-		return "unreported"
 	}
 	return b.String()
 }
@@ -404,7 +406,8 @@ func modelID(s string) string {
 // "model" would otherwise put the key in the audit detail.
 func (c *SystemOneClient) reportedModel(s string) string {
 	m := modelID(s)
-	if key := modelID(c.APIKey); c.APIKey != "" && key != "unreported" {
+	// The whole key is compared, not only its first 64 characters.
+	if key := modelChars(c.APIKey, len(c.APIKey)); key != "" {
 		w := min(systemOneEchoWindow, len(key))
 		for i := 0; i+w <= len(m); i++ {
 			if strings.Contains(key, m[i:i+w]) {
