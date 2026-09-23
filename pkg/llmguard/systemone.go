@@ -14,7 +14,6 @@ import (
 	"os"
 	"slices"
 	"strings"
-	"syscall"
 	"time"
 	"unicode"
 )
@@ -141,7 +140,7 @@ func transportFailure(err error) string {
 	switch {
 	case errors.As(err, &dnsErr):
 		return "host not found"
-	case errors.Is(err, syscall.ECONNREFUSED):
+	case isConnRefused(err):
 		return "connection refused"
 	case errors.As(err, &netErr) && netErr.Timeout():
 		return "timeout"
