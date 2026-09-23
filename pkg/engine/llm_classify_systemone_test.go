@@ -42,6 +42,7 @@ func systemOneEndpoint(t *testing.T, choice string, conf float64) *recordedSyste
 		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	t.Cleanup(srv.Close)
+	t.Cleanup(resetSystemOneClient)
 	t.Setenv(llmguard.EnvSystemOneBaseURL, srv.URL)
 	t.Setenv(llmguard.EnvSystemOneAPIKey, "engine-test-key")
 	withLLMHook(t, nil)
@@ -113,8 +114,11 @@ func TestLLMClassify_SystemOne_ExplicitModelPassedThrough(t *testing.T) {
 	EvalConditionWithDetail(cond, map[string]interface{}{"parameters.prompt": "x"})
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
-	if !strings.Contains(string(rec.body), `"model":"laya-ft2"`) {
-		t.Errorf("request body %s does not carry the policy model", rec.body)
+	var req struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(rec.body, &req); err != nil || req.Model != "laya-ft2" {
+		t.Errorf("request model = %q (err %v), want laya-ft2", req.Model, err)
 	}
 }
 
@@ -236,8 +240,9 @@ func TestValidatePolicy_LLMClassify_Backend(t *testing.T) {
 	}
 }
 
-// TestPolicyLoad_SystemOneBackend proves the YAML field name round-trips
-// through the strict loader (unknown fields are rejected there).
+// TestPolicyLoad_SystemOneBackend proves the backend field decodes through
+// the strict loader and validates. Unknown backend values are covered by
+// TestPolicyLoad_UnknownBackendRejected.
 func TestPolicyLoad_SystemOneBackend(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "p.yaml")
@@ -275,4 +280,61 @@ rules:
 	if err := ValidatePolicy(&p); err != nil {
 		t.Fatalf("ValidatePolicy: %v", err)
 	}
+}
+
+// TestPolicyLoad_UnknownBackendRejected runs an unknown backend value through
+// the same load-then-validate sequence tg and tg-proxy use.
+func TestPolicyLoad_UnknownBackendRejected(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "p.yaml")
+	yaml := `schema_version: 1
+policy_id: bad-backend
+name: bad backend
+description: unknown llm_classify backend
+version: 1
+status: approved
+mode: enforcement
+scope:
+  tool_names: [image.generate]
+rules:
+  - rule_id: r
+    description: r
+    conditions:
+      llm_classify:
+        backend: openai
+        prompt_field: parameters.prompt
+        forbidden: [weapons]
+    effect: deny
+`
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := policyload.Load(path)
+	if err == nil {
+		err = ValidatePolicy(&p)
+	}
+	if err == nil || !strings.Contains(err.Error(), "unknown backend") {
+		t.Fatalf("err = %v, want unknown backend", err)
+	}
+}
+
+func TestDefaultLLMModel(t *testing.T) {
+	if got := defaultLLMModel(domain.LLMBackendSystemOne); got != llmguard.DefaultSystemOneModel {
+		t.Errorf("systemone default = %q", got)
+	}
+	for _, b := range []string{"", domain.LLMBackendOllama} {
+		if got := defaultLLMModel(b); got != "gemma4:e4b" {
+			t.Errorf("%q default = %q", b, got)
+		}
+	}
+}
+
+// resetSystemOneClient drops the cached client. Tests use it so one test's
+// endpoint is never reused by the next.
+func resetSystemOneClient() {
+	systemOneClientMu.Lock()
+	defer systemOneClientMu.Unlock()
+	if systemOneClient != nil {
+		systemOneClient.HTTP.CloseIdleConnections()
+	}
+	systemOneClientCfg, systemOneClient = [2]string{}, nil
 }

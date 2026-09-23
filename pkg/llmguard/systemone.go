@@ -14,6 +14,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -51,8 +52,8 @@ const (
 	// systemOneMaxAttempts bounds retries on 429/503/529. The request
 	// context deadline still caps total time.
 	systemOneMaxAttempts = 3
-	maxSystemOneBody     = 1 << 20 // 1 MiB
-	maxModelIDLen        = 64
+	systemOneMaxBody     = 1 << 20 // 1 MiB
+	systemOneMaxModelID  = 64
 )
 
 // SystemOneClient calls POST {BaseURL}/v1/systemone. Safe for concurrent use.
@@ -124,6 +125,23 @@ func ValidateSystemOneBaseURL(raw string) (string, error) {
 	}
 	path := strings.TrimSuffix(strings.TrimRight(u.Path, "/"), systemOnePath)
 	return u.Scheme + "://" + u.Host + strings.TrimRight(path, "/"), nil
+}
+
+// transportFailure names the kind of a failed HTTP call without the URL
+// or address that net and url errors carry.
+func transportFailure(err error) string {
+	var dnsErr *net.DNSError
+	var netErr net.Error
+	switch {
+	case errors.As(err, &dnsErr):
+		return "host not found"
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return "connection refused"
+	case errors.As(err, &netErr) && netErr.Timeout():
+		return "timeout"
+	default:
+		return "network error"
+	}
 }
 
 func isLoopbackHost(h string) bool {
@@ -353,7 +371,7 @@ func modelID(s string) string {
 	}
 	var b strings.Builder
 	for _, r := range s {
-		if b.Len() >= maxModelIDLen {
+		if b.Len() >= systemOneMaxModelID {
 			break
 		}
 		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || strings.ContainsRune("._:-/", r) {
@@ -414,20 +432,20 @@ func (c *SystemOneClient) once(ctx context.Context, body []byte) (*systemOneResp
 	}
 	resp, err := c.HTTP.Do(httpReq)
 	if err != nil {
-		// The URL comes from operator config, but keep the message
-		// generic: it lands in the audit detail.
+		// The message lands in the audit detail, so it names the kind
+		// of failure but not the URL.
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("system one call: %w", ctx.Err())
 		}
-		return nil, fmt.Errorf("system one call failed")
+		return nil, fmt.Errorf("system one call failed: %s", transportFailure(err))
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxSystemOneBody+1))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, systemOneMaxBody+1))
 	if err != nil {
 		return nil, fmt.Errorf("system one: read body")
 	}
-	if len(raw) > maxSystemOneBody {
-		return nil, fmt.Errorf("system one: response exceeds %d bytes", maxSystemOneBody)
+	if len(raw) > systemOneMaxBody {
+		return nil, fmt.Errorf("system one: response exceeds %d bytes", systemOneMaxBody)
 	}
 	switch {
 	case resp.StatusCode == http.StatusOK:

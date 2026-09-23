@@ -159,6 +159,9 @@ func TestSystemOne_Verdicts(t *testing.T) {
 		{"floor uses P(choice), not the confidence field", choiceBody("safe", 0.18, 0.1, 0.72), "safe"},
 		{"rounded distribution accepted", choiceBody("safe", 0.0149, 0.01, 0.975), "safe"},
 		{"tie within rounding accepted", choiceBody("weapons", 0.5, 0.0, 0.5), "ambiguous"},
+		// A tie cannot reach the 0.6 floor when the sum is 1, so a tied
+		// safe is ambiguous, never safe.
+		{"safe tied with a label is ambiguous", choiceBody("safe", 0.5, 0.0, 0.5), "ambiguous"},
 		{"label outside closed set", choiceBody("totally_fine", 0.01, 0.01, 0.98), "unknown_label"},
 		{"extra answer fields ignored",
 			`{"model":"laya","answers":{"category":{"type":"choice","choice":"safe","probabilities":{"weapons":0.01,"self_harm":0.01,"safe":0.98},"confidence":0.95,"action":{"act_probability":1.0}}}}`, "safe"},
@@ -321,7 +324,7 @@ func TestSystemOne_RedirectNotFollowed_KeyNotForwarded(t *testing.T) {
 }
 
 func TestSystemOne_OversizedResponse_FailClosed(t *testing.T) {
-	big := `{"model":"` + strings.Repeat("a", maxSystemOneBody) + `"}`
+	big := `{"model":"` + strings.Repeat("a", systemOneMaxBody) + `"}`
 	_, c := newFake(t, big)
 	if res, err := c.ClassifyPrompt(context.Background(), "p"); err == nil {
 		t.Fatalf("want error, got %+v", res)
@@ -345,13 +348,15 @@ func TestSystemOne_ModelIDSanitised(t *testing.T) {
 
 func TestValidateSystemOneBaseURL(t *testing.T) {
 	ok := map[string]string{
-		"https://api.typesafe.ai":               "https://api.typesafe.ai",
-		"https://api.typesafe.ai/":              "https://api.typesafe.ai",
-		"https://api.typesafe.ai/v1/systemone":  "https://api.typesafe.ai",
-		"http://127.0.0.1:8095":                 "http://127.0.0.1:8095",
-		"http://localhost:8095/v1/systemone/":   "http://localhost:8095",
-		"http://[::1]:8095":                     "http://[::1]:8095",
-		"https://gateway.example.com/typesafe/": "https://gateway.example.com/typesafe",
+		"https://api.typesafe.ai":                "https://api.typesafe.ai",
+		"https://api.typesafe.ai/":               "https://api.typesafe.ai",
+		"https://api.typesafe.ai/v1/systemone":   "https://api.typesafe.ai",
+		"http://127.0.0.1:8095":                  "http://127.0.0.1:8095",
+		"http://localhost:8095/v1/systemone/":    "http://localhost:8095",
+		"http://localhost:8095/v1/systemone//":   "http://localhost:8095",
+		"https://gw.example.com/ts/v1/systemone": "https://gw.example.com/ts",
+		"http://[::1]:8095":                      "http://[::1]:8095",
+		"https://gateway.example.com/typesafe/":  "https://gateway.example.com/typesafe",
 	}
 	for in, want := range ok {
 		got, err := ValidateSystemOneBaseURL(in)
@@ -471,5 +476,26 @@ func TestSystemOne_Live(t *testing.T) {
 		if res.Category != tc.want {
 			t.Errorf("%q: category = %q, want %q", tc.prompt, res.Category, tc.want)
 		}
+	}
+}
+
+func TestSystemOne_TransportErrorNamesKindNotURL(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	base := srv.URL
+	srv.Close() // nothing listens on the port now
+	cli, err := NewSystemOneClient(base, "k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cli.Backoff = time.Millisecond
+	_, err = NewSystemOneClassifier(cli, "m", []string{"weapons"}).ClassifyPrompt(context.Background(), "p")
+	if err == nil {
+		t.Fatal("expected an error from a closed port")
+	}
+	if err.Error() != "system one call failed: connection refused" {
+		t.Errorf("error = %q", err)
+	}
+	if strings.Contains(err.Error(), base) {
+		t.Errorf("error leaks the URL: %q", err)
 	}
 }

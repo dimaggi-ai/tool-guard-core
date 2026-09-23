@@ -94,13 +94,9 @@ func evalLLMClassifyWithDetail(s *domain.LLMClassify, fields map[string]interfac
 		}
 	}
 
-	systemOne := s.Backend == domain.LLMBackendSystemOne
 	model := s.Model
 	if model == "" {
-		model = "gemma4:e4b"
-		if systemOne {
-			model = llmguard.DefaultSystemOneModel
-		}
+		model = defaultLLMModel(s.Backend)
 	}
 	timeout := time.Duration(s.TimeoutSeconds) * time.Second
 	if timeout <= 0 {
@@ -115,7 +111,7 @@ func evalLLMClassifyWithDetail(s *domain.LLMClassify, fields map[string]interfac
 		return interpretClassifyResult(res, err)
 	}
 
-	if systemOne {
+	if s.Backend == domain.LLMBackendSystemOne {
 		return evalSystemOneClassify(ctx, model, s.Forbidden, prompt)
 	}
 
@@ -181,6 +177,15 @@ func getOrCreateClassifier(endpoint, model string, forbidden []string) *llmguard
 		llmClientCache[endpoint] = cli
 	}
 	return llmguard.NewClassifier(cli, model, forbidden)
+}
+
+// defaultLLMModel is the model used when the condition names none. Each
+// backend has its own: an Ollama tag means nothing to a System One endpoint.
+func defaultLLMModel(backend string) string {
+	if backend == domain.LLMBackendSystemOne {
+		return llmguard.DefaultSystemOneModel
+	}
+	return "gemma4:e4b"
 }
 
 // systemOneClient holds the client for the current TYPESAFE_BASE_URL /
