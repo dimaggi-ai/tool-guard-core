@@ -1,9 +1,12 @@
 package llmguard
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -335,6 +338,61 @@ func TestSystemOne_OversizedResponse_FailClosed(t *testing.T) {
 	_, c := newFake(t, big)
 	if res, err := c.ClassifyPrompt(context.Background(), "p"); err == nil {
 		t.Fatalf("want error, got %+v", res)
+	}
+}
+
+// Keys that differ other than by case folding are distinct options.
+func TestSystemOne_FoldDistinctLabelsAccepted(t *testing.T) {
+	f := &fakeSystemOne{t: t, body: `{"model":"m","answers":{"category":{"type":"choice","choice":"safe","probabilities":{"risk":0.1,"rısk":0.1,"safe":0.8}}}}`}
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	t.Cleanup(srv.Close)
+	cli, err := NewSystemOneClient(srv.URL, "k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := NewSystemOneClassifier(cli, DefaultSystemOneModel, []string{"risk", "rısk"}).ClassifyPrompt(context.Background(), "p")
+	if err != nil || res.Category != "safe" {
+		t.Fatalf("res=%+v err=%v", res, err)
+	}
+	// Keys that encoding/json would match to one field still conflict.
+	for _, pair := range [][2]string{{"choice", "CHOICE"}, {"Kind", "\u212aind"}, {"s", "\u017f"}} {
+		if checkNoRepeatedKeys([]byte(`{"`+pair[0]+`":1,"`+pair[1]+`":2}`)) == nil {
+			t.Errorf("%q and %q not treated as the same key", pair[0], pair[1])
+		}
+	}
+}
+
+// Bytes an endpoint sends on an idle connection must not reach the process
+// log, where net/http reports them.
+func TestSystemOne_IdleConnectionEchoNotLogged(t *testing.T) {
+	var logBuf bytes.Buffer
+	log.SetOutput(&logBuf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	body := choiceBody("weapons", 0.9, 0.05, 0.05)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		conn, rw, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = fmt.Fprintf(rw, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n%s", len(body), body)
+		_ = rw.Flush()
+		time.Sleep(50 * time.Millisecond)
+		_, _ = fmt.Fprintf(rw, "%s\r\n", r.Header.Get("Authorization"))
+		_ = rw.Flush()
+	}))
+	t.Cleanup(srv.Close)
+	cli, err := NewSystemOneClient(srv.URL, "probe-secret-123456789")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewSystemOneClassifier(cli, DefaultSystemOneModel, []string{"weapons", "self_harm"}).ClassifyPrompt(context.Background(), "p"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if strings.Contains(logBuf.String(), "probe-secret") {
+		t.Fatalf("key reached the process log: %q", logBuf.String())
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 )
 
 // System One support.
@@ -73,12 +74,17 @@ func NewSystemOneClient(baseURL, apiKey string) (*SystemOneClient, error) {
 	if err != nil {
 		return nil, err
 	}
+	// No keep-alive: net/http logs bytes that arrive on an idle
+	// connection, and an endpoint could send the echoed key that way.
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.DisableKeepAlives = true
 	return &SystemOneClient{
 		BaseURL:   base,
 		APIKey:    apiKey,
 		UserAgent: "tool-guard-core",
 		HTTP: &http.Client{
-			Timeout: 120 * time.Second,
+			Transport: tr,
+			Timeout:   120 * time.Second,
 			CheckRedirect: func(*http.Request, []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
@@ -207,7 +213,7 @@ func checkJSONValue(dec *json.Decoder, depth int) error {
 				return errSystemOneMalformed
 			}
 			k, _ := kt.(string)
-			k = strings.ToLower(strings.ToUpper(k))
+			k = foldKey(k)
 			if seen[k] {
 				return fmt.Errorf("system one: response repeats a key")
 			}
@@ -221,6 +227,24 @@ func checkJSONValue(dec *json.Decoder, depth int) error {
 		return errSystemOneMalformed
 	}
 	return nil
+}
+
+// foldKey maps each rune to the smallest rune of its case-fold orbit, the
+// same folding encoding/json uses to match field names.
+func foldKey(k string) string {
+	var b strings.Builder
+	for _, r := range k {
+		for {
+			r2 := unicode.SimpleFold(r)
+			if r2 <= r {
+				r = r2
+				break
+			}
+			r = r2
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // errSystemOneMalformed is returned for a response that is not the
