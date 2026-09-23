@@ -192,6 +192,7 @@ func TestSystemOne_MalformedResponses_FailClosed(t *testing.T) {
 		"unoffered option":            `{"model":"m","answers":{"category":{"type":"choice","choice":"safe","probabilities":{"weapons":0,"self_harm":0,"safe":0.9,"other":0.1}}}}`,
 		// encoding/json keeps the last of repeated keys; the sum would be 1.
 		"exact duplicate key":  `{"model":"m","answers":{"category":{"type":"choice","choice":"safe","probabilities":{"weapons":1,"weapons":0,"self_harm":0,"safe":1}}}}`,
+		"null probability":     `{"model":"m","answers":{"category":{"type":"choice","choice":"safe","probabilities":{"weapons":null,"self_harm":null,"safe":1}}}}`,
 		"duplicate option":     `{"model":"m","answers":{"category":{"type":"choice","choice":"safe","probabilities":{"weapons":0,"WEAPONS":0,"self_harm":0,"safe":1}}}}`,
 		"not normalised":       choiceBody("safe", 0.3, 0.3, 0.9),
 		"probability > 1":      choiceBody("weapons", 1.5, -0.25, -0.25),

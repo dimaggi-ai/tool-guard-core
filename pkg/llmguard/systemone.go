@@ -158,8 +158,9 @@ type systemOneAnswer struct {
 }
 
 // systemOneProbs decodes the probability object and rejects a repeated
-// key. encoding/json would keep the last value, so {"weapons":1,
-// "weapons":0,"safe":1} would pass the distribution check.
+// key or a null value. encoding/json would keep the last of repeated keys,
+// so {"weapons":1,"weapons":0,"safe":1} would pass the distribution check,
+// and would read null as 0.
 type systemOneProbs map[string]float64
 
 func (p *systemOneProbs) UnmarshalJSON(b []byte) error {
@@ -182,14 +183,17 @@ func (p *systemOneProbs) UnmarshalJSON(b []byte) error {
 			return err
 		}
 		k, _ := kt.(string)
-		var v float64
+		var v *float64
 		if err := dec.Decode(&v); err != nil {
 			return err
+		}
+		if v == nil {
+			return fmt.Errorf("system one: null probability")
 		}
 		if _, dup := out[k]; dup {
 			return fmt.Errorf("system one: duplicate probability key")
 		}
-		out[k] = v
+		out[k] = *v
 	}
 	if _, err := dec.Token(); err != nil {
 		return err
