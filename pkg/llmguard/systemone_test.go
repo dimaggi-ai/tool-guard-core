@@ -194,12 +194,19 @@ func TestSystemOne_MalformedResponses_FailClosed(t *testing.T) {
 		"no probabilities":            `{"model":"m","answers":{"category":{"type":"choice","choice":"safe"}}}`,
 		"unoffered option":            `{"model":"m","answers":{"category":{"type":"choice","choice":"safe","probabilities":{"weapons":0,"self_harm":0,"safe":0.9,"other":0.1}}}}`,
 		// encoding/json keeps the last of repeated keys; the sum would be 1.
-		"exact duplicate key":  `{"model":"m","answers":{"category":{"type":"choice","choice":"safe","probabilities":{"weapons":1,"weapons":0,"self_harm":0,"safe":1}}}}`,
-		"null probability":     `{"model":"m","answers":{"category":{"type":"choice","choice":"safe","probabilities":{"weapons":null,"self_harm":null,"safe":1}}}}`,
-		"duplicate option":     `{"model":"m","answers":{"category":{"type":"choice","choice":"safe","probabilities":{"weapons":0,"WEAPONS":0,"self_harm":0,"safe":1}}}}`,
-		"not normalised":       choiceBody("safe", 0.3, 0.3, 0.9),
-		"probability > 1":      choiceBody("weapons", 1.5, -0.25, -0.25),
-		"negative probability": choiceBody("safe", -0.1, 0.1, 1.0),
+		"exact duplicate key": `{"model":"m","answers":{"category":{"type":"choice","choice":"safe","probabilities":{"weapons":1,"weapons":0,"self_harm":0,"safe":1}}}}`,
+		"null probability":    `{"model":"m","answers":{"category":{"type":"choice","choice":"safe","probabilities":{"weapons":null,"self_harm":null,"safe":1}}}}`,
+		// Repeated or case-aliased fields: encoding/json keeps the last and
+		// matches struct fields case-insensitively.
+		"repeated probabilities field": `{"model":"m","answers":{"category":{"type":"choice","choice":"safe","probabilities":{"weapons":1,"self_harm":0,"safe":0},"probabilities":{"weapons":0,"self_harm":0,"safe":1}}}}`,
+		"repeated choice":              `{"model":"m","answers":{"category":{"type":"choice","choice":"weapons","choice":"safe","probabilities":{"weapons":0,"self_harm":0,"safe":1}}}}`,
+		"case-aliased field":           `{"model":"m","answers":{"category":{"type":"choice","choice":"safe","probabilities":{"weapons":1,"self_harm":0,"safe":0},"Probabilities":{"weapons":0,"self_harm":0,"safe":1}}}}`,
+		"repeated answer":              `{"model":"m","answers":{"category":{"type":"choice","choice":"weapons","probabilities":{"weapons":1,"self_harm":0,"safe":0}},"category":{"type":"choice","choice":"safe","probabilities":{"weapons":0,"self_harm":0,"safe":1}}}}`,
+		"repeated answers object":      `{"model":"m","answers":{"category":{"type":"choice","choice":"weapons","probabilities":{"weapons":1,"self_harm":0,"safe":0}}},"ANSWERS":{"category":{"type":"choice","choice":"safe","probabilities":{"weapons":0,"self_harm":0,"safe":1}}}}`,
+		"duplicate option":             `{"model":"m","answers":{"category":{"type":"choice","choice":"safe","probabilities":{"weapons":0,"WEAPONS":0,"self_harm":0,"safe":1}}}}`,
+		"not normalised":               choiceBody("safe", 0.3, 0.3, 0.9),
+		"probability > 1":              choiceBody("weapons", 1.5, -0.25, -0.25),
+		"negative probability":         choiceBody("safe", -0.1, 0.1, 1.0),
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -346,6 +353,47 @@ func TestSystemOne_ModelIDSanitised(t *testing.T) {
 	}
 }
 
+// An endpoint can echo the request, bearer key included. No response
+// content may reach the error text, which lands in the audit detail.
+func TestSystemOne_ErrorsCarryNoResponseContent(t *testing.T) {
+	huge := strings.Repeat("A", 900_000)
+	cases := map[string]string{
+		"echoed type":   `{"model":"m","answers":{"category":{"type":"Bearer test-key","choice":"safe"}}}`,
+		"huge type":     `{"model":"m","answers":{"category":{"type":"` + huge + `","choice":"safe"}}}`,
+		"syntax error":  `{"model":"m","answers":{"category":test-key}}`,
+		"type mismatch": `{"model":"m","answers":{"category":{"type":["test-key"]}}}`,
+		"repeated key":  `{"test-key":1,"TEST-KEY":2}`,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, c := newFake(t, body)
+			_, err := c.ClassifyPrompt(context.Background(), "p")
+			if err == nil {
+				t.Fatal("want error")
+			}
+			if msg := err.Error(); strings.Contains(msg, "test-key") || len(msg) > 100 {
+				t.Errorf("error carries response content: %.200q", msg)
+			}
+		})
+	}
+}
+
+func TestValidateSystemOneBaseURL_ErrorOmitsURL(t *testing.T) {
+	for _, in := range []string{
+		"https://sekrit@api.typesafe.ai",
+		"https://api.typesafe.ai/%zzsekrit",
+		"sekrit.example.com",
+		"ftp://sekrit.example.com",
+		"http://sekrit.example.com",
+		"https://api.typesafe.ai/?k=sekrit",
+	} {
+		_, err := ValidateSystemOneBaseURL(in)
+		if err == nil || strings.Contains(err.Error(), "sekrit") {
+			t.Errorf("%q: err = %v", in, err)
+		}
+	}
+}
+
 func TestValidateSystemOneBaseURL(t *testing.T) {
 	ok := map[string]string{
 		"https://api.typesafe.ai":                "https://api.typesafe.ai",
@@ -403,13 +451,16 @@ func FuzzInterpretSystemOneAnswer(f *testing.F) {
 	f.Add(`{"answers":{"category":{"type":"choice","choice":"safe","probabilities":{"safe":1}}}}`)
 	f.Add(`{"answers":{"category":{"type":"noul","noul":0}}}`)
 	f.Fuzz(func(t *testing.T, body string) {
-		var resp systemOneResponse
-		if json.Unmarshal([]byte(body), &resp) != nil {
+		resp, err := decodeSystemOneResponse([]byte(body))
+		if err != nil {
 			return
 		}
-		res, err := interpretSystemOneAnswer(&resp, []string{"weapons", "self_harm"})
+		res, err := interpretSystemOneAnswer(resp, []string{"weapons", "self_harm"})
 		if err != nil || res.Category != "safe" {
 			return
+		}
+		if foldedKeyRepeats(t, body) {
+			t.Fatalf("safe verdict from a response that repeats a key: %s", body)
 		}
 		a := resp.Answers[systemOneQuestionID]
 		if a.Type != "choice" || strings.ToLower(strings.TrimSpace(a.Choice)) != "safe" {
@@ -417,8 +468,12 @@ func FuzzInterpretSystemOneAnswer(f *testing.F) {
 		}
 		seen := map[string]bool{}
 		sum, pSafe, pMax := 0.0, -1.0, 0.0
-		for k, v := range a.Probabilities {
+		for k, pv := range a.Probabilities {
 			n := strings.ToLower(strings.TrimSpace(k))
+			if pv == nil {
+				t.Fatalf("safe verdict with a null probability: %s", body)
+			}
+			v := *pv
 			if seen[n] || (n != "safe" && n != "weapons" && n != "self_harm") || !(v >= 0 && v <= 1) {
 				t.Fatalf("safe verdict from invalid distribution: %s", body)
 			}
@@ -437,6 +492,55 @@ func FuzzInterpretSystemOneAnswer(f *testing.F) {
 			t.Fatalf("reasoning not capped: %d", len(res.Reasoning))
 		}
 	})
+}
+
+// foldedKeyRepeats reports whether any object in body repeats a key under
+// Unicode case folding (the matching encoding/json uses for struct fields).
+func foldedKeyRepeats(t *testing.T, body string) bool {
+	t.Helper()
+	// A token walk independent of checkNoRepeatedKeys: one key list per
+	// open object.
+	dec := json.NewDecoder(strings.NewReader(body))
+	type frame struct {
+		obj  bool
+		keys []string
+	}
+	var stack []frame
+	expectKey := func() bool { return len(stack) > 0 && stack[len(stack)-1].obj }
+	atKey := true
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			break
+		}
+		switch d := tok.(type) {
+		case json.Delim:
+			switch d {
+			case '{':
+				stack = append(stack, frame{obj: true})
+				atKey = true
+				continue
+			case '[':
+				stack = append(stack, frame{})
+			default:
+				stack = stack[:len(stack)-1]
+			}
+		case string:
+			if expectKey() && atKey {
+				f := &stack[len(stack)-1]
+				for _, k := range f.keys {
+					if strings.EqualFold(k, d) {
+						return true
+					}
+				}
+				f.keys = append(f.keys, d)
+				atKey = false
+				continue
+			}
+		}
+		atKey = expectKey()
+	}
+	return false
 }
 
 // TestSystemOne_Live runs against a real endpoint when TG_SYSTEMONE_LIVE=1.

@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/llmguard"
@@ -337,4 +339,11 @@ func resetSystemOneClient() {
 		systemOneClient.HTTP.CloseIdleConnections()
 	}
 	systemOneClientCfg, systemOneClient = [2]string{}, nil
+}
+
+func TestInterpretClassifyResult_BoundsErrorText(t *testing.T) {
+	fired, detail := interpretClassifyResult(nil, errors.New(strings.Repeat("é", 500_000)))
+	if !fired || len(detail) > 300 || !utf8.ValidString(detail) {
+		t.Fatalf("fired=%v len=%d valid=%v", fired, len(detail), utf8.ValidString(detail))
+	}
 }

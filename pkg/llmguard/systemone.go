@@ -103,10 +103,10 @@ func SystemOneBaseURLFromEnv() string {
 func ValidateSystemOneBaseURL(raw string) (string, error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
-		return "", fmt.Errorf("system one base URL: %w", err)
+		return "", fmt.Errorf("system one base URL: not a valid URL")
 	}
 	if u.Opaque != "" || u.Host == "" {
-		return "", fmt.Errorf("system one base URL %q: must be an absolute http(s) URL", raw)
+		return "", fmt.Errorf("system one base URL: must be an absolute http(s) URL")
 	}
 	if u.User != nil {
 		return "", fmt.Errorf("system one base URL: userinfo not allowed")
@@ -121,7 +121,7 @@ func ValidateSystemOneBaseURL(raw string) (string, error) {
 			return "", fmt.Errorf("system one base URL: plain http is only allowed for loopback hosts (the request carries the API key)")
 		}
 	default:
-		return "", fmt.Errorf("system one base URL: scheme must be http or https (got %q)", u.Scheme)
+		return "", fmt.Errorf("system one base URL: scheme must be http or https")
 	}
 	path := strings.TrimSuffix(strings.TrimRight(u.Path, "/"), systemOnePath)
 	return u.Scheme + "://" + u.Host + strings.TrimRight(path, "/"), nil
@@ -170,55 +170,63 @@ type systemOneResponse struct {
 }
 
 type systemOneAnswer struct {
-	Type          string         `json:"type"`
-	Choice        string         `json:"choice"`
-	Probabilities systemOneProbs `json:"probabilities"`
+	Type          string              `json:"type"`
+	Choice        string              `json:"choice"`
+	Probabilities map[string]*float64 `json:"probabilities"`
 }
 
-// systemOneProbs decodes the probability object and rejects a repeated
-// key or a null value. encoding/json would keep the last of repeated keys,
-// so {"weapons":1,"weapons":0,"safe":1} would pass the distribution check,
-// and would read null as 0.
-type systemOneProbs map[string]float64
+// systemOneMaxDepth bounds nesting in a response. A valid response is four
+// levels deep.
+const systemOneMaxDepth = 32
 
-func (p *systemOneProbs) UnmarshalJSON(b []byte) error {
-	dec := json.NewDecoder(bytes.NewReader(b))
+// checkNoRepeatedKeys rejects a response in which any object repeats a key.
+// encoding/json keeps the last value and matches struct fields without
+// regard to case, so a repeated "probabilities" or "choice" (in any case)
+// would silently replace the first. Keys are compared case-folded.
+func checkNoRepeatedKeys(raw []byte) error {
+	return checkJSONValue(json.NewDecoder(bytes.NewReader(raw)), 0)
+}
+
+func checkJSONValue(dec *json.Decoder, depth int) error {
+	if depth > systemOneMaxDepth {
+		return errSystemOneMalformed
+	}
 	tok, err := dec.Token()
 	if err != nil {
-		return err
+		return errSystemOneMalformed
 	}
-	if tok == nil {
-		*p = nil
+	d, ok := tok.(json.Delim)
+	if !ok {
 		return nil
 	}
-	if d, ok := tok.(json.Delim); !ok || d != '{' {
-		return fmt.Errorf("system one: probabilities is not an object")
-	}
-	out := systemOneProbs{}
+	seen := map[string]bool{}
 	for dec.More() {
-		kt, err := dec.Token()
-		if err != nil {
+		if d == '{' {
+			kt, err := dec.Token()
+			if err != nil {
+				return errSystemOneMalformed
+			}
+			k, _ := kt.(string)
+			k = strings.ToLower(strings.ToUpper(k))
+			if seen[k] {
+				return fmt.Errorf("system one: response repeats a key")
+			}
+			seen[k] = true
+		}
+		if err := checkJSONValue(dec, depth+1); err != nil {
 			return err
 		}
-		k, _ := kt.(string)
-		var v *float64
-		if err := dec.Decode(&v); err != nil {
-			return err
-		}
-		if v == nil {
-			return fmt.Errorf("system one: null probability")
-		}
-		if _, dup := out[k]; dup {
-			return fmt.Errorf("system one: duplicate probability key")
-		}
-		out[k] = *v
 	}
 	if _, err := dec.Token(); err != nil {
-		return err
+		return errSystemOneMalformed
 	}
-	*p = out
 	return nil
 }
+
+// errSystemOneMalformed is returned for a response that is not the
+// expected JSON. It carries no response content: error text lands in the
+// audit detail, and an endpoint could echo the bearer key back.
+var errSystemOneMalformed = errors.New("system one: malformed response")
 
 // SystemOneClassifier classifies a prompt with one System One Choice question.
 type SystemOneClassifier struct {
@@ -304,7 +312,7 @@ func interpretSystemOneAnswer(resp *systemOneResponse, labels []string) (*Classi
 		return nil, fmt.Errorf("system one: response has no answer for %q", systemOneQuestionID)
 	}
 	if ans.Type != "choice" {
-		return nil, fmt.Errorf("system one: answer type %q, want choice", ans.Type)
+		return nil, fmt.Errorf("system one: answer type is not choice")
 	}
 	choice := normLabel(ans.Choice)
 	if choice == "" {
@@ -336,10 +344,10 @@ func interpretSystemOneAnswer(resp *systemOneResponse, labels []string) (*Classi
 
 // systemOneDistribution checks that raw has exactly one probability per
 // offered option (labels plus safe), each in [0,1], summing to 1.
-func systemOneDistribution(raw map[string]float64, labels []string) (map[string]float64, error) {
+func systemOneDistribution(raw map[string]*float64, labels []string) (map[string]float64, error) {
 	out := make(map[string]float64, len(labels)+1)
 	sum := 0.0
-	for k, v := range raw {
+	for k, pv := range raw {
 		n := normLabel(k)
 		if n != "safe" && !slices.Contains(labels, n) {
 			return nil, fmt.Errorf("system one: probability for an option that was not offered")
@@ -347,6 +355,10 @@ func systemOneDistribution(raw map[string]float64, labels []string) (map[string]
 		if _, dup := out[n]; dup {
 			return nil, fmt.Errorf("system one: duplicate probability for %q", n)
 		}
+		if pv == nil {
+			return nil, fmt.Errorf("system one: null probability for %q", n)
+		}
+		v := *pv
 		if math.IsNaN(v) || v < 0 || v > 1 {
 			return nil, fmt.Errorf("system one: probability for %q outside [0,1]", n)
 		}
@@ -421,7 +433,7 @@ func (c *SystemOneClient) do(ctx context.Context, req *systemOneRequest) (*syste
 func (c *SystemOneClient) once(ctx context.Context, body []byte) (*systemOneResponse, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+systemOnePath, bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("build request: %w", err)
+		return nil, fmt.Errorf("system one: build request")
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	if c.UserAgent != "" {
@@ -456,10 +468,19 @@ func (c *SystemOneClient) once(ctx context.Context, body []byte) (*systemOneResp
 		// and the status is enough to diagnose 401/422.
 		return nil, fmt.Errorf("system one HTTP %d", resp.StatusCode)
 	}
+	return decodeSystemOneResponse(raw)
+}
+
+// decodeSystemOneResponse parses one response object. Its errors carry no
+// response content.
+func decodeSystemOneResponse(raw []byte) (*systemOneResponse, error) {
+	if err := checkNoRepeatedKeys(raw); err != nil {
+		return nil, err
+	}
 	var out systemOneResponse
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	if err := dec.Decode(&out); err != nil {
-		return nil, fmt.Errorf("system one: decode response: %w", err)
+		return nil, errSystemOneMalformed
 	}
 	var trailing json.RawMessage
 	if err := dec.Decode(&trailing); !errors.Is(err, io.EOF) {

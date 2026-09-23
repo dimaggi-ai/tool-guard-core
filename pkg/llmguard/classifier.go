@@ -145,7 +145,7 @@ func verdict(label string, conf float64, forbidden []string, extra ...string) st
 func normLabel(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
 
 func containsLabel(labels []string, label string) bool {
-	return slices.ContainsFunc(labels, func(l string) bool { return normLabel(l) == label })
+	return slices.ContainsFunc(labels, func(l string) bool { return strings.ToLower(l) == label })
 }
 
 // capReasoning bounds the model's free-text reasoning field so audit

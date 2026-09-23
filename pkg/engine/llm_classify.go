@@ -6,6 +6,7 @@ import (
 	"os"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/llmguard"
@@ -144,7 +145,7 @@ func evalLLMClassifyWithDetail(s *domain.LLMClassify, fields map[string]interfac
 
 func interpretClassifyResult(res *llmguard.ClassifyResult, err error) (bool, string) {
 	if err != nil {
-		return true, fmt.Sprintf("llm_classify: %v — fail closed", err)
+		return true, fmt.Sprintf("llm_classify: %s — fail closed", boundedErr(err))
 	}
 	if res == nil {
 		return true, "llm_classify: nil result — fail closed"
@@ -159,6 +160,21 @@ func interpretClassifyResult(res *llmguard.ClassifyResult, err error) (bool, str
 		return true, fmt.Sprintf("llm_classify: category=%s confidence=%.2f reason=%s", res.Category, res.Confidence, res.Reasoning)
 	}
 	return true, fmt.Sprintf("llm_classify: category=%s confidence=%.2f", res.Category, res.Confidence)
+}
+
+// maxClassifyErrLen bounds classifier error text in the audit detail.
+const maxClassifyErrLen = 240
+
+func boundedErr(err error) string {
+	s := err.Error()
+	if len(s) <= maxClassifyErrLen {
+		return s
+	}
+	s = s[:maxClassifyErrLen]
+	for len(s) > 0 && !utf8.ValidString(s) {
+		s = s[:len(s)-1]
+	}
+	return s + "…"
 }
 
 func getOrCreateClassifier(endpoint, model string, forbidden []string) *llmguard.Classifier {
