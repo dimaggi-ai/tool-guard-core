@@ -284,8 +284,9 @@ passes have real precedent instead of a starting from scratch.
   log through bytes sent on an idle keep-alive connection. The client now
   rejects any repeated key, folded as `encoding/json` folds it, before
   decoding; its errors carry no response text; a reported model name that
-  contains the endpoint host or any 8 consecutive characters of the key,
-  ignoring case, is recorded as `redacted`; and
+  contains the endpoint host or any 8 consecutive characters of the key
+  (the whole key, if shorter than 8), ignoring case, is recorded as
+  `redacted`; and
   connections are not reused. Each fix has a regression test that fails
   without it, and the fuzz test runs the real decode path. Two docs claims
   were also corrected: the recorded model name is sanitised, and the
