@@ -152,9 +152,50 @@ type systemOneResponse struct {
 }
 
 type systemOneAnswer struct {
-	Type          string             `json:"type"`
-	Choice        string             `json:"choice"`
-	Probabilities map[string]float64 `json:"probabilities"`
+	Type          string         `json:"type"`
+	Choice        string         `json:"choice"`
+	Probabilities systemOneProbs `json:"probabilities"`
+}
+
+// systemOneProbs decodes the probability object and rejects a repeated
+// key. encoding/json would keep the last value, so {"weapons":1,
+// "weapons":0,"safe":1} would pass the distribution check.
+type systemOneProbs map[string]float64
+
+func (p *systemOneProbs) UnmarshalJSON(b []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	if tok == nil {
+		*p = nil
+		return nil
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '{' {
+		return fmt.Errorf("system one: probabilities is not an object")
+	}
+	out := systemOneProbs{}
+	for dec.More() {
+		kt, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		k, _ := kt.(string)
+		var v float64
+		if err := dec.Decode(&v); err != nil {
+			return err
+		}
+		if _, dup := out[k]; dup {
+			return fmt.Errorf("system one: duplicate probability key")
+		}
+		out[k] = v
+	}
+	if _, err := dec.Token(); err != nil {
+		return err
+	}
+	*p = out
+	return nil
 }
 
 // SystemOneClassifier classifies a prompt with one System One Choice question.
