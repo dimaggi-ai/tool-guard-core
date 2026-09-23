@@ -216,7 +216,7 @@ var (
 func evalSystemOneClassify(ctx context.Context, model string, forbidden []string, prompt string) (bool, string) {
 	cli, err := getSystemOneClient()
 	if err != nil {
-		return true, fmt.Sprintf("llm_classify: %v — fail closed", err)
+		return true, fmt.Sprintf("llm_classify: %s — fail closed", boundedErr(err))
 	}
 	res, err := llmguard.NewSystemOneClassifier(cli, model, forbidden).ClassifyPrompt(ctx, prompt)
 	return interpretClassifyResult(res, err)

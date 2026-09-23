@@ -425,16 +425,17 @@ func modelChars(s string, limit int) string {
 
 // reportedModel returns the sanitised model name, or "redacted" when it
 // looks like an echo of the request: it shares a run of
-// systemOneEchoWindow characters with the API key, or contains the
-// endpoint host. An endpoint that reflects the Authorization header into
+// systemOneEchoWindow characters with the API key (ignoring case), or
+// contains the endpoint host. An endpoint that reflects the Authorization header into
 // "model" would otherwise put the key in the audit detail.
 func (c *SystemOneClient) reportedModel(s string) string {
 	m := modelID(s)
 	// The whole key is compared, not only its first 64 characters.
-	if key := modelChars(c.APIKey, len(c.APIKey)); key != "" {
+	if key := strings.ToLower(modelChars(c.APIKey, len(c.APIKey))); key != "" {
+		lm := strings.ToLower(m)
 		w := min(systemOneEchoWindow, len(key))
-		for i := 0; i+w <= len(m); i++ {
-			if strings.Contains(key, m[i:i+w]) {
+		for i := 0; i+w <= len(lm); i++ {
+			if strings.Contains(key, lm[i:i+w]) {
 				return "redacted"
 			}
 		}

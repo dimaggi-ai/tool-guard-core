@@ -402,6 +402,7 @@ func TestSystemOne_ReportedModelEchoRedacted(t *testing.T) {
 	for name, model := range map[string]string{
 		"whole key":     "Bearer test-key",
 		"key fragment":  "xx-live-SecretKey1234-yy",
+		"case-changed":  "xx-LIVE-SECRETKEY1234-yy",
 		"endpoint host": "http://127.0.0.1:1234/v1/systemone",
 		"long key tail": "privateSuffix9876543210",
 	} {
