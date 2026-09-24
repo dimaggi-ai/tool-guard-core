@@ -12,8 +12,8 @@ class VerifyPyPIReleaseTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         self.dist_dir = Path(self.temp_dir.name)
-        self.wheel = self.dist_dir / "toolguard_core-0.8.0-py3-none-any.whl"
-        self.sdist = self.dist_dir / "toolguard_core-0.8.0.tar.gz"
+        self.wheel = self.dist_dir / "tool_guard_core-0.8.0-py3-none-any.whl"
+        self.sdist = self.dist_dir / "tool_guard_core-0.8.0.tar.gz"
         self.wheel.write_bytes(b"wheel bytes")
         self.sdist.write_bytes(b"sdist bytes")
         self.expected = local_distributions(self.dist_dir)

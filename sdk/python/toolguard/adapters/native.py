@@ -36,8 +36,8 @@ framework / integration_type stamped on every envelope:
   integration_type = "sdk"
 
 Install:
-    pip install "toolguard-core[openai]"       # for OpenAI shapes
-    pip install "toolguard-core[anthropic]"    # for Anthropic shapes
+    pip install "tool-guard-core[openai]"       # for OpenAI shapes
+    pip install "tool-guard-core[anthropic]"    # for Anthropic shapes
 """
 from __future__ import annotations
 

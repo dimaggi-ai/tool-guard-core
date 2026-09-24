@@ -11,7 +11,7 @@ framework / integration_type stamped on every envelope:
   integration_type = "langgraph_middleware"
 
 Install:
-    pip install "toolguard-core[langchain]"
+    pip install "tool-guard-core[langchain]"
 """
 from __future__ import annotations
 
@@ -72,7 +72,7 @@ class ToolGuardCallbackHandler(_Base):  # type: ignore[misc]
         if _Base is object:
             raise ImportError(
                 "langchain-core (or langchain) is required: "
-                'pip install "toolguard-core[langchain]"'
+                'pip install "tool-guard-core[langchain]"'
             )
         super().__init__()
         # BaseCallbackHandler.raise_error defaults to False — LangChain's
