@@ -3,7 +3,7 @@ requires = ["setuptools==84.0.0", "setuptools-scm==10.2.1", "wheel==0.48.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "toolguard-core"
+name = "tool-guard-core"
 dynamic = ["version"]
 description = "Python SDK for Tool Guard Core — universal AI agent governance"
 readme = "README.md"

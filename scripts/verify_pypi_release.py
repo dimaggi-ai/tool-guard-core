@@ -91,7 +91,7 @@ def main() -> int:
         raise SystemExit(str(error)) from error
 
     print(
-        f"OK: PyPI exposes toolguard-core {args.expected_version} with "
+        f"OK: PyPI exposes tool-guard-core {args.expected_version} with "
         f"the expected filenames and SHA-256 digests"
     )
     return 0

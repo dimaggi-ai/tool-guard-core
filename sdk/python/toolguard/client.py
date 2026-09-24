@@ -354,7 +354,7 @@ class ToolGuard:
             import httpx
         except ImportError as exc:
             raise ImportError(
-                'httpx is required: pip install "toolguard-core" '
+                'httpx is required: pip install "tool-guard-core" '
                 "(it ships as a core dependency)"
             ) from exc
 

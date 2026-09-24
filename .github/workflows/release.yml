@@ -246,7 +246,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/project/toolguard-core/
+      url: https://pypi.org/project/tool-guard-core/
     permissions:
       contents: read
       id-token: write
@@ -319,7 +319,7 @@ jobs:
           for attempt in $(seq 1 18); do
             if curl --fail --silent --show-error \
               --connect-timeout 5 --max-time 15 \
-              "https://pypi.org/pypi/toolguard-core/${version}/json" >"${metadata}" && \
+              "https://pypi.org/pypi/tool-guard-core/${version}/json" >"${metadata}" && \
               python3 scripts/verify_pypi_release.py \
                 --metadata "${metadata}" \
                 --dist-dir dist/python \
@@ -327,11 +327,11 @@ jobs:
               found=true
               break
             fi
-            echo "PyPI has not exposed the exact toolguard-core ${version} distributions yet (attempt ${attempt}/18)"
+            echo "PyPI has not exposed the exact tool-guard-core ${version} distributions yet (attempt ${attempt}/18)"
             sleep 10
           done
           if [ "${found}" != "true" ]; then
-            echo "::error::PyPI did not expose the exact toolguard-core ${version} filenames and SHA-256 digests; GitHub Release remains a draft" >&2
+            echo "::error::PyPI did not expose the exact tool-guard-core ${version} filenames and SHA-256 digests; GitHub Release remains a draft" >&2
             exit 1
           fi
 

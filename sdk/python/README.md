@@ -7,16 +7,16 @@ and HTTP proxy (`tg-proxy /evaluate`) — so you can run locally or in productio
 
 ## Install
 
-The PyPI distribution is named `toolguard-core` because the unqualified
+The PyPI distribution is named `tool-guard-core` because the unqualified
 `toolguard` project belongs to an unrelated package. The import remains
 `toolguard`. Tagged releases beginning with v0.8.0 install with:
 
 ```bash
-pip install "toolguard-core"                    # core only (httpx)
-pip install "toolguard-core[langchain]"         # + langchain-core
-pip install "toolguard-core[autogen]"           # + pyautogen
-pip install "toolguard-core[openai]"            # + openai SDK
-pip install "toolguard-core[anthropic]"         # + anthropic SDK
+pip install "tool-guard-core"                    # core only (httpx)
+pip install "tool-guard-core[langchain]"         # + langchain-core
+pip install "tool-guard-core[autogen]"           # + pyautogen
+pip install "tool-guard-core[openai]"            # + openai SDK
+pip install "tool-guard-core[anthropic]"         # + anthropic SDK
 ```
 
 Before v0.8.0, or when testing an unreleased checkout, use

@@ -78,7 +78,7 @@ guard catching it after the fact — do it right the first time.
   earlier this session."
 - No `v X.Y.Z` tag already exists locally or on `origin`
   (`git tag --list vX.Y.Z`).
-- PyPI trusted publishing is configured for distribution `toolguard-core`,
+- PyPI trusted publishing is configured for distribution `tool-guard-core`,
   repository `dimaggi-ai/tool-guard-core`, workflow `release.yml`, and GitHub
   environment `pypi`. This is a one-time maintainer-side PyPI configuration;
   the workflow intentionally has no long-lived upload token.
@@ -98,7 +98,7 @@ After the release workflow succeeds, verify the SDK from a clean environment:
 
 ```bash
 python3 -m venv /tmp/toolguard-install-check
-/tmp/toolguard-install-check/bin/pip install "toolguard-core==X.Y.Z"
+/tmp/toolguard-install-check/bin/pip install "tool-guard-core==X.Y.Z"
 /tmp/toolguard-install-check/bin/python -c "import toolguard"
 ```
 

@@ -12,7 +12,7 @@ framework / integration_type stamped on every envelope:
   integration_type = "sdk"
 
 Install:
-    pip install "toolguard-core[autogen]"    # also installs pyautogen
+    pip install "tool-guard-core[autogen]"    # also installs pyautogen
 """
 from __future__ import annotations
 

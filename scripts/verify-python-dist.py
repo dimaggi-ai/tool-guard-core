@@ -37,8 +37,8 @@ def main() -> int:
         metadata = BytesParser().parsebytes(archive.read(metadata_paths[0]))
         names = set(archive.namelist())
 
-    if normalized_name(metadata["Name"]) != "toolguard-core":
-        raise SystemExit(f"distribution name is {metadata['Name']!r}, want 'toolguard-core'")
+    if normalized_name(metadata["Name"]) != "tool-guard-core":
+        raise SystemExit(f"distribution name is {metadata['Name']!r}, want 'tool-guard-core'")
     if metadata["License-Expression"] != "Apache-2.0":
         raise SystemExit(
             f"license expression is {metadata['License-Expression']!r}, want 'Apache-2.0'"
@@ -65,7 +65,7 @@ def main() -> int:
 
     print(
         f"OK: {wheels[0].name} and {sdists[0].name} "
-        f"contain toolguard-core {metadata['Version']}"
+        f"contain tool-guard-core {metadata['Version']}"
     )
     return 0
 
