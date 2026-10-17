@@ -19,8 +19,8 @@ database can change a recorded version. As a result,
 `go get github.com/dimaggi-ai/tool-guard-core@v0.8.0` and
 `git checkout v0.8.0` return different trees. They differ in 15 files of
 Python SDK packaging, release scripts and documentation; no Go source differs.
-0.8.1 is tagged once, so the module proxy, the git tag and the published
-artifacts all point to the same commit.
+0.8.1 is tagged once, and a repository ruleset prevents moving or deleting
+the tag.
 
 ### Upgrade
 

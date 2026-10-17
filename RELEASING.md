@@ -60,13 +60,15 @@ guard catching it after the fact — do it right the first time.
 5. **Watch the Release workflow.** Its first real step verifies the tag
    resolves to `origin/main`'s exact HEAD and fails immediately, before any
    build/publish work, if it does not. If a transient failure leaves an
-   unpublished draft release, re-run the failed workflow for the same tag:
-   `scripts/verify-release-workflow-state.sh` accepts a re-run that resumes
-   an unpublished draft.
+   unpublished draft release, re-run the failed workflow for the same tag.
+   On that re-run, `scripts/verify-release-workflow-state.sh` detects the
+   draft, and the check accepts a `main` that has advanced, provided the tag
+   commit is still its ancestor.
    If the release commit itself needs a change, do not delete or move the
    pushed tag: the public Go module proxy and checksum database may already
-   have recorded it, and they cannot change a recorded version (v0.8.0 shipped
-   with the proxy and the git tag on different commits for this reason). Fix
+   have recorded it, and they cannot change a recorded version. The v0.8.0
+   tag was re-created after the proxy recorded it, so the proxy and the git
+   tag shipped on different commits. Fix
    `main` and release the next patch version from step 1. A repository ruleset,
    added after v0.8.0, blocks updating or deleting `v*` tags.
 
