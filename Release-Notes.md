@@ -11,15 +11,16 @@ A patch release with no behavior change. It fixes a release-integrity problem
 in 0.8.0.
 
 The `v0.8.0` tag was first pushed at `1e7b776`. PyPI rejected that
-publication, so the tag was deleted and re-created at `9740e05`, which renamed
-the Python distribution to `tool-guard-core`. The 0.8.0 GitHub Release,
+publication, so the tag was deleted and re-created at `9740e05`, the commit that
+renamed the Python distribution to `tool-guard-core`. The 0.8.0 GitHub Release,
 container image and PyPI package were built from `9740e05`. The Go module proxy
 had already recorded `1e7b776`, and neither the public proxy nor the checksum
 database can change a recorded version. As a result,
 `go get github.com/dimaggi-ai/tool-guard-core@v0.8.0` and
 `git checkout v0.8.0` return different trees. They differ in 15 files of
 Python SDK packaging, release scripts and documentation; no Go source differs.
-Every 0.8.1 channel resolves to one commit.
+0.8.1 is tagged once, so the module proxy, the git tag and the published
+artifacts all point to the same commit.
 
 ### Upgrade
 
@@ -35,7 +36,7 @@ or earlier, follow the 0.8.0 upgrade notes below.
 Verify a downloaded archive and the published image separately:
 
 ```sh
-gh attestation verify ./tool-guard-core_*.tar.gz -R dimaggi-ai/tool-guard-core
+gh attestation verify ./tool-guard-core_0.8.1_linux_amd64.tar.gz -R dimaggi-ai/tool-guard-core
 cosign verify ghcr.io/dimaggi-ai/tool-guard-core:0.8.1 \
   --certificate-identity-regexp '^https://github\.com/dimaggi-ai/tool-guard-core/\.github/workflows/release\.yml@refs/tags/v0\.8\.1$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com

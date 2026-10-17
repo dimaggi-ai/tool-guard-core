@@ -59,12 +59,16 @@ guard catching it after the fact — do it right the first time.
 
 5. **Watch the Release workflow.** Its first real step verifies the tag
    resolves to `origin/main`'s exact HEAD and fails immediately, before any
-   build/publish work, if it does not. Do not delete or move a pushed tag:
-   the public Go module proxy and checksum database may already have recorded it,
-   and they never change a recorded version (v0.8.0 shipped with the proxy
-   and the git tag on different commits for this reason). Fix `main` and
-   release the next patch version from step 1. A repository ruleset blocks
-   updating or deleting `v*` tags.
+   build/publish work, if it does not. If a transient failure leaves an
+   unpublished draft release, re-run the failed workflow for the same tag:
+   `scripts/verify-release-workflow-state.sh` accepts a re-run that resumes
+   an unpublished draft.
+   If the release commit itself needs a change, do not delete or move the
+   pushed tag: the public Go module proxy and checksum database may already
+   have recorded it, and they cannot change a recorded version (v0.8.0 shipped
+   with the proxy and the git tag on different commits for this reason). Fix
+   `main` and release the next patch version from step 1. A repository ruleset,
+   added after v0.8.0, blocks updating or deleting `v*` tags.
 
 ## Before tagging at all
 
