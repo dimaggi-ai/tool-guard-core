@@ -6,6 +6,28 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-10-17
+
+### Fixed
+
+- Release integrity. The Go module proxy records `v0.8.0` at commit
+  `1e7b776`, but the `v0.8.0` git tag, GitHub Release, container image and
+  PyPI package come from `9740e05`. The tag was deleted and re-created after
+  PyPI rejected the first publication, and the public Go module proxy and
+  checksum database cannot change a recorded version. As a result, `go get ...@v0.8.0` and
+  `git checkout v0.8.0` return different trees. The two commits differ in 15
+  files of Python SDK packaging, release scripts and documentation; no Go
+  source differs. All 0.8.1 channels resolve to one commit. Pin `v0.8.1`
+  instead of `v0.8.0`. There is no behavior change.
+
+### Changed
+
+- A repository ruleset now blocks updating or deleting `v*` tags.
+  `RELEASING.md` now says to fix a failed release with the next patch version
+  instead of moving or deleting its tag.
+- `api/openapi.yaml` `info.version` and the `docs/operating.md` image example
+  now carry the release version; both previously named older releases.
+
 ## [0.8.0] — 2026-09-23
 
 ### Breaking mode-precedence correction
@@ -1377,7 +1399,8 @@ Lint heuristics shipped (8):
   documented battle-test catalogue; the strict variants are for
   operators who already accept those build-time costs.
 
-[Unreleased]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.5.2...v0.6.0

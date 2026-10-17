@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Tool Guard Core Proxy API
-  version: 0.5.2
+  version: 0.8.1
   description: >-
     Local policy-decision and escalation API exposed by tg-proxy. A denied
     response is a decision for the caller to enforce; the HTTP API does not

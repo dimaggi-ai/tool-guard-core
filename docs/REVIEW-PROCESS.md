@@ -292,6 +292,18 @@ passes have real precedent instead of a starting from scratch.
   were also corrected: the recorded model name is sanitised, and the
   probability sum is checked within 0.01. → pillars 1, 4, and 5.
 
+- **2026-10 · v0.8.0 tag, 0.8.1 patch release.** The v0.8.0 tag was first
+  pushed at `1e7b776`; after PyPI rejected that publication, the tag was
+  deleted and re-created at `9740e05`. The Go module proxy had already
+  recorded `1e7b776`, so `go get ...@v0.8.0` and `git checkout v0.8.0`
+  returned different trees (15 files of Python SDK packaging, release scripts
+  and docs; no Go source). The release workflow verifies the GitHub Release,
+  container signatures and PyPI files, not the module proxy, so the successful
+  re-run did not show the split. An internal review found it later.
+  0.8.1 is tagged once, `RELEASING.md` now forbids moving or deleting a pushed
+  tag, and a repository ruleset blocks updating or deleting `v*` tags.
+  → pillars 5 and 6.
+
 ## Where this fits in the release checklist
 
 `RELEASING.md`'s "Before tagging at all" section should include running
