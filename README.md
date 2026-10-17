@@ -625,6 +625,12 @@ Comprehensive docs live in [`docs/`](docs/README.md):
 
 ## Known limitations
 
+> **New in 0.8.1:** no change to Tool Guard's behavior. Binaries and the
+> container image are built with Go 1.26.9, which fixes nine reachable
+> standard-library vulnerabilities. Go users should pin `v0.8.1`:
+> the module proxy recorded `v0.8.0` from an earlier commit than the
+> `v0.8.0` git tag (Python SDK packaging, release scripts and docs differ;
+> Go source is identical). See [Release-Notes.md](Release-Notes.md).
 > **New in 0.8.0 (breaking):** policy YAML `mode` is authoritative;
 > duplicate policy/rule identities are rejected; new audit writes use canonical
 > v2 and must not be resumed by a 0.7 writer; and direct access to

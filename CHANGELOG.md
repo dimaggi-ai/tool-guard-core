@@ -6,6 +6,40 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-10-17
+
+### Fixed
+
+- Release integrity. The Go module proxy records `v0.8.0` at commit
+  `1e7b776`, but the `v0.8.0` git tag, GitHub Release, container image and
+  PyPI package come from `9740e05`. The tag was deleted and re-created after
+  PyPI rejected the first publication, and the public Go module proxy and
+  checksum database cannot change a recorded version. As a result, `go get ...@v0.8.0` and
+  `git checkout v0.8.0` return different trees. The two commits differ in 15
+  files of Python SDK packaging, release scripts and documentation; no Go
+  source differs. 0.8.1 is tagged once, and a repository ruleset blocks
+  updating or deleting `v*` tags. Pin `v0.8.1`
+  instead of `v0.8.0`. Tool Guard's own behavior is unchanged.
+
+### Changed
+
+- A repository ruleset now blocks updating or deleting `v*` tags.
+  `RELEASING.md` now says to fix a failed release with the next patch version
+  instead of moving or deleting its tag.
+- `api/openapi.yaml` `info.version` and the `docs/operating.md` image example
+  now carry the release version; both previously named older releases.
+
+### Security
+
+- Go 1.26.9 toolchain. CI, release and nightly workflows, the `toolchain`
+  line in `go.mod` and the source-build `Dockerfile` move from Go 1.25.13 to
+  1.26.9. This patches nine reachable standard-library vulnerabilities: seven
+  in `net/http`, one in `net/textproto` and one in `crypto/tls`
+  (GO-2026-6603, GO-2026-6605, GO-2026-6607, GO-2026-6608, GO-2026-6610, GO-2026-6611, GO-2026-6612, GO-2026-6613, GO-2026-6617).
+  No Go 1.25 release fixes them. `govulncheck` is clean on 1.26.9. The
+  `go 1.25.0` minimum in `go.mod` is unchanged; applications that embed Core
+  should build with Go 1.26.9 or later to get the fixes.
+
 ## [0.8.0] — 2026-09-23
 
 ### Breaking mode-precedence correction
@@ -1377,7 +1411,8 @@ Lint heuristics shipped (8):
   documented battle-test catalogue; the strict variants are for
   operators who already accept those build-time costs.
 
-[Unreleased]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.5.2...v0.6.0

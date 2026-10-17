@@ -93,12 +93,12 @@ The shipped `Dockerfile` produces a distroless-nonroot image with
 ~10 MB statically linked.
 
 ```sh
-docker build -t ghcr.io/dimaggi-ai/tool-guard-core:0.2.0 .
+docker build -t ghcr.io/dimaggi-ai/tool-guard-core:0.8.1 .
 docker run --rm \
   -p 9090:9090 \
   -v "$(pwd)/policies:/policies:ro" \
   -v "$(pwd)/audit:/var/lib/tg" \
-  ghcr.io/dimaggi-ai/tool-guard-core:0.2.0 \
+  ghcr.io/dimaggi-ai/tool-guard-core:0.8.1 \
   -policy-dir /policies \
   -audit-log /var/lib/tg/decisions.jsonl \
   -listen :9090
@@ -376,7 +376,13 @@ hashed and chained correctly), not fail-recoverable.
 
 ## Upgrade path
 
-Tool Guard follows semver and is still pre-1.0. Version 0.8.0 contains
+Tool Guard follows semver and is still pre-1.0. Version 0.8.1 does not
+change Tool Guard's behavior from 0.8.0. Its binaries and container image
+are built with Go 1.26.9, which patches nine reachable
+standard-library vulnerabilities. Go users should upgrade to `v0.8.1` so that `go get` and
+`git checkout` resolve to the same commit.
+
+Version 0.8.0 contains
 explicitly documented mode-precedence, policy-identity, Go API, and
 audit-format migrations. For the Go API change, replace direct reads or writes
 of the removed mutable `engine.LLMClassifyHook` variable with
