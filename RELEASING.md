@@ -68,7 +68,7 @@ guard catching it after the fact — do it right the first time.
    pushed tag: the public Go module proxy and checksum database may already
    have recorded it, and they cannot change a recorded version. The v0.8.0
    tag was re-created after the proxy recorded it, so the proxy and the git
-   tag shipped on different commits. Fix
+   tag now resolve to different commits. Fix
    `main` and release the next patch version from step 1. A repository ruleset,
    added after v0.8.0, blocks updating or deleting `v*` tags.
 

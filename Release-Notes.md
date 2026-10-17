@@ -7,8 +7,9 @@ per-change record see [CHANGELOG.md](CHANGELOG.md).
 
 ## 0.8.1 — 2026-10-17
 
-A patch release with no behavior change. It fixes a release-integrity problem
-in 0.8.0.
+A patch release that does not change Tool Guard's behavior. It fixes a
+release-integrity problem in 0.8.0 and rebuilds the binaries and container
+image with Go 1.26.9, which patches nine reachable standard-library vulnerabilities.
 
 The `v0.8.0` tag was first pushed at `1e7b776`. PyPI rejected that
 publication, so the tag was deleted and re-created at `9740e05`, the commit that
@@ -19,8 +20,21 @@ database can change a recorded version. As a result,
 `go get github.com/dimaggi-ai/tool-guard-core@v0.8.0` and
 `git checkout v0.8.0` return different trees. They differ in 15 files of
 Python SDK packaging, release scripts and documentation; no Go source differs.
-0.8.1 is tagged once, and a repository ruleset prevents moving or deleting
-the tag.
+0.8.1 is tagged once, and a repository ruleset blocks updating or deleting
+`v*` tags.
+
+### Go 1.26.9 toolchain
+
+CI, release and nightly workflows, the `toolchain` line in `go.mod` and the
+source-build `Dockerfile` move from Go 1.25.13 to 1.26.9. `govulncheck`
+reported nine reachable standard-library vulnerabilities in Go 1.25.13:
+seven in `net/http`, one in `net/textproto` and one in `crypto/tls`
+(GO-2026-6603, GO-2026-6605, GO-2026-6607, GO-2026-6608, GO-2026-6610, GO-2026-6611, GO-2026-6612, GO-2026-6613, GO-2026-6617). No Go 1.25 release fixes them, and
+`govulncheck` is clean on 1.26.9.
+
+The `go 1.25.0` minimum in `go.mod` is unchanged, so modules that import Core
+still build with Go 1.25. Build applications that embed Core with Go 1.26.9 or
+later to get the fixes.
 
 ### Upgrade
 

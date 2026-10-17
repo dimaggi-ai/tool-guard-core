@@ -19,7 +19,7 @@ jobs:
           - macos-latest
           - windows-latest
         go:
-          - "1.25.13"
+          - "1.26.9"
     # windows-latest's default shell is pwsh, not bash — the gofmt and
     # coverage-threshold steps below use bash syntax ($(...), [ -n ... ],
     # multi-line awk) that pwsh can't parse. Force bash everywhere (a no-op
@@ -120,7 +120,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.25.13"
+          go-version: "1.26.9"
           cache: true
       - uses: actions/setup-python@v5
         with:
@@ -159,7 +159,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.25.13"
+          go-version: "1.26.9"
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
       - name: Run govulncheck
@@ -172,7 +172,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.25.13"
+          go-version: "1.26.9"
           cache: true
       - name: Build all binaries (main + examples)
         run: |
@@ -224,7 +224,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.25.13"
+          go-version: "1.26.9"
       - name: Validate .goreleaser.yaml
         uses: goreleaser/goreleaser-action@v6
         with:
