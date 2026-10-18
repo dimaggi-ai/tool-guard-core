@@ -242,7 +242,7 @@ func TestExportSnapshotExcludesLaterAppends(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.jsonl")
 	writeExportFile(t, path, marshalExportTrace(t, first))
 
-	fileSet, err := openVerifiedAuditFileSet(path)
+	fileSet, err := openVerifiedAuditFileSet(path, &auditVerificationFlags{})
 	if err != nil {
 		t.Fatalf("openVerifiedAuditFileSet: %v", err)
 	}
@@ -285,7 +285,7 @@ func TestExportSnapshotIgnoresSameSizeSourceRewrite(t *testing.T) {
 	}
 	writeExportFile(t, path, verifiedRaw)
 
-	fileSet, err := openVerifiedAuditFileSet(path)
+	fileSet, err := openVerifiedAuditFileSet(path, &auditVerificationFlags{})
 	if err != nil {
 		t.Fatalf("openVerifiedAuditFileSet: %v", err)
 	}

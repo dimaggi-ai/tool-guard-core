@@ -8,11 +8,15 @@
 // projection changes its hash, which breaks the chain link held by the next
 // record, and so on through to the tail.
 //
-// The package ships two verification primitives:
+// The package ships these verification primitives:
 //
 //   - [VerifyChainFromReader] for offline replay of a JSONL stream — the
 //     primitive `tg verify -file decisions.jsonl` runs on. No database
 //     required.
+//   - [VerifyPrunedChainFromReader] for explicit opt-in to checkpoint-based
+//     verification. [VerifyChainFromReader] requires genesis and rejects
+//     pruned chains. A trusted external pin establishes checkpoint identity,
+//     not the authenticity of deleted content.
 //   - [ChainVerifier] for online verification against a [ChainStore]
 //     backend (whatever your application uses to persist traces).
 //

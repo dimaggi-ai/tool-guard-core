@@ -36,16 +36,20 @@ guard catching it after the fact — do it right the first time.
    git push origin main
    ```
 
-3. **Tag `main`'s new HEAD locally, then verify the tag-derived Python
+3. **Tag `main`'s new HEAD locally, then verify the Go and Python
    artifacts before publishing the tag:**
    ```bash
    git tag -a vX.Y.Z -m "Tool Guard Core vX.Y.Z"
+   rm -rf .git/go-reproducible dist/python
+   bash scripts/verify-go-reproducible.sh .git/go-reproducible --release
    bash scripts/verify-python-reproducible.sh dist/python
    python scripts/verify-python-dist.py dist/python --expected-version X.Y.Z
    ```
    `setuptools-scm` derives the final version from the local tag, so this
-   exact-version check cannot run before the tag exists. The tag is still
-   local at this point. If either command fails, delete or correct the local
+   exact-version check cannot run before the tag exists. Both
+   reproducibility scripts refuse a nonempty output directory, so the `rm`
+   line clears output from an earlier run or release. The tag is still
+   local at this point. If any verification command fails, delete or correct the local
    tag and fix the release commit; do not push the tag.
 
 4. **Push the tag** (this triggers `.github/workflows/release.yml`,
@@ -124,3 +128,15 @@ with no branch specified, and the Release page's own links to
 serving the prior release. The CI guard in `release.yml` turns that
 from a silent, easy-to-miss gap into a hard failure on the next
 release attempt.
+
+## Go artifact reproducibility
+
+Use Go 1.26.9 and the official GoReleaser 2.18.3 binary. Keep
+`--parallelism=1` on release builds so the binary order in archives is deterministic. The local Go
+verification command above builds every target twice and compares binaries
+and archives. The release workflow repeats this check and verifies each actual
+upload archive before generating SBOMs. Existing attestations and container
+signatures remain separate checks.
+
+See [Rebuild Go release artifacts](docs/reproducible-builds.md) for the
+independent tagged-source rebuild and published checksum comparison.

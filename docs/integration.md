@@ -254,6 +254,8 @@ func NewGuard(policies []domain.Policy, logPath, engineVersion string) (*Guard, 
     if err != nil {
         return nil, err
     }
+    // VerifyChainFromReader rejects pruned chains. Read-only callers can opt
+    // in with VerifyPrunedChainFromReader; writers must not resume them.
     report, err := audit.VerifyChainFromReader(f)
     if err != nil {
         _ = f.Close()
