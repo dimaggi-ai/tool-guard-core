@@ -12,6 +12,12 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   `--yes`. A versioned checkpoint preserves the removed boundary and retained
   hashes. `tg verify` checks the retained chain, count, and tail. Publication
   currently requires Linux. See [Audit Pruning](docs/audit-prune.md) for limits.
+- Go API: `audit.PruneCheckpoint`, `audit.ParsePruneCheckpoint`,
+  `audit.IsPruneCheckpoint` and `audit.StreamReport.Pruned` let library callers
+  recognize a pruned log during verification. The change is additive; code that
+  builds `StreamReport` with positional struct literals must switch to keyed
+  fields. Callers that need complete history should reject a report with
+  `Pruned` set, because a checkpoint does not authenticate deleted records.
 
 ## [0.8.1] — 2026-10-17
 
