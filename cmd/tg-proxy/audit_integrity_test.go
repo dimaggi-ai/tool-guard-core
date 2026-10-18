@@ -667,7 +667,7 @@ func TestOpenAuditLogRejectsPrunedChain(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			report, err := audit.VerifyChainFromReader(bytes.NewReader(raw.Bytes()))
+			report, err := audit.VerifyPrunedChainFromReader(bytes.NewReader(raw.Bytes()), "")
 			if err != nil || !report.Intact {
 				t.Fatalf("bad fixture: %+v %v", report, err)
 			}
@@ -676,9 +676,14 @@ func TestOpenAuditLogRejectsPrunedChain(t *testing.T) {
 				t.Fatal(err)
 			}
 			p := &proxy{auditPath: path, auditRotation: platformAuditRotationOps()}
+			if err := p.verifyFullAuditChain(); err == nil || !strings.Contains(err.Error(), "cannot append to a pruned audit chain") {
+				t.Fatalf("full-chain refusal: %v", err)
+			}
 			if err := p.openAuditLog(); err == nil {
 				p.auditLog.Close()
 				t.Fatal("opened pruned chain for writing")
+			} else if !empty && !strings.Contains(err.Error(), "cannot append to a pruned audit chain") {
+				t.Fatalf("wrong refusal: %v", err)
 			}
 			after, err := os.ReadFile(path)
 			if err != nil || !bytes.Equal(after, raw.Bytes()) {

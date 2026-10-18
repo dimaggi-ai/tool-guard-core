@@ -202,11 +202,11 @@ func verifyHookAuditChain(path string) (string, bool, error) {
 	if err != nil {
 		return "", false, fmt.Errorf("verify existing audit chain: %w", err)
 	}
-	if !report.Intact {
-		return "", false, fmt.Errorf("existing audit chain failed at line %d: %s", report.FirstFailureAt, report.FailureReason)
-	}
 	if report.Pruned {
 		return "", false, fmt.Errorf("cannot append to a pruned audit chain")
+	}
+	if !report.Intact {
+		return "", false, fmt.Errorf("existing audit chain failed at line %d: %s", report.FirstFailureAt, report.FailureReason)
 	}
 	needsSeparator, err := audit.NeedsRecordSeparator(f)
 	if err != nil {

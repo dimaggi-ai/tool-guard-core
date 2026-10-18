@@ -72,15 +72,14 @@ type StreamReport struct {
 }
 
 // VerifyChainFromReader replays a JSONL stream of decision traces and
-// reports whether the chain is tamper-free. One round-trip — no DB, no
-// network, no Tool Guard infrastructure. This is the primitive an
+// reports whether the chain is tamper-free. One round-trip, with no DB,
+// no network and no Tool Guard infrastructure. This is the primitive an
 // auditor's offline `tg verify -file decisions.jsonl` runs on.
 //
 // Verification rules:
-//   - Each nonempty line must be a decision trace or the initial checkpoint.
-//   - The first record must be a genesis trace or a valid prune checkpoint.
-//     A checkpoint supplies the removed boundary hash and retained count/tail.
-//     It does not authenticate deleted content or establish independent custody.
+//   - Each nonempty line must be a decision trace.
+//   - The first record must be a genesis trace. A leading prune checkpoint
+//     fails with Pruned set; use VerifyPrunedChainFromReader to accept one.
 //   - For record N>1, trace.PreviousTraceHash must equal record N-1's TraceHash.
 //   - trace.TraceHash must equal ComputeCanonicalTraceHash(...) with this
 //     record version's canonical field projection.
@@ -89,6 +88,19 @@ type StreamReport struct {
 // pins the line, and FailureReason explains why. The function still
 // returns nil; callers check report.Intact.
 func VerifyChainFromReader(r io.Reader) (*StreamReport, error) {
+	return verifyChainFromReader(r, false, "")
+}
+
+// VerifyPrunedChainFromReader verifies a genesis or checkpoint-based JSONL chain.
+// An empty expectedCheckpointHash accepts an unpinned checkpoint and verifies
+// internal consistency only. A nonempty pin requires a matching checkpoint.
+// A trusted external pin establishes checkpoint identity, not the authenticity
+// of deleted content. Integrity failures return Intact false and a nil error.
+func VerifyPrunedChainFromReader(r io.Reader, expectedCheckpointHash string) (*StreamReport, error) {
+	return verifyChainFromReader(r, true, expectedCheckpointHash)
+}
+
+func verifyChainFromReader(r io.Reader, allowPruned bool, expectedCheckpointHash string) (*StreamReport, error) {
 	sc := bufio.NewScanner(r)
 	// Decision traces can be large (rule_results + context_snapshot); raise
 	// the scanner's per-line ceiling so big-but-valid records are not
@@ -120,16 +132,26 @@ func VerifyChainFromReader(r io.Reader) (*StreamReport, error) {
 			if checkpoint != nil || rep.Records != 0 {
 				return failAt(rep, line, "checkpoint must be the first and only checkpoint"), nil
 			}
+			rep.Pruned = true
+			if !allowPruned {
+				return failAt(rep, line, "pruned chain requires VerifyPrunedChainFromReader"), nil
+			}
 			var err error
 			checkpoint, err = ParsePruneCheckpoint(raw)
 			if err != nil {
 				return failAt(rep, line, fmt.Sprintf("checkpoint: %v", err)), nil
 			}
-			rep.Pruned = true
+			if expectedCheckpointHash != "" && checkpoint.CheckpointHash != expectedCheckpointHash {
+				return failAt(rep, line, "checkpoint_hash does not match expected checkpoint hash"), nil
+			}
 			prevHash = checkpoint.LastRemovedHash
 			highestVersion = checkpoint.BoundaryCanonicalVersion
 			highestVersionRank, _ = canonicalTraceVersionRank(highestVersion)
 			continue
+		}
+
+		if checkpoint == nil && expectedCheckpointHash != "" {
+			return failAt(rep, line, "pinned verification requires a checkpoint"), nil
 		}
 
 		var t domain.DecisionTrace
@@ -180,11 +202,17 @@ func VerifyChainFromReader(r io.Reader) (*StreamReport, error) {
 	if err := sc.Err(); err != nil {
 		return failAt(rep, line, fmt.Sprintf("scan: %v", err)), nil
 	}
+	if checkpoint == nil && expectedCheckpointHash != "" {
+		return failAt(rep, line, "pinned verification requires a checkpoint"), nil
+	}
 	if checkpoint != nil {
 		if int64(rep.Records) != checkpoint.RetainedCount || prevHash != checkpoint.RetainedTailHash {
 			return failAt(rep, line, "checkpoint retained count or tail mismatch"), nil
 		}
-		rep.Note = "Pruned chain: checkpoint is unsigned; deleted content and completeness require independent custody."
+		rep.Note = "Pruned chain: checkpoint is unsigned and unpinned; verifies internal consistency only, not deleted content."
+		if expectedCheckpointHash != "" {
+			rep.Note = "Pruned chain: checkpoint is unsigned; a trusted external pin establishes checkpoint identity only, not the authenticity of deleted content."
+		}
 	}
 	rep.Tail = prevHash
 	return rep, nil

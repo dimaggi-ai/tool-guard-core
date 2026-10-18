@@ -49,7 +49,7 @@ func TestCheckpointAdversarial(t *testing.T) {
 	}
 	for name, raw := range cases {
 		t.Run(name, func(t *testing.T) {
-			r, err := VerifyChainFromReader(bytes.NewReader(raw))
+			r, err := VerifyPrunedChainFromReader(bytes.NewReader(raw), "")
 			want := name == "valid" || name == "legacy genesis"
 			if err != nil || r.Intact != want {
 				t.Fatalf("report=%+v error=%v", r, err)
@@ -83,7 +83,7 @@ func TestCheckpointAdversarial(t *testing.T) {
 			mutate(&altered)
 			altered.CheckpointHash = altered.Hash()
 			raw := append(checkpointLine(t, altered), suffix...)
-			r, err := VerifyChainFromReader(bytes.NewReader(raw))
+			r, err := VerifyPrunedChainFromReader(bytes.NewReader(raw), "")
 			if err != nil || r.Intact {
 				t.Fatalf("accepted alteration: %+v %v", r, err)
 			}
@@ -93,14 +93,14 @@ func TestCheckpointAdversarial(t *testing.T) {
 		altered := cp
 		altered.RemovedCount++
 		altered.LastRemovedIndex++
-		r, err := VerifyChainFromReader(bytes.NewReader(append(checkpointLine(t, altered), suffix...)))
+		r, err := VerifyPrunedChainFromReader(bytes.NewReader(append(checkpointLine(t, altered), suffix...)), "")
 		if err != nil || r.Intact {
 			t.Fatalf("accepted checksum mismatch: %+v %v", r, err)
 		}
 	})
 	t.Run("unknown field", func(t *testing.T) {
 		raw := bytes.Replace(valid, []byte(`"record_type":`), []byte(`"extra":true,"record_type":`), 1)
-		r, err := VerifyChainFromReader(bytes.NewReader(raw))
+		r, err := VerifyPrunedChainFromReader(bytes.NewReader(raw), "")
 		if err != nil || r.Intact {
 			t.Fatalf("accepted unknown field: %+v %v", r, err)
 		}
@@ -112,7 +112,7 @@ func TestCheckpointEmptySuffix(t *testing.T) {
 	cp.RetainedCount = 0
 	cp.RetainedTailHash = cp.LastRemovedHash
 	cp.CheckpointHash = cp.Hash()
-	r, err := VerifyChainFromReader(bytes.NewReader(checkpointLine(t, cp)))
+	r, err := VerifyPrunedChainFromReader(bytes.NewReader(checkpointLine(t, cp)), "")
 	if err != nil || !r.Intact || r.Tail != cp.LastRemovedHash || r.Records != 0 {
 		t.Fatalf("%+v %v", r, err)
 	}
@@ -127,10 +127,54 @@ func TestLegacyTraceRecordTypeExtensions(t *testing.T) {
 			if bytes.Equal(raw, legacy) {
 				t.Fatal("fixture did not inject extension")
 			}
-			rep, err := VerifyChainFromReader(bytes.NewReader(raw))
+			rep, err := VerifyPrunedChainFromReader(bytes.NewReader(raw), "")
 			if err != nil || !rep.Intact || rep.Pruned || rep.Records != len(traces) {
 				t.Fatalf("legacy extension rejected: %+v %v", rep, err)
 			}
 		})
+	}
+}
+
+func TestCheckpointVerificationOptIn(t *testing.T) {
+	cp, traces := checkpointFixture(t)
+	// Drop a valid genesis prefix and replace it with a recomputed checkpoint.
+	raw := append(checkpointLine(t, cp), writeJSONL(t, traces[1:])...)
+	strict, err := VerifyChainFromReader(bytes.NewReader(raw))
+	if err != nil || strict.Intact || !strict.Pruned || !strings.Contains(strict.FailureReason, "VerifyPrunedChainFromReader") {
+		t.Fatalf("strict: %+v %v", strict, err)
+	}
+	for _, tc := range []struct {
+		name   string
+		raw    []byte
+		pin    string
+		intact bool
+		note   string
+	}{
+		{"unpinned", raw, "", true, "unpinned"},
+		{"pinned", raw, cp.CheckpointHash, true, "identity only"},
+		{"missing", writeJSONL(t, traces), cp.CheckpointHash, false, ""},
+		{"empty", nil, cp.CheckpointHash, false, ""},
+		{"mismatch", raw, "sha256:" + strings.Repeat("0", 64), false, ""},
+		{"genesis", writeJSONL(t, traces), "", true, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := VerifyPrunedChainFromReader(bytes.NewReader(tc.raw), tc.pin)
+			if err != nil || r.Intact != tc.intact || !strings.Contains(r.Note, tc.note) {
+				t.Fatalf("%+v %v", r, err)
+			}
+		})
+	}
+}
+
+func TestParseCheckpointTrailingData(t *testing.T) {
+	cp, _ := checkpointFixture(t)
+	for _, suffix := range []string{"{}", "null", "garbage"} {
+		_, err := ParsePruneCheckpoint(append(checkpointLine(t, cp), suffix...))
+		if err == nil || err.Error() != "checkpoint has trailing data" {
+			t.Fatalf("suffix %q: %v", suffix, err)
+		}
+	}
+	if _, err := ParsePruneCheckpoint(append(checkpointLine(t, cp), " \t\r\n"...)); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -58,7 +58,7 @@ func readPruned(t *testing.T, path string) (audit.PruneCheckpoint, []byte) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := audit.VerifyChainFromReader(bytes.NewReader(raw))
+	r, err := audit.VerifyPrunedChainFromReader(bytes.NewReader(raw), "")
 	if err != nil || !r.Intact {
 		t.Fatalf("%+v %v", r, err)
 	}
@@ -97,7 +97,7 @@ func TestPruneDryRunAndWrite(t *testing.T) {
 	if err != nil || !bytes.Equal(original, raw) {
 		t.Fatal("input changed")
 	}
-	verified, err := openVerifiedAuditFileSet(out)
+	verified, err := openVerifiedAuditFileSet(out, &auditVerificationFlags{allowPruned: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,7 +314,7 @@ func TestPruneLegacyEOFAndExport(t *testing.T) {
 		t.Fatal("legacy EOF record changed")
 	}
 	var exported, errs bytes.Buffer
-	if code := runExport([]string{"-file", out}, &exported, &errs); code != 0 {
+	if code := runExport([]string{"-file", out, "-allow-pruned"}, &exported, &errs); code != 0 {
 		t.Fatalf("export: %d %s", code, errs.String())
 	}
 	if !bytes.Equal(exported.Bytes(), append(append([]byte{}, suffix...), '\n')) {
@@ -377,11 +377,112 @@ func TestHookRejectsPrunedChain(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := &domain.ActionEnvelope{EnvelopeID: "test", Timestamp: now}
-	if err := appendHookAudit(out, env, nil, "allow", "test"); err == nil || !strings.Contains(err.Error(), "pruned") {
+	if err := appendHookAudit(out, env, nil, "allow", "test"); err == nil || !strings.Contains(err.Error(), "cannot append to a pruned audit chain") {
 		t.Fatalf("append returned: %v", err)
 	}
 	after, err := os.ReadFile(out)
 	if err != nil || !bytes.Equal(before, after) {
 		t.Fatal("hook changed pruned input")
+	}
+}
+
+func TestPrunedVerificationFlags(t *testing.T) {
+	in, raw, now := pruneFixture(t, 72*time.Hour, 12*time.Hour)
+	lines := bytes.SplitAfterN(raw, []byte("\n"), 2)
+	var removed, retained domain.DecisionTrace
+	if err := json.Unmarshal(lines[0], &removed); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(lines[1], &retained); err != nil {
+		t.Fatal(err)
+	}
+	cp := audit.PruneCheckpoint{
+		RecordType: "prune_checkpoint", Version: 1, RemovedCount: 1, LastRemovedIndex: 1,
+		LastRemovedHash: removed.TraceHash, LastRemovedTimestamp: removed.Timestamp,
+		BoundaryCanonicalVersion: removed.CanonicalVersion, Cutoff: now.Add(-24 * time.Hour),
+		RetainedCount: 1, RetainedTailHash: retained.TraceHash,
+	}
+	cp.CheckpointHash = cp.Hash()
+	prefix, err := json.Marshal(cp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := in + ".forged"
+	if err := os.WriteFile(path, append(append(prefix, '\n'), lines[1]...), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, path     string
+		flags          []string
+		verify, export int
+	}{
+		{"strict", path, nil, 5, 1},
+		{"allow", path, []string{"-allow-pruned"}, 0, 0},
+		{"pin", path, []string{"-checkpoint-hash", cp.CheckpointHash}, 0, 0},
+		{"missing", in, []string{"-checkpoint-hash", cp.CheckpointHash}, 5, 1},
+		{"mismatch", path, []string{"-checkpoint-hash", "sha256:" + strings.Repeat("0", 64)}, 5, 1},
+		{"malformed", path, []string{"-checkpoint-hash", "bad"}, 2, 2},
+		{"empty", path, []string{"-checkpoint-hash="}, 2, 2},
+		{"uppercase", path, []string{"-checkpoint-hash", "sha256:" + strings.Repeat("A", 64)}, 2, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := append([]string{"-file", tc.path}, tc.flags...)
+			code, output := captureSimulateOutput(t, func() int { return cmdVerify(args) })
+			if code != tc.verify {
+				t.Fatalf("verify: %d %s", code, output)
+			}
+			if code != 2 {
+				var report audit.StreamReport
+				if err := json.Unmarshal(output, &report); err != nil {
+					t.Fatal(err)
+				}
+				if report.Intact != (code == 0) || report.Pruned != (tc.path == path) {
+					t.Fatalf("report: %+v", report)
+				}
+				if tc.name == "strict" && !strings.Contains(report.FailureReason, "VerifyPrunedChainFromReader") {
+					t.Fatalf("reason: %+v", report)
+				}
+			}
+			var exported, stderr bytes.Buffer
+			if code := runExport(args, &exported, &stderr); code != tc.export {
+				t.Fatalf("export: %d %s", code, stderr.String())
+			}
+			if tc.export != 0 && exported.Len() != 0 {
+				t.Fatal("export wrote rejected records")
+			}
+			if tc.export == 0 && exported.String() != strings.TrimSuffix(string(lines[1]), "\r\n")+"\n" {
+				t.Fatalf("unexpected export: %s", exported.Bytes())
+			}
+		})
+	}
+}
+
+func TestPruneRejectsOutputRotationSibling(t *testing.T) {
+	for _, suffix := range []string{"1", "0", "-1", "+1", "01"} {
+		for _, alias := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/alias=%v", suffix, alias), func(t *testing.T) {
+				in, raw, now := pruneFixture(t, 72*time.Hour, 12*time.Hour)
+				dir := filepath.Dir(in)
+				if alias {
+					link := filepath.Join(t.TempDir(), "alias")
+					if err := os.Symlink(dir, link); err != nil {
+						t.Fatal(err)
+					}
+					dir = link
+				}
+				out := filepath.Join(dir, filepath.Base(in)+"."+suffix)
+				code, msg := pruneRun(t, now, "-file", in, "-out", out, "-older-than", "24h", "-closed", "-yes")
+				if code != 1 || !strings.Contains(msg, "output would become a rotation sibling of the input") {
+					t.Fatalf("%d %s", code, msg)
+				}
+				if _, err := os.Lstat(out); !os.IsNotExist(err) {
+					t.Fatal("output exists")
+				}
+				after, err := os.ReadFile(in)
+				if err != nil || !bytes.Equal(raw, after) {
+					t.Fatal("input changed")
+				}
+			})
+		}
 	}
 }

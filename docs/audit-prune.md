@@ -11,7 +11,7 @@ Add `--yes` to write, then verify the published file:
 
 ```bash
 tg prune --older-than 720h -file closed.jsonl -out retained.jsonl -closed --yes
-tg verify -file retained.jsonl
+tg verify -file retained.jsonl -allow-pruned
 ```
 
 `--older-than` uses positive Go durations, such as `24h` or `90m`. Calendar
@@ -63,10 +63,11 @@ remaining records are removed, the output contains only a checkpoint whose
 tail equals the last removed hash.
 
 Writing uses a private temporary file in the output directory, syncs it,
-verifies it with the same verifier used by `tg verify`, and publishes it with
-an atomic rename that refuses replacement. The output directory is then
+verifies it with the opt-in verifier used by `tg verify -allow-pruned`, and
+publishes it with an atomic rename that refuses replacement. The output directory is then
 synced. Existing output paths, including symlinks, are rejected. Output paths
-with numbered rotation siblings are rejected too.
+with numbered rotation siblings are rejected too, as are outputs that would
+become rotation siblings of the input.
 
 Publication currently requires Linux and filesystem support for
 `renameat2(RENAME_NOREPLACE)`. Other platforms can run the preview but cannot
@@ -76,6 +77,19 @@ retrying. An interrupted process can leave a private `.tg-prune-*` temporary
 file in the output directory; treat it as retained audit data until removed.
 
 ## What verification proves
+
+`tg verify` and `tg export` reject pruned chains by default. Use
+`-allow-pruned` to accept an unsigned, unpinned checkpoint and verify internal
+consistency only. Alternatively, `-checkpoint-hash sha256:<64 lowercase hex>`
+requires a checkpoint with that exact hash and implies `-allow-pruned`.
+Obtain the pin from a trusted copy stored elsewhere. A trusted external pin
+establishes checkpoint identity, not the content of deleted records.
+
+Both commands exit 0 on success and 2 for malformed or explicitly empty pins.
+Without opt-in, or with a missing checkpoint or pin mismatch, `tg verify`
+prints a JSON failure report and exits 5; `tg export` exits 1 without writing
+exported records. Other integrity failures also exit 5 for verify and 1 for
+export. Operational failures exit 1 for both commands.
 
 Verification recomputes every retained trace hash and checks each chain link,
 starting from the last removed hash in the checkpoint. It checks the checkpoint
@@ -102,5 +116,5 @@ resume a pruned chain.
 
 The HTTP OpenAPI contract and Python client do not read audit JSONL files.
 Their receipt fields and HTTP response formats are unchanged. `tg export`
-verifies a pruned source but omits its checkpoint. The exported decision
-traces are not independently verifiable as a complete chain.
+requires opt-in to verify a pruned source and omits its checkpoint. The exported
+decision traces are not independently verifiable as a complete chain.

@@ -10,14 +10,16 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 - `tg prune` previews retention of a closed audit log and writes a new file with
   `--yes`. A versioned checkpoint preserves the removed boundary and retained
-  hashes. `tg verify` checks the retained chain, count, and tail. Publication
+  hashes. `tg verify` and `tg export` reject pruned chains unless
+  `-allow-pruned` or `-checkpoint-hash` is given. Publication
   currently requires Linux. See [Audit Pruning](docs/audit-prune.md) for limits.
 - Go API: `audit.PruneCheckpoint`, `audit.ParsePruneCheckpoint`,
-  `audit.IsPruneCheckpoint` and `audit.StreamReport.Pruned` let library callers
-  recognize a pruned log during verification. The change is additive; code that
-  builds `StreamReport` with positional struct literals must switch to keyed
-  fields. Callers that need complete history should reject a report with
-  `Pruned` set, because a checkpoint does not authenticate deleted records.
+  `audit.IsPruneCheckpoint`, `audit.VerifyPrunedChainFromReader`, and
+  `audit.StreamReport.Pruned` support opt-in pruned verification.
+  `audit.VerifyChainFromReader` keeps requiring a genesis record. The change
+  is additive; code that builds `StreamReport` with positional struct literals must switch to keyed
+  fields. A trusted external checkpoint pin establishes checkpoint identity
+  only; it does not authenticate deleted records.
 
 ## [0.8.1] — 2026-10-17
 

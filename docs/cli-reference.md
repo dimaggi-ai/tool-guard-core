@@ -29,3 +29,14 @@ Exit codes and complete examples live with the relevant workflows in
 [Audit Export](audit-export.md), and [Coding-agent Protection](protect.md).
 
 For retention flags and checkpoint limits, see [Audit Pruning](audit-prune.md).
+
+Both `tg verify` and `tg export` reject pruned chains by default:
+
+- `-allow-pruned` accepts an unsigned, unpinned checkpoint for internal consistency checks.
+- `-checkpoint-hash sha256:<64 lowercase hex>` requires a matching checkpoint
+  and implies `-allow-pruned`. Use a pin from a trusted copy stored elsewhere;
+  it establishes checkpoint identity, not deleted content.
+
+Malformed or explicitly empty pins exit 2. Rejected chains exit 5 for
+`tg verify` (with a JSON report) and 1 for `tg export` (without exported records).
+Success exits 0; operational failures exit 1.

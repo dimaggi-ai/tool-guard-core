@@ -11,6 +11,8 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/audit"
@@ -53,6 +55,9 @@ func standalonePrunePath(path string) error {
 }
 
 func pruneFile(in, out string, cutoff time.Time, write bool, stdout io.Writer) error {
+	if err := rejectPruneRotationSibling(in, out); err != nil {
+		return err
+	}
 	if err := standalonePrunePath(in); err != nil {
 		return err
 	}
@@ -86,7 +91,7 @@ func pruneFile(in, out string, cutoff time.Time, write bool, stdout io.Writer) e
 		return fmt.Errorf("input changed while opening")
 	}
 	digest := sha256.New()
-	report, err := audit.VerifyChainFromReader(io.TeeReader(io.NewSectionReader(f, 0, st.Size()), digest))
+	report, err := audit.VerifyPrunedChainFromReader(io.TeeReader(io.NewSectionReader(f, 0, st.Size()), digest), "")
 	if err != nil {
 		return err
 	}
@@ -187,7 +192,7 @@ func pruneFile(in, out string, cutoff time.Time, write bool, stdout io.Writer) e
 	if _, err := temp.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
-	verified, err := audit.VerifyChainFromReader(temp)
+	verified, err := audit.VerifyPrunedChainFromReader(temp, "")
 	if err != nil {
 		return err
 	}
@@ -204,6 +209,9 @@ func pruneFile(in, out string, cutoff time.Time, write bool, stdout io.Writer) e
 		return fmt.Errorf("output or rotation siblings appeared")
 	}
 	if err := temp.Close(); err != nil {
+		return err
+	}
+	if err := rejectPruneRotationSibling(in, out); err != nil {
 		return err
 	}
 	if err := publishPrunedFile(temp.Name(), out); err != nil {
@@ -240,4 +248,35 @@ func pruneRawLines(data []byte, atEOF bool) (int, []byte, error) {
 		return len(data), data, nil
 	}
 	return 0, nil, nil
+}
+
+// rejectPruneRotationSibling uses the same numeric suffix rule as rotation discovery.
+func rejectPruneRotationSibling(in, out string) error {
+	prefix := filepath.Base(in) + "."
+	if !strings.HasPrefix(filepath.Base(out), prefix) {
+		return nil
+	}
+	if _, err := strconv.Atoi(strings.TrimPrefix(filepath.Base(out), prefix)); err != nil {
+		return nil
+	}
+	inDir, err := filepath.Abs(filepath.Dir(in))
+	if err != nil {
+		return err
+	}
+	outDir, err := filepath.Abs(filepath.Dir(out))
+	if err != nil {
+		return err
+	}
+	inInfo, err := os.Stat(inDir)
+	if err != nil {
+		return err
+	}
+	same := inDir == outDir
+	if outInfo, err := os.Stat(outDir); err == nil {
+		same = os.SameFile(inInfo, outInfo)
+	}
+	if same {
+		return fmt.Errorf("output would become a rotation sibling of the input")
+	}
+	return nil
 }

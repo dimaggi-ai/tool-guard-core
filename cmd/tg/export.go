@@ -81,6 +81,7 @@ func runExport(args []string, stdout, stderr io.Writer) int {
 	var actionSelectors exportSelectorFlag
 	fs.Var(&policySelectors, "policy", "exact policy_id to include; repeat or comma-separate for OR")
 	fs.Var(&actionSelectors, "action", "exact action_taken to include; repeat or comma-separate for OR")
+	verification := addAuditVerificationFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -102,7 +103,7 @@ func runExport(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "export:", err)
 		return 2
 	}
-	fileSet, err := openVerifiedAuditFileSet(*filePath)
+	fileSet, err := openVerifiedAuditFileSet(*filePath, verification)
 	if err != nil {
 		fmt.Fprintln(stderr, "export:", err)
 		return 1
@@ -190,7 +191,7 @@ func (f auditExportFilter) matches(record auditExportView) bool {
 	return true
 }
 
-func openVerifiedAuditFileSet(activePath string) (*verifiedAuditFileSet, error) {
+func openVerifiedAuditFileSet(activePath string, verification *auditVerificationFlags) (*verifiedAuditFileSet, error) {
 	paths, err := audit.RotationSetOldestFirst(activePath)
 	if err != nil {
 		return nil, err
@@ -209,7 +210,12 @@ func openVerifiedAuditFileSet(activePath string) (*verifiedAuditFileSet, error) 
 	for _, snapshot := range fileSet.files {
 		readers = append(readers, io.NewSectionReader(snapshot.file, 0, snapshot.size))
 	}
-	report, err := audit.VerifyChainFromReader(io.MultiReader(readers...))
+	var report *audit.StreamReport
+	if verification.allowPruned || verification.checkpointHash != "" {
+		report, err = audit.VerifyPrunedChainFromReader(io.MultiReader(readers...), verification.checkpointHash)
+	} else {
+		report, err = audit.VerifyChainFromReader(io.MultiReader(readers...))
+	}
 	if err != nil {
 		fileSet.close()
 		return nil, err

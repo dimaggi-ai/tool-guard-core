@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 )
@@ -49,6 +50,9 @@ func ParsePruneCheckpoint(raw []byte) (*PruneCheckpoint, error) {
 	d.DisallowUnknownFields()
 	if err := d.Decode(&c); err != nil {
 		return nil, err
+	}
+	if err := d.Decode(new(any)); err != io.EOF {
+		return nil, fmt.Errorf("checkpoint has trailing data")
 	}
 	if c.RecordType != "prune_checkpoint" || c.Version != 1 {
 		return nil, fmt.Errorf("unsupported checkpoint type or version")

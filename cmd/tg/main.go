@@ -216,8 +216,9 @@ func cmdEvaluate(args []string) int {
 // chain is intact. Exit 0 only when every record links cleanly.
 
 func cmdVerify(args []string) int {
-	fs := flag.NewFlagSet("verify", flag.ExitOnError)
+	fs := flag.NewFlagSet("verify", flag.ContinueOnError)
 	filePath := fs.String("file", "", "Path to decisions.jsonl (rotated siblings <file>.1, <file>.2, ... are auto-included in reverse order so the oldest comes first)")
+	verification := addAuditVerificationFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -226,7 +227,7 @@ func cmdVerify(args []string) int {
 		return 2
 	}
 
-	fileSet, err := openVerifiedAuditFileSet(*filePath)
+	fileSet, err := openVerifiedAuditFileSet(*filePath, verification)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "verify:", err)
 		return 1
