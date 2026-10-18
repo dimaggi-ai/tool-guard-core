@@ -40,12 +40,15 @@ guard catching it after the fact — do it right the first time.
    artifacts before publishing the tag:**
    ```bash
    git tag -a vX.Y.Z -m "Tool Guard Core vX.Y.Z"
+   rm -rf .git/go-reproducible dist/python
    bash scripts/verify-go-reproducible.sh .git/go-reproducible --release
    bash scripts/verify-python-reproducible.sh dist/python
    python scripts/verify-python-dist.py dist/python --expected-version X.Y.Z
    ```
    `setuptools-scm` derives the final version from the local tag, so this
-   exact-version check cannot run before the tag exists. The tag is still
+   exact-version check cannot run before the tag exists. Both
+   reproducibility scripts refuse a nonempty output directory, so the `rm`
+   line clears output from an earlier run or release. The tag is still
    local at this point. If any verification command fails, delete or correct the local
    tag and fix the release commit; do not push the tag.
 
