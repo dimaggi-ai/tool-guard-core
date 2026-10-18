@@ -70,3 +70,5 @@ authoring policies for, and operating Tool Guard Core.
 
 Each page is self-contained; the order above is a suggested reading
 path. If you find anything inaccurate or outdated, open an issue or PR.
+
+- [Audit Pruning](audit-prune.md): retain a verifiable suffix of a closed audit log.

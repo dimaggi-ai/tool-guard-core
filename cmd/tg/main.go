@@ -43,6 +43,7 @@ Usage:
   tg protect   claude [-apply] [-config PATH] [-policy PATH] [-tg PATH]
   tg status    [claude] [-config PATH]
   tg unprotect claude [-apply] [-config PATH]
+  tg prune     -older-than 720h -file CLOSED.jsonl -out PRUNED.jsonl -closed [-yes]
   tg verify    -file DECISIONS.jsonl
   tg export    -file DECISIONS.jsonl [-format jsonl] [-since RFC3339] [-until RFC3339] [-policy ID] [-action ACTION]
   tg lint      -policy POLICY.yaml
@@ -119,6 +120,8 @@ func main() {
 		os.Exit(cmdProtectStatus(args))
 	case "unprotect":
 		os.Exit(cmdUnprotect(args))
+	case "prune":
+		os.Exit(cmdPrune(args))
 	case "verify":
 		os.Exit(cmdVerify(args))
 	case "export":

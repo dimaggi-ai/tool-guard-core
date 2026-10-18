@@ -215,7 +215,7 @@ func openVerifiedAuditFileSet(activePath string) (*verifiedAuditFileSet, error) 
 		return nil, err
 	}
 	if len(paths) > 1 {
-		report.Note = fmt.Sprintf("walked %d files (rotation set): %v", len(paths), paths)
+		report.Note = strings.TrimSpace(report.Note + " " + fmt.Sprintf("walked %d files (rotation set): %v", len(paths), paths))
 	}
 	fileSet.report = report
 	return fileSet, nil
@@ -267,6 +267,13 @@ func streamAuditExport(files []auditFileSnapshot, filter auditExportFilter, stdo
 			}
 			if len(raw) > audit.MaxTraceRecordBytes {
 				return fmt.Errorf("decode %s: audit record is %d bytes; maximum is %d", snapshot.path, len(raw), audit.MaxTraceRecordBytes)
+			}
+			isCheckpoint, err := audit.IsPruneCheckpoint(raw)
+			if err != nil {
+				return err
+			}
+			if isCheckpoint {
+				continue
 			}
 			var record auditExportView
 			if err := json.Unmarshal(raw, &record); err != nil {

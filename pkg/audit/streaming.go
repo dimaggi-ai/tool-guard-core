@@ -61,6 +61,7 @@ func MarshalTraceRecord(trace *domain.DecisionTrace) ([]byte, error) {
 // so they can pin "the chain as I saw it ended here" elsewhere (e.g. an
 // evidence pack manifest).
 type StreamReport struct {
+	Pruned         bool   `json:"pruned,omitempty"`
 	Intact         bool   `json:"intact"`
 	Records        int    `json:"records"`
 	FirstTraceID   string `json:"first_trace_id,omitempty"`
@@ -76,10 +77,10 @@ type StreamReport struct {
 // auditor's offline `tg verify -file decisions.jsonl` runs on.
 //
 // Verification rules:
-//   - Each line must be a valid JSON DecisionTrace.
-//   - The first record must be a genesis record with an empty
-//     PreviousTraceHash. Verifying an intentionally detached suffix requires
-//     a separate trusted-anchor protocol; this verifier never assumes one.
+//   - Each nonempty line must be a decision trace or the initial checkpoint.
+//   - The first record must be a genesis trace or a valid prune checkpoint.
+//     A checkpoint supplies the removed boundary hash and retained count/tail.
+//     It does not authenticate deleted content or establish independent custody.
 //   - For record N>1, trace.PreviousTraceHash must equal record N-1's TraceHash.
 //   - trace.TraceHash must equal ComputeCanonicalTraceHash(...) with this
 //     record version's canonical field projection.
@@ -97,6 +98,7 @@ func VerifyChainFromReader(r io.Reader) (*StreamReport, error) {
 
 	rep := &StreamReport{Intact: true}
 	var prevHash string
+	var checkpoint *PruneCheckpoint
 	highestVersionRank := 0
 	highestVersion := ""
 	line := 0
@@ -107,6 +109,26 @@ func VerifyChainFromReader(r io.Reader) (*StreamReport, error) {
 			return failAt(rep, line, fmt.Sprintf("record exceeds %d bytes", MaxTraceRecordBytes)), nil
 		}
 		if len(raw) == 0 {
+			continue
+		}
+
+		isCheckpoint, err := IsPruneCheckpoint(raw)
+		if err != nil {
+			return failAt(rep, line, fmt.Sprintf("parse JSON: %v", err)), nil
+		}
+		if isCheckpoint {
+			if checkpoint != nil || rep.Records != 0 {
+				return failAt(rep, line, "checkpoint must be the first and only checkpoint"), nil
+			}
+			var err error
+			checkpoint, err = ParsePruneCheckpoint(raw)
+			if err != nil {
+				return failAt(rep, line, fmt.Sprintf("checkpoint: %v", err)), nil
+			}
+			rep.Pruned = true
+			prevHash = checkpoint.LastRemovedHash
+			highestVersion = checkpoint.BoundaryCanonicalVersion
+			highestVersionRank, _ = canonicalTraceVersionRank(highestVersion)
 			continue
 		}
 
@@ -128,10 +150,11 @@ func VerifyChainFromReader(r io.Reader) (*StreamReport, error) {
 
 		if rep.Records == 0 {
 			rep.FirstTraceID = t.TraceID
-			if t.PreviousTraceHash != "" {
+			if checkpoint == nil && t.PreviousTraceHash != "" {
 				return failAt(rep, line, fmt.Sprintf("genesis previous_trace_hash must be empty, got %q", t.PreviousTraceHash)), nil
 			}
-		} else if t.PreviousTraceHash != prevHash {
+		}
+		if (checkpoint != nil || rep.Records > 0) && t.PreviousTraceHash != prevHash {
 			return failAt(rep, line, fmt.Sprintf("previous_trace_hash %q does not match prior tail %q", t.PreviousTraceHash, prevHash)), nil
 		}
 
@@ -156,6 +179,12 @@ func VerifyChainFromReader(r io.Reader) (*StreamReport, error) {
 	}
 	if err := sc.Err(); err != nil {
 		return failAt(rep, line, fmt.Sprintf("scan: %v", err)), nil
+	}
+	if checkpoint != nil {
+		if int64(rep.Records) != checkpoint.RetainedCount || prevHash != checkpoint.RetainedTailHash {
+			return failAt(rep, line, "checkpoint retained count or tail mismatch"), nil
+		}
+		rep.Note = "Pruned chain: checkpoint is unsigned; deleted content and completeness require independent custody."
 	}
 	rep.Tail = prevHash
 	return rep, nil

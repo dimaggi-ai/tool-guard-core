@@ -6,6 +6,13 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `tg prune` previews retention of a closed audit log and writes a new file with
+  `--yes`. A versioned checkpoint preserves the removed boundary and retained
+  hashes. `tg verify` checks the retained chain, count, and tail. Publication
+  currently requires Linux. See [Audit Pruning](docs/audit-prune.md) for limits.
+
 ## [0.8.1] — 2026-10-17
 
 ### Fixed

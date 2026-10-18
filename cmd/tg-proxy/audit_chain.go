@@ -251,6 +251,9 @@ func (p *proxy) verifyFullAuditChain() error {
 			report.FirstFailureAt, len(files), files, report.FailureReason, p.auditPath,
 		)
 	}
+	if report.Pruned {
+		return fmt.Errorf("cannot append to a pruned audit chain")
+	}
 	return nil
 }
 
