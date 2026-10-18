@@ -36,7 +36,7 @@ guard catching it after the fact — do it right the first time.
    git push origin main
    ```
 
-3. **Tag `main`'s new HEAD locally, then verify the tag-derived Python
+3. **Tag `main`'s new HEAD locally, then verify the Go and Python
    artifacts before publishing the tag:**
    ```bash
    git tag -a vX.Y.Z -m "Tool Guard Core vX.Y.Z"

@@ -57,7 +57,11 @@ for run in 1 2; do
   python3 "$repo_root/scripts/go-reproducible-manifest.py" "$source_dir/dist" \
     > "$output_dir/build$run.sha256"
 done
-diff -u "$output_dir/build1.sha256" "$output_dir/build2.sha256"
+if ! diff -u "$output_dir/build1.sha256" "$output_dir/build2.sha256"; then
+  cp -a "$probe_dir/source1/dist" "$output_dir/mismatch1"
+  cp -a "$probe_dir/source2/dist" "$output_dir/mismatch2"
+  exit 1
+fi
 cp -a "$probe_dir/source1/dist" "$output_dir/dist"
 printf 'commit=%s\nsource_date_epoch=%s\nmode=%s\n' "$commit" "$epoch" "$mode" > "$output_dir/source.txt"
 cat "$output_dir/build1.sha256"

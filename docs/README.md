@@ -49,6 +49,9 @@ authoring policies for, and operating Tool Guard Core.
 
 ## Reference
 
+- [**Rebuild Go release artifacts**](reproducible-builds.md) - clean builds
+  and comparison with published checksums.
+
 - [**Battle-test results**](battle-test-results.md) - real adversarial
   numbers from Gemma 4 attacking a Tool Guard policy.
 - [**Core vs Enterprise**](oss-vs-enterprise.md) - what ships in
