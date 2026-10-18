@@ -30,6 +30,7 @@ if find "$output_dir" -mindepth 1 -print -quit | grep -q .; then
   echo "output directory is not empty: $output_dir" >&2
   exit 1
 fi
+printf 'commit=%s\nsource_date_epoch=%s\nmode=%s\n' "$commit" "$epoch" "$mode" > "$output_dir/source.txt"
 probe_dir="$(mktemp -d)"
 trap 'chmod -R u+w "$probe_dir"; rm -rf "$probe_dir"' EXIT
 for run in 1 2; do
@@ -63,6 +64,5 @@ if ! diff -u "$output_dir/build1.sha256" "$output_dir/build2.sha256"; then
   exit 1
 fi
 cp -a "$probe_dir/source1/dist" "$output_dir/dist"
-printf 'commit=%s\nsource_date_epoch=%s\nmode=%s\n' "$commit" "$epoch" "$mode" > "$output_dir/source.txt"
 cat "$output_dir/build1.sha256"
 echo "OK: all Go binaries and archives are byte-identical across two clean builds"

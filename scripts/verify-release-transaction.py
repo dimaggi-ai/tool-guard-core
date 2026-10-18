@@ -157,6 +157,19 @@ tag_push_index = runbook.find("git push origin vX.Y.Z")
 installer = step(release_job, "Install pinned GoReleaser")
 rebuild = step(release_job, "Compare clean tagged builds")
 checks = {
+    "Go release checks upload archives before generating SBOMs": (
+        region(goreleaser, "\nsboms:\n", "\nrelease:\n").strip() == """- artifacts: archive
+    # This stage runs before publication. Check the actual upload bytes,
+    # then run syft with the same arguments and metadata setting as before.
+    cmd: python3
+    args:
+      - ../scripts/verify-go-release-archive.py
+      - "{{ .Env.GO_REPRODUCIBLE_MANIFEST }}"
+      - $artifact
+      - $document
+    env:
+      - SYFT_FILE_METADATA_CATALOGER_ENABLED=true"""
+    ),
     "Go release requires clean rebuilds before publication": (
         rebuild.strip() == "run: bash scripts/verify-go-reproducible.sh .git/go-reproducible --release"
         and 0 <= release_job.find("- name: Compare clean tagged builds") < release_job.find(artifact_verifier_name)

@@ -46,6 +46,15 @@ class VerifyReleaseTransactionTests(unittest.TestCase):
         result = self.run_guard()
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_missing_upload_archive_gate_is_rejected(self) -> None:
+        config = self.repo / ".goreleaser.yaml"
+        config.write_text(config.read_text().replace(
+            "../scripts/verify-go-release-archive.py", "../scripts/no-check.py"
+        ))
+        result = self.run_guard()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("checks upload archives", result.stderr)
+
     def test_missing_go_rebuild_gate_is_rejected(self) -> None:
         workflow = self.workflow_path.read_text(encoding="utf-8").replace(
             "run: bash scripts/verify-go-reproducible.sh .git/go-reproducible --release",
