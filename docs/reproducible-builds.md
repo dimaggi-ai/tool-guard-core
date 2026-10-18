@@ -61,8 +61,9 @@ already the binary timestamp convention before the archive check.
 
 Binary modification times and archive member times also use the commit
 time. Archive ownership is root, binary permissions are executable, and
-bundled documentation and policy files use mode 0644. GoReleaser fixes
-entry ordering and compression behavior. Both workflows pin its version.
+bundled documentation and policy files use mode 0644. GoReleaser sorts the bundled files. Both workflows use `--parallelism=1`
+so the binary order cannot depend on concurrent build completion. They pin
+GoReleaser to fix its compression behavior.
 The verifier changes source timestamps and documentation permissions in
 the second checkout to exercise metadata normalization.
 

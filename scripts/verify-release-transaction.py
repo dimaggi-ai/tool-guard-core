@@ -133,7 +133,7 @@ goreleaser_publisher = """- name: Run GoReleaser
         with:
           distribution: goreleaser
           version: "v2.18.3"
-          args: release --clean
+          args: release --clean --parallelism=1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GO_REPRODUCIBLE_MANIFEST: ${{ github.workspace }}/.git/go-reproducible/build1.sha256"""

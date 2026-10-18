@@ -51,7 +51,7 @@ for run in 1 2; do
       GOMODCACHE="$probe_dir/gopath$run/pkg/mod" GOCACHE="$probe_dir/cache$run" \
       GOTOOLCHAIN=go1.26.9 GOENV=off GOWORK=off \
       SOURCE_DATE_EPOCH="$epoch" TZ=UTC LC_ALL=C \
-      "$goreleaser_bin" release --clean --timeout=30m --parallelism=2 \
+      "$goreleaser_bin" release --clean --timeout=30m --parallelism=1 \
       --skip=publish,announce,docker,sbom,sign "${mode_args[@]}" \
       --release-notes /dev/null
   ) 2>&1 | tee "$output_dir/build$run.log"
