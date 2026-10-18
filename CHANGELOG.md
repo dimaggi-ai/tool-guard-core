@@ -6,8 +6,30 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `tg prune` previews retention of a closed audit log and writes a new file with
+  `--yes`. A versioned checkpoint preserves the removed boundary and retained
+  hashes. `tg verify` and `tg export` reject pruned chains unless
+  `-allow-pruned` or `-checkpoint-hash` is given. Publication
+  currently requires Linux. See [Audit Pruning](docs/audit-prune.md) for limits.
+- Go API: `audit.PruneCheckpoint`, `audit.ParsePruneCheckpoint`,
+  `audit.IsPruneCheckpoint`, `audit.VerifyPrunedChainFromReader`, and
+  `audit.StreamReport.Pruned` support opt-in pruned verification.
+  `audit.VerifyChainFromReader` keeps requiring a genesis record. The change
+  is additive; code that builds `StreamReport` with positional struct literals must switch to keyed
+  fields. A trusted external checkpoint pin establishes checkpoint identity
+  only; it does not authenticate deleted records.
+
 ### Changed
 
+- CI pins govulncheck to v1.9.0 instead of `@latest`, and a new weekly
+  workflow scans `main` for newly published Go advisories.
+- The policy-protection workflow builds with Go 1.26.9, the same toolchain
+  as the other workflows since 0.8.1 (it was still on 1.25.11).
+- The Kubernetes example in `docs/integration.md` uses image tag `0.8.1`.
+  The old `v0.2.0` tag does not match the published tag format, which has
+  no `v` prefix.
 - Pin the Go release toolchain and normalize binary and archive metadata.
   CI compares every Go binary and archive from two clean builds. Tagged
   releases also check the actual upload archives against those digests.

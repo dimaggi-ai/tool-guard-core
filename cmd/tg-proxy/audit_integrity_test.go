@@ -641,3 +641,54 @@ func TestAppendTrace_RecordSizeBoundaryVerifyAndRestart(t *testing.T) {
 		}
 	})
 }
+
+func TestOpenAuditLogRejectsPrunedChain(t *testing.T) {
+	ts := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	first := makeValidTrace("removed", "", ts)
+	retained := makeValidTrace("retained", first.TraceHash, ts.Add(time.Hour))
+	for _, empty := range []bool{false, true} {
+		t.Run(map[bool]string{false: "retained suffix", true: "checkpoint only"}[empty], func(t *testing.T) {
+			cp := audit.PruneCheckpoint{RecordType: "prune_checkpoint", Version: 1, RemovedCount: 1, LastRemovedIndex: 1, LastRemovedHash: first.TraceHash, LastRemovedTimestamp: ts, BoundaryCanonicalVersion: "v1", Cutoff: ts.Add(time.Hour), RetainedCount: 1, RetainedTailHash: retained.TraceHash}
+			if first.CanonicalVersion != "" {
+				cp.BoundaryCanonicalVersion = first.CanonicalVersion
+			}
+			if empty {
+				cp.RetainedCount = 0
+				cp.RetainedTailHash = first.TraceHash
+			}
+			cp.CheckpointHash = cp.Hash()
+			var raw bytes.Buffer
+			enc := json.NewEncoder(&raw)
+			if err := enc.Encode(cp); err != nil {
+				t.Fatal(err)
+			}
+			if !empty {
+				if err := enc.Encode(retained); err != nil {
+					t.Fatal(err)
+				}
+			}
+			report, err := audit.VerifyPrunedChainFromReader(bytes.NewReader(raw.Bytes()), "")
+			if err != nil || !report.Intact {
+				t.Fatalf("bad fixture: %+v %v", report, err)
+			}
+			path := filepath.Join(t.TempDir(), "audit.jsonl")
+			if err := os.WriteFile(path, raw.Bytes(), 0600); err != nil {
+				t.Fatal(err)
+			}
+			p := &proxy{auditPath: path, auditRotation: platformAuditRotationOps()}
+			if err := p.verifyFullAuditChain(); err == nil || !strings.Contains(err.Error(), "cannot append to a pruned audit chain") {
+				t.Fatalf("full-chain refusal: %v", err)
+			}
+			if err := p.openAuditLog(); err == nil {
+				p.auditLog.Close()
+				t.Fatal("opened pruned chain for writing")
+			} else if !empty && !strings.Contains(err.Error(), "cannot append to a pruned audit chain") {
+				t.Fatalf("wrong refusal: %v", err)
+			}
+			after, err := os.ReadFile(path)
+			if err != nil || !bytes.Equal(after, raw.Bytes()) {
+				t.Fatal("proxy changed pruned file")
+			}
+		})
+	}
+}

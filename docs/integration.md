@@ -161,7 +161,7 @@ spec:
     spec:
       containers:
         - name: tg-proxy
-          image: ghcr.io/dimaggi-ai/tool-guard-core:v0.2.0
+          image: ghcr.io/dimaggi-ai/tool-guard-core:0.8.1
           args:
             - -listen=:9090
             - -policy-dir=/etc/tg/policies
@@ -254,6 +254,8 @@ func NewGuard(policies []domain.Policy, logPath, engineVersion string) (*Guard, 
     if err != nil {
         return nil, err
     }
+    // VerifyChainFromReader rejects pruned chains. Read-only callers can opt
+    // in with VerifyPrunedChainFromReader; writers must not resume them.
     report, err := audit.VerifyChainFromReader(f)
     if err != nil {
         _ = f.Close()

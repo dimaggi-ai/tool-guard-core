@@ -17,6 +17,7 @@ reference changing in the same pull request.
 | `tg protect` | Preview or install managed coding-agent protection. |
 | `tg status` | Inspect managed coding-agent protection. |
 | `tg unprotect` | Preview or remove managed coding-agent protection. |
+| `tg prune` | Copy a closed audit log with an eligible prefix replaced by a checkpoint. Dry-run by default. |
 | `tg verify` | Verify a hash-chained audit log and its rotations offline. |
 | `tg export` | Verify, filter, and stream audit records as JSONL. |
 | `tg lint` | Validate a policy and report authoring hazards. |
@@ -26,3 +27,16 @@ reference changing in the same pull request.
 Exit codes and complete examples live with the relevant workflows in
 [Getting Started](getting-started.md), [Creating Policies](creating-policies.md),
 [Audit Export](audit-export.md), and [Coding-agent Protection](protect.md).
+
+For retention flags and checkpoint limits, see [Audit Pruning](audit-prune.md).
+
+Both `tg verify` and `tg export` reject pruned chains by default:
+
+- `-allow-pruned` accepts an unsigned, unpinned checkpoint for internal consistency checks.
+- `-checkpoint-hash sha256:<64 lowercase hex>` requires a matching checkpoint
+  and implies `-allow-pruned`. Use a pin from a trusted copy stored elsewhere;
+  it establishes checkpoint identity, not deleted content.
+
+Malformed or explicitly empty pins exit 2. Rejected chains exit 5 for
+`tg verify` (with a JSON report) and 1 for `tg export` (without exported records).
+Success exits 0; operational failures exit 1.

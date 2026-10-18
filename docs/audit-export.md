@@ -114,3 +114,12 @@ generic: Tool Guard does not embed credentials, vendor SDKs, or delivery
 retries. For incremental scheduled exports, store the last successfully
 delivered timestamp externally and pass it back with `--since`; downstream
 deduplication should use `trace_id` because `--since` includes its boundary.
+
+## Pruned inputs
+
+Export rejects a [pruned input](audit-prune.md) unless `-allow-pruned` or
+`-checkpoint-hash` is given. With opt-in it verifies the input, then skips
+its checkpoint.
+Only retained decision traces are exported. The exported suffix has no genesis
+anchor and is not a standalone verifiable chain. Keep the pruned file for
+verification.

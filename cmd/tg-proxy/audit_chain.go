@@ -245,6 +245,9 @@ func (p *proxy) verifyFullAuditChain() error {
 	if err != nil {
 		return fmt.Errorf("startup audit chain verification: %w", err)
 	}
+	if report.Pruned {
+		return fmt.Errorf("cannot append to a pruned audit chain")
+	}
 	if !report.Intact {
 		return fmt.Errorf(
 			"audit chain integrity check failed at line %d across %d file(s) (%v): %s — refusing to start (run `tg verify -file %s` for the full report)",

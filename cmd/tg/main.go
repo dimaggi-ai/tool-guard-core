@@ -43,6 +43,7 @@ Usage:
   tg protect   claude [-apply] [-config PATH] [-policy PATH] [-tg PATH]
   tg status    [claude] [-config PATH]
   tg unprotect claude [-apply] [-config PATH]
+  tg prune     -older-than 720h -file CLOSED.jsonl -out PRUNED.jsonl -closed [-yes]
   tg verify    -file DECISIONS.jsonl
   tg export    -file DECISIONS.jsonl [-format jsonl] [-since RFC3339] [-until RFC3339] [-policy ID] [-action ACTION]
   tg lint      -policy POLICY.yaml
@@ -119,6 +120,8 @@ func main() {
 		os.Exit(cmdProtectStatus(args))
 	case "unprotect":
 		os.Exit(cmdUnprotect(args))
+	case "prune":
+		os.Exit(cmdPrune(args))
 	case "verify":
 		os.Exit(cmdVerify(args))
 	case "export":
@@ -213,8 +216,9 @@ func cmdEvaluate(args []string) int {
 // chain is intact. Exit 0 only when every record links cleanly.
 
 func cmdVerify(args []string) int {
-	fs := flag.NewFlagSet("verify", flag.ExitOnError)
+	fs := flag.NewFlagSet("verify", flag.ContinueOnError)
 	filePath := fs.String("file", "", "Path to decisions.jsonl (rotated siblings <file>.1, <file>.2, ... are auto-included in reverse order so the oldest comes first)")
+	verification := addAuditVerificationFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -223,7 +227,7 @@ func cmdVerify(args []string) int {
 		return 2
 	}
 
-	fileSet, err := openVerifiedAuditFileSet(*filePath)
+	fileSet, err := openVerifiedAuditFileSet(*filePath, verification)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "verify:", err)
 		return 1
