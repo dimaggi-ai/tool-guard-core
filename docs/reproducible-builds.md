@@ -40,14 +40,19 @@ locally generated checksum file. Then compare the archives:
 
 ```bash
 cd .git/go-reproducible/dist
-sha256sum --check /absolute/path/to/published/checksums.txt
+awk '$2 ~ /\.(tar\.gz|zip)$/ {print}' /absolute/path/to/published/checksums.txt \
+  > published-archives.sha256
+test "$(wc -l < published-archives.sha256)" -eq 5
+sha256sum --check published-archives.sha256
 ```
 
-All archive entries must report `OK`. The local manifest comparison
-alone proves agreement between local builds. Matching the published
-checksums also establishes agreement with the release archives.
-`checksums.txt` contains archive digests, while the two evidence manifests
-also contain individual binary digests. The archive comparison covers
+All five archive entries must report `OK`. The count check rejects an
+incomplete archive list. Published SBOM entries are excluded because this
+procedure does not rebuild SBOMs. The local manifest comparison
+alone shows agreement between local builds. Matching the published
+checksums also shows agreement with the release archives.
+The published `checksums.txt` includes archive and SBOM digests. The two
+evidence manifests contain archive and individual binary digests. The archive comparison covers
 the binaries packaged inside them.
 
 ## Fixed inputs
@@ -63,7 +68,7 @@ Binary modification times and archive member times also use the commit
 time. Archive ownership is root, binary permissions are executable, and
 bundled documentation and policy files use mode 0644. GoReleaser sorts the bundled files. Both workflows use `--parallelism=1`
 so the binary order cannot depend on concurrent build completion. They pin
-GoReleaser to fix its compression behavior.
+the GoReleaser version so its compression behavior stays fixed.
 The verifier changes source timestamps and documentation permissions in
 the second checkout to exercise metadata normalization.
 

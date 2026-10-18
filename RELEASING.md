@@ -129,10 +129,10 @@ release attempt.
 ## Go artifact reproducibility
 
 Use Go 1.26.9 and the official GoReleaser 2.18.3 binary. Keep
-`--parallelism=1` on release builds to fix the binary order in archives. The local Go
+`--parallelism=1` on release builds so the binary order in archives is deterministic. The local Go
 verification command above builds every target twice and compares binaries
-and archives. The release workflow repeats this check and checks the actual
-upload archives before generating SBOMs. Existing attestations and container
+and archives. The release workflow repeats this check and verifies each actual
+upload archive before generating SBOMs. Existing attestations and container
 signatures remain separate checks.
 
 See [Rebuild Go release artifacts](docs/reproducible-builds.md) for the
