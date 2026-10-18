@@ -6,6 +6,16 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- CI pins govulncheck to v1.9.0 instead of `@latest`, and a new weekly
+  workflow scans `main` for newly published Go advisories.
+- The policy-protection workflow builds with Go 1.26.9, the same toolchain
+  as the other workflows since 0.8.1 (it was still on 1.25.11).
+- The Kubernetes example in `docs/integration.md` uses image tag `0.8.1`.
+  The old `v0.2.0` tag does not match the published tag format, which has
+  no `v` prefix.
+
 ## [0.8.1] — 2026-10-17
 
 ### Fixed
