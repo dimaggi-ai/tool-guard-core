@@ -161,7 +161,7 @@ spec:
     spec:
       containers:
         - name: tg-proxy
-          image: ghcr.io/dimaggi-ai/tool-guard-core:v0.2.0
+          image: ghcr.io/dimaggi-ai/tool-guard-core:0.8.1
           args:
             - -listen=:9090
             - -policy-dir=/etc/tg/policies
