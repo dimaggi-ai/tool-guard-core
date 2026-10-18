@@ -6,6 +6,14 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Pin the Go release toolchain and normalize binary and archive metadata.
+  CI compares every Go binary and archive from two clean builds. Tagged
+  releases also check the actual upload archives against those digests.
+  See [the rebuild procedure](docs/reproducible-builds.md) to compare an
+  independent rebuild with published checksums.
+
 ## [0.8.1] — 2026-10-17
 
 ### Fixed

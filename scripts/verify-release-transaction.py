@@ -67,7 +67,7 @@ python_publish_steps = steps(python_publish_job)
 artifact_verifier_name = "      - name: Verify release tag before artifact publication\n"
 pypi_verifier_name = "      - name: Verify release tag before PyPI publication\n"
 goreleaser_indices = matching_step_indices(
-    release_steps, "goreleaser/goreleaser-action@"
+    release_steps, "- name: Run GoReleaser\n"
 )
 artifact_verifier_indices = matching_step_indices(
     release_steps, artifact_verifier_name
@@ -132,10 +132,11 @@ goreleaser_publisher = """- name: Run GoReleaser
         uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
         with:
           distribution: goreleaser
-          version: "~> v2"
+          version: "v2.18.3"
           args: release --clean
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}"""
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GO_REPRODUCIBLE_MANIFEST: ${{ github.workspace }}/.git/go-reproducible/build1.sha256"""
 pypi_publisher = """- name: Publish with PyPI trusted publishing
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1, reviewed 2026-08-26
         with:
@@ -153,7 +154,18 @@ local_version_check_index = runbook.find(
 )
 tag_push_index = runbook.find("git push origin vX.Y.Z")
 
+installer = step(release_job, "Install pinned GoReleaser")
+rebuild = step(release_job, "Compare clean tagged builds")
 checks = {
+    "Go release requires clean rebuilds before publication": (
+        rebuild.strip() == "run: bash scripts/verify-go-reproducible.sh .git/go-reproducible --release"
+        and 0 <= release_job.find("- name: Compare clean tagged builds") < release_job.find(artifact_verifier_name)
+        and installer.strip() == """uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
+        with:
+          distribution: goreleaser
+          version: "v2.18.3"
+          install-only: true"""
+    ),
     "release workflow job boundaries are structurally present": bool(
         preflight and release_job and python_publish_job and finalizer
     ),
@@ -182,7 +194,7 @@ checks = {
         )[-1].rstrip() == artifact_tag_gate.rstrip()
         and active(release_steps[goreleaser_indices[0]]).strip()
         == goreleaser_publisher
-        and active(workflow).count("goreleaser/goreleaser-action@") == 1
+        and active(workflow).count("goreleaser/goreleaser-action@") == 2
     ),
     "PyPI publication has an exact adjacent immutable-tag gate": (
         len(pypi_verifier_indices) == 1

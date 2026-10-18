@@ -22,6 +22,13 @@ version: 2
 
 project_name: tool-guard-core
 
+env:
+  - GOTOOLCHAIN=go1.26.9
+  - GOENV=off
+  - GOFLAGS=
+  - GOEXPERIMENT=
+  - GOWORK=off
+
 before:
   hooks:
     # NB: no `go mod tidy` here — it mutates tracked go.mod/go.sum during a
@@ -36,10 +43,9 @@ builds:
       - CGO_ENABLED=0
     flags:
       - -trimpath
-    # Commit-derived timestamps everywhere so the compiled binaries are
-    # byte-identical across rebuilds (the archives are not yet deterministic);
-    # groundwork for the rebuild-and-diff reproducibility verifier the 1.0
-    # roadmap still owes.
+      - -buildvcs=false
+      - -mod=readonly
+    # Use the source commit time, independent of the build clock.
     mod_timestamp: "{{ .CommitTimestamp }}"
     ldflags:
       - -s -w
@@ -50,6 +56,8 @@ builds:
       - linux
       - darwin
       - windows
+    goamd64: [v1]
+    goarm64: [v8.0]
     goarch:
       - amd64
       - arm64
@@ -64,10 +72,9 @@ builds:
       - CGO_ENABLED=0
     flags:
       - -trimpath
-    # Commit-derived timestamps everywhere so the compiled binaries are
-    # byte-identical across rebuilds (the archives are not yet deterministic);
-    # groundwork for the rebuild-and-diff reproducibility verifier the 1.0
-    # roadmap still owes.
+      - -buildvcs=false
+      - -mod=readonly
+    # Use the source commit time, independent of the build clock.
     mod_timestamp: "{{ .CommitTimestamp }}"
     ldflags:
       - -s -w
@@ -78,6 +85,8 @@ builds:
       - linux
       - darwin
       - windows
+    goamd64: [v1]
+    goarm64: [v8.0]
     goarch:
       - amd64
       - arm64
@@ -91,17 +100,21 @@ archives:
     ids:
       - tg
       - tg-proxy
+    formats: [tar.gz]
+    builds_info:
+      owner: root
+      group: root
+      mtime: "{{ .CommitDate }}"
     format_overrides:
       - goos: windows
         formats: [zip]
     files:
-      - LICENSE
-      - NOTICE
-      - README.md
-      - CHANGELOG.md
-      - SECURITY.md
-      - docs
-      - policies
+      - src: "{LICENSE,NOTICE,README.md,CHANGELOG.md,SECURITY.md,docs/**,policies/**}"
+        info:
+          owner: root
+          group: root
+          mode: 0644
+          mtime: "{{ .CommitDate }}"
 
 checksum:
   name_template: "checksums.txt"
@@ -170,6 +183,16 @@ docker_manifests:
 
 sboms:
   - artifacts: archive
+    # This stage runs before publication. Check the actual upload bytes,
+    # then run syft with the same arguments and metadata setting as before.
+    cmd: python3
+    args:
+      - ../scripts/verify-go-release-archive.py
+      - "{{ .Env.GO_REPRODUCIBLE_MANIFEST }}"
+      - $artifact
+      - $document
+    env:
+      - SYFT_FILE_METADATA_CATALOGER_ENABLED=true
 
 release:
   github:

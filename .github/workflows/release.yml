@@ -96,6 +96,7 @@ jobs:
 
   release:
     name: Stage artifacts and signed images
+    timeout-minutes: 120
     needs: [preflight, verify, python-package]
     runs-on: ubuntu-latest
     permissions:
@@ -164,6 +165,27 @@ jobs:
       - name: Install syft (for SBOM)
         uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
 
+      - name: Install pinned GoReleaser
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
+        with:
+          distribution: goreleaser
+          version: "v2.18.3"
+          install-only: true
+      - name: Compare clean tagged builds
+        run: bash scripts/verify-go-reproducible.sh .git/go-reproducible --release
+      - name: Retain checksum evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: go-release-reproducibility
+          path: |
+            .git/go-reproducible/*.sha256
+            .git/go-reproducible/*.log
+            .git/go-reproducible/source.txt
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Verify release tag before artifact publication
         env:
           TAG: ${{ github.ref_name }}
@@ -176,22 +198,19 @@ jobs:
         uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
         with:
           distribution: goreleaser
-          version: "~> v2"
+          version: "v2.18.3"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GO_REPRODUCIBLE_MANIFEST: ${{ github.workspace }}/.git/go-reproducible/build1.sha256
 
       # Signs the release artifacts (archives + checksums.txt) with a
       # GitHub-hosted Sigstore identity, tying them verifiably to this
       # exact workflow run, commit, and source repo — an attacker who
       # compromises the GitHub Release upload step (or a mirror) can't
       # silently swap a binary without the attestation failing to verify.
-      # This is NOT "reproducible builds" — it proves *provenance*
-      # (these bytes came from this repo's CI, unmodified since), not
-      # *reproducibility* (that rebuilding from source deterministically
-      # reproduces the same bytes bit-for-bit). The latter needs a
-      # separate rebuild-and-diff verifier job this repo doesn't have yet
-      # — don't conflate the two when talking about this publicly.
+      # Provenance identifies the build source and workflow. The separate
+      # clean-build comparison checks byte reproducibility.
       - name: Attest build provenance
         uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
         with:
