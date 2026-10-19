@@ -270,7 +270,7 @@ the audit chain offline, demonstrating it is tamper-evident.
   hook layer. No LLM, no Docker — see [Guard a coding agent in 60
   seconds](#guard-a-coding-agent-in-60-seconds) above for the one-liner.
 
-Requires Go 1.25+. The default binary is pure Go — no cgo, no
+Requires Go 1.26.0 or later. The default binary is pure Go — no cgo, no
 database, no network services — and links one runtime library,
 `gopkg.in/yaml.v3`, for policy parsing. The module also requires
 `pg_query_go` and `protobuf` for the strict-postgres SQL parser, which
