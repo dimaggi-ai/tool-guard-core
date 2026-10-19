@@ -1,0 +1,305 @@
+{
+  "n": 20,
+  "source_tree_equal": true,
+  "candidate": "fe544fbbb9f4472c74732728b2c778ceebefcf9a",
+  "baseline": "86e63bd52815eb5102dac16289f25ab7b05cfea4",
+  "go": "go1.26.9",
+  "mean_log_ratio": -0.0012494728993280842,
+  "sd_log_ratio": 0.004716024336577447,
+  "mean_loss_pct": 0.1238140215533623,
+  "sd_loss_pp": 0.4710961366516832,
+  "min_loss_pct": -0.7777636108631913,
+  "max_loss_pct": 1.0834136712114972,
+  "prediction_bounds": {
+    "0.95": {
+      "t_critical": 1.7291328115213682,
+      "lower_log_prediction_bound": -0.009605484591868878,
+      "loss_prediction_bound_pct": 0.9559499279597428,
+      "conservative_ceil_0_01pp": 0.96
+    },
+    "0.99": {
+      "t_critical": 2.5394831906239625,
+      "lower_log_prediction_bound": -0.013521492198524873,
+      "loss_prediction_bound_pct": 1.3430487457946616,
+      "conservative_ceil_0_01pp": 1.35
+    }
+  },
+  "shapiro_diagnostic_only": {
+    "statistic": 0.9832619009259211,
+    "pvalue": 0.9689703177645661
+  },
+  "policy": "99% normal-iid prediction bound, investigation trigger only, selected before14extension outcomes",
+  "limitations": [
+    "20 same-day runs, not validated operational false-alarm probability",
+    "normality/iid assumptions cannot be established by a small-sample test",
+    "currentline calibration does not validate historicalGo 1.25.13 data"
+  ],
+  "historical16": {
+    "mean_reported_loss_pct": 8.1575,
+    "sd_reported_loss_pp": 2.2444821228960588,
+    "at_least10pct": 2,
+    "below10pct": 14
+  },
+  "runs": [
+    {
+      "run": "39315142285",
+      "url": "https://github.com/dimaggi-ai/tool-guard-core/actions/runs/39315142285",
+      "workflow_conclusion": "success",
+      "candidate_count": 26564,
+      "baseline_count": 26682,
+      "log_ratio": -0.004432265078147205,
+      "loss_pct": 0.44224570871749247,
+      "cpu": [
+        "AMD EPYC 9V74 80-Core Processor"
+      ],
+      "log_sha256": "bb42b12d112bfa67fbf0db504769091fdd90147c11a34aef6ce4120a7b6b51d8"
+    },
+    {
+      "run": "39315146536",
+      "url": "https://github.com/dimaggi-ai/tool-guard-core/actions/runs/39315146536",
+      "workflow_conclusion": "success",
+      "candidate_count": 19404,
+      "baseline_count": 19412,
+      "log_ratio": -0.0004122011599996924,
+      "loss_pct": 0.04121162167731729,
+      "cpu": [
+        "AMD EPYC 9V45 96-Core Processor"
+      ],
+      "log_sha256": "1e0badc6a65ea95a62b54abdb54c65b9d499e401dcb648c090405fde8d4fd473"
+    },
+    {
+      "run": "39315150260",
+      "url": "https://github.com/dimaggi-ai/tool-guard-core/actions/runs/39315150260",
+      "workflow_conclusion": "success",
+      "candidate_count": 22141,
+      "baseline_count": 22027,
+      "log_ratio": 0.005162119776804693,
+      "loss_pct": -0.5175466472965073,
+      "cpu": [
+        "AMD EPYC 7763 64-Core Processor"
+      ],
+      "log_sha256": "a30e1b9d1c68d2ed755dd5d3e9ad09336deb320489d0586e391b9e14d2d025b7"
+    },
+    {
+      "run": "39315154926",
+      "url": "https://github.com/dimaggi-ai/tool-guard-core/actions/runs/39315154926",
+      "workflow_conclusion": "success",
+      "candidate_count": 22467,
+      "baseline_count": 22527,
+      "log_ratio": -0.0026670238505167986,
+      "loss_pct": 0.2663470502064169,
+      "cpu": [
+        "AMD EPYC 7763 64-Core Processor"
+      ],
+      "log_sha256": "036b94a5a78a496fa08f3ae8de557def3e096202b32d99e7e5aeb96b9ee726c3"
+    },
+    {
+      "run": "39315158585",
+      "url": "https://github.com/dimaggi-ai/tool-guard-core/actions/runs/39315158585",
+      "workflow_conclusion": "success",
+      "candidate_count": 21519,
+      "baseline_count": 21626,
+      "log_ratio": -0.004960028710938312,
+      "loss_pct": 0.49477480810136143,
+      "cpu": [
+        "AMD EPYC 7763 64-Core Processor"
+      ],
+      "log_sha256": "f912fd30ec833f4a5c83700de59d04d161515ec68c86e7ccbced544d8b713cc4"
+    },
+    {
+      "run": "39315162545",
+      "url": "https://github.com/dimaggi-ai/tool-guard-core/actions/runs/39315162545",
+      "workflow_conclusion": "success",
+      "candidate_count": 14338,
+      "baseline_count": 14445,
+      "log_ratio": -0.00743497848751809,
+      "loss_pct": 0.7407407407407418,
+      "cpu": [
+        "AMD EPYC 9V74 80-Core Processor"
+      ],
+      "log_sha256": "b00c6918dd4d61858f5f063a2cc48c23ebc563aea0f290cf9a5a2eb340ea785b"
+    },
+    {
+      "run": "39316822129",
+      "url": "https://github.com/dimaggi-ai/tool-guard-core/actions/runs/39316822129",
+      "workflow_conclusion": "success",
+      "candidate_count": 21950,
+      "baseline_count": 21905,
+      "log_ratio": 0.0020522182553185846,
+      "loss_pct": -0.2054325496462006,
+      "cpu": [
+        "AMD EPYC 7763 64-Core Processor"
+      ],
+      "log_sha256": "918f7f66a0d1c785b56efab4f8eb1cf0e94d730cfe01d6d72ca18bb0ab6cb17a"
+    },
+    {
+      "run": "39316826786",
+      "url": "https://github.com/dimaggi-ai/tool-guard-core/actions/runs/39316826786",
+      "workflow_conclusion": "success",
+      "candidate_count": 21547,
+      "baseline_count": 21783,
+      "log_ratio": -0.01089325334412327,
+      "loss_pct": 1.0834136712114972,
+      "cpu": [
+        "AMD EPYC 7763 64-Core Processor"
+      ],
+      "log_sha256": "297216d03e853d0e85ede859522471f85ee356da83c78951560c37369cb7e283"
+    },
+    {
+      "run": "39316831309",
+      "url": "https://github.com/dimaggi-ai/tool-guard-core/actions/runs/39316831309",
+      "workflow_conclusion": "success",
+      "candidate_count": 24806,
+      "baseline_count": 24936,
+      "log_ratio": -0.005226983071898123,
+      "loss_pct": 0.5213346166185406,
+      "cpu": [
+        "AMD EPYC 9V74 80-Core Processor"
+      ],
+      "log_sha256": "40ec01ecae61655c60fc476331f24b914fa1f42729864f331d25437ef44da31c"
+    },
+    {
+      "run": "39316835583",
+      "url": "https://github.com/dimaggi-ai/tool-guard-core/actions/runs/39316835583",
+      "workflow_conclusion": "success",
+      "candidate_count": 22938,
+      "baseline_count": 23051,
+      "log_ratio": -0.004914228507209746,
+      "loss_pct": 0.4902173441499236,
+      "cpu": [
+        "AMD EPYC 7763 64-Core Processor"
+      ],
+      "log_sha256": "0e823fbb0e0e1e77fd5c0f7157955f9e69e3551c14ff526224df5069a26c226c"
+    },
+    {
+      "run": "39316840884",
+      "url": "https://github.com/dimaggi-ai/tool-guard-core/actions/runs/39316840884",
+      "workflow_conclusion": "success",
+      "candidate_count": 24566,
+      "baseline_count": 24492,
+      "log_ratio": 0.0030168395011945476,
+      "loss_pct": -0.3021394741139938,
+      "cpu": [
+        "INTEL(R) XEON(R) PLATINUM 8573C"
+      ],
+      "log_sha256": "fe6fcdfa0d7402d927f0e5e753ecec12b95f20cb2e2049bd355355878a0fdc78"
+    },
+    {
+      "run": "39316845406",
+      "url": "https://github.com/dimaggi-ai/tool-guard-core/actions/runs/39316845406",
+      "workflow_conclusion": "success",
+      "candidate_count": 22901,
+      "baseline_count": 23023,
+      "log_ratio": -0.005313138533193255,
+      "loss_pct": 0.529904877730969,
+      "cpu": [
+        "AMD EPYC 9V45 96-Core Processor"
+      ],
+      "log_sha256": "b6a2798639bbe942b840400298b63119b5075ea4c158f5471fce4bfb8f42a6ad"
+    },
+    {
+      "run": "39316850229",
+      "url": "https://github.com/dimaggi-ai/tool-guard-core/actions/runs/39316850229",
+      "workflow_conclusion": "success",
+      "candidate_count": 20611,
+      "baseline_count": 20580,
+      "log_ratio": 0.0015051834552566956,
+      "loss_pct": -0.1506316812439179,
+      "cpu": [
+        "AMD EPYC 9V45 96-Core Processor"
+      ],
+      "log_sha256": "b3a233cea8b10067d2dda8b76939a574f1c57cbffb77480e5e3ac522cdc2817c"
+    },
+    {
+      "run": "39316854111",
+      "url": "https://github.com/dimaggi-ai/tool-guard-core/actions/runs/39316854111",
+      "workflow_conclusion": "success",
+      "candidate_count": 16032,
+      "baseline_count": 16051,
+      "log_ratio": -0.0011844280286264143,
+      "loss_pct": 0.1183726870599977,
+      "cpu": [
+        "AMD EPYC 9V45 96-Core Processor"
+      ],
+      "log_sha256": "02997a24c1899f67eddaea6acec1364d24b1cc8a693d9b5be93f86b556f2fbeb"
+    },
+    {
+      "run": "39316858643",
+      "url": "https://github.com/dimaggi-ai/tool-guard-core/actions/runs/39316858643",
+      "workflow_conclusion": "success",
+      "candidate_count": 24752,
+      "baseline_count": 24775,
+      "log_ratio": -0.0009287863853413663,
+      "loss_pct": 0.09283551967709247,
+      "cpu": [
+        "AMD EPYC 9V45 96-Core Processor"
+      ],
+      "log_sha256": "102a71ec6945b5d55512a4c9a324b3961ef9197ca819218a93f93fb1e1c82dca"
+    },
+    {
+      "run": "39316863189",
+      "url": "https://github.com/dimaggi-ai/tool-guard-core/actions/runs/39316863189",
+      "workflow_conclusion": "success",
+      "candidate_count": 26403,
+      "baseline_count": 26241,
+      "log_ratio": 0.00615456695395687,
+      "loss_pct": -0.6173545215502507,
+      "cpu": [
+        "AMD EPYC 9V74 80-Core Processor"
+      ],
+      "log_sha256": "860ad68556c1c8f30399b3115255abf6667075033ae2ff59c59afc58e3bce416"
+    },
+    {
+      "run": "39316867711",
+      "url": "https://github.com/dimaggi-ai/tool-guard-core/actions/runs/39316867711",
+      "workflow_conclusion": "success",
+      "candidate_count": 22807,
+      "baseline_count": 22805,
+      "log_ratio": 8.769622034913523e-05,
+      "loss_pct": -0.008770006577507594,
+      "cpu": [
+        "AMD EPYC 7763 64-Core Processor"
+      ],
+      "log_sha256": "489b56793b5d02b9616bd6e1930c01a60de52ab7fcc3d6a400315c46c47690ec"
+    },
+    {
+      "run": "39316871842",
+      "url": "https://github.com/dimaggi-ai/tool-guard-core/actions/runs/39316871842",
+      "workflow_conclusion": "success",
+      "candidate_count": 22051,
+      "baseline_count": 22106,
+      "log_ratio": -0.002491112550332799,
+      "loss_pct": 0.24880123043518054,
+      "cpu": [
+        "AMD EPYC 7763 64-Core Processor"
+      ],
+      "log_sha256": "12fec2897260ec6c8048dd516b46aed0aadf3134beb33c19ceb21460172a6dee"
+    },
+    {
+      "run": "39316876116",
+      "url": "https://github.com/dimaggi-ai/tool-guard-core/actions/runs/39316876116",
+      "workflow_conclusion": "success",
+      "candidate_count": 23712,
+      "baseline_count": 23529,
+      "log_ratio": 0.0077475462150372746,
+      "loss_pct": -0.7777636108631913,
+      "cpu": [
+        "AMD EPYC 9V45 96-Core Processor"
+      ],
+      "log_sha256": "b5ae7ed57a8c6236870b012624b8c1437776c72b60af0d504560c1d3fb51c3bf"
+    },
+    {
+      "run": "39316880794",
+      "url": "https://github.com/dimaggi-ai/tool-guard-core/actions/runs/39316880794",
+      "workflow_conclusion": "success",
+      "candidate_count": 21010,
+      "baseline_count": 21007,
+      "log_ratio": 0.00014279934336558858,
+      "loss_pct": -0.014280953967715782,
+      "cpu": [
+        "AMD EPYC 9V45 96-Core Processor"
+      ],
+      "log_sha256": "4e64dba9acca28b23c6ee67fd19e000e4ece823ff37265b697187274185e0dbe"
+    }
+  ]
+}
