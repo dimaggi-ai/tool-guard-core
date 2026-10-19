@@ -14,7 +14,7 @@ make lint          # go vet
 make integration   # shell-level CLI tests (builds binary, then exec)
 ```
 
-Requires **Go 1.25+**. No external services. No database.
+Requires **Go 1.26.0 or later**. No external services. No database.
 
 ## What we accept
 
