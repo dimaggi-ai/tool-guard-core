@@ -1,0 +1,33 @@
+start --no-checkout 9740e059ec175305f573b9d50fac7ee2c1e5ec00 e92d2a570b80f4a6c77c371c89ff543c487e9e5d
+Bisecting: 51 revisions left to test after this (roughly 6 steps)
+[e953a124b966b898be100fd901d8487ffe4a288e] Merge remote-tracking branch 'origin/feat/080-pathological-nightly' into integration-preview
+skip e953a124b966b898be100fd901d8487ffe4a288e
+Bisecting: 51 revisions left to test after this (roughly 6 steps)
+[1f0380ee309a6874f0b9a71be4fc261ff22f7ed6] fix(ci): ignore api tool download diagnostics
+good 1f0380ee309a6874f0b9a71be4fc261ff22f7ed6
+Bisecting: 48 revisions left to test after this (roughly 6 steps)
+[19dc7db2333c71f881c935908f959250cd0cdda3] Merge remote-tracking branch 'origin/feat/080-nightly-throughput' into integration-preview
+skip 19dc7db2333c71f881c935908f959250cd0cdda3
+Bisecting: 48 revisions left to test after this (roughly 6 steps)
+[cb64864bfdd3205ddf59a67f226a5185c14696c3] fix: enforce exact-head release invariants
+bad cb64864bfdd3205ddf59a67f226a5185c14696c3
+Bisecting: 32 revisions left to test after this (roughly 5 steps)
+[1504eeceb9b7d52c532bc2a6529ce9297cd4efe4] fix(api): document past-due escalation conflicts
+skip 1504eeceb9b7d52c532bc2a6529ce9297cd4efe4
+Bisecting: 32 revisions left to test after this (roughly 5 steps)
+[ac3c82d1f83c5dee65704586df3e4acc3ca65324] feat(proxy): emit audit decision receipts
+good ac3c82d1f83c5dee65704586df3e4acc3ca65324
+Bisecting: 31 revisions left to test after this (roughly 5 steps)
+[c7f85880153d2d26490340cdf8178f7517651e66] fix(escalation): block approval after expiry
+good c7f85880153d2d26490340cdf8178f7517651e66
+Bisecting: 16 revisions left to test after this (roughly 4 steps)
+[3c2579dd721eb403f61ecfb064a1728c1feba403] feat(sdk): prepare trusted PyPI publishing
+good 3c2579dd721eb403f61ecfb064a1728c1feba403
+Bisecting: 13 revisions left to test after this (roughly 4 steps)
+[43aa5ac89bb663a2b344efd80d56d392797dd29f] chore(release): reconcile v0.8 integration
+skip 43aa5ac89bb663a2b344efd80d56d392797dd29f
+Bisecting: 13 revisions left to test after this (roughly 4 steps)
+[2a45d8f8fcbea77de30e9809b5a897e787f381d5] fix(conformance): reject empty policies and pin matched rules
+skip 2a45d8f8fcbea77de30e9809b5a897e787f381d5
+Bisecting: 13 revisions left to test after this (roughly 4 steps)
+[63cbd180a838e054313cf799dccae60071d5adb3] Merge remote-tracking branch 'origin/feat/080-decision-receipt-api' into integration-preview

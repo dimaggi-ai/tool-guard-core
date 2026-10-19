@@ -7,8 +7,8 @@ stated below.
 
 ## 1. Engine microbenchmark (informational, not a promise)
 
-`tg benchmark` runs the deterministic evaluation path in-process —
-no HTTP, no audit write — and reports percentiles:
+`tg benchmark` runs the deterministic evaluation path in-process
+(no HTTP or audit write) and reports percentiles:
 
 ```bash
 tg benchmark -trials 10000
@@ -19,29 +19,30 @@ The p99 ≈ 14µs figure quoted in the README and
 [docs/integration.md](integration.md) was measured on an AMD Ryzen 7
 7700 (16 threads). It is a point measurement on one machine, not a
 floor: run `tg benchmark` on your own hardware and use that number.
-The proxy adds one HTTP hop plus JSON marshal/unmarshal on top —
-expect sub-millisecond round trips over loopback TCP on the same host
-(`tg-proxy` listens on a TCP `host:port`) and 1–3 ms across a
-Kubernetes pod.
+The proxy adds an HTTP hop, JSON encoding and decoding, and audit writes.
+Measure end-to-end latency in your deployment; the in-process figure does not
+include those costs.
 
 ## 2. `tg-proxy` relative-regression gate (asserted nightly)
 
 [`.github/workflows/nightly-stress.yml`](../.github/workflows/nightly-stress.yml)
-builds the candidate commit and the latest reachable release tag, starts both
+builds the candidate commit and a distinct reachable stable release tag, starts both
 real `tg-proxy` binaries on the same GitHub runner, and drives them
-simultaneously at concurrency 50 for 15 seconds each. The gate fails when the
-candidate's contract-valid 200/202 throughput is **at least 10% lower than the
-release baseline**. An exact 10% regression fails.
+simultaneously at concurrency 50 for 15 seconds each. The gate fails when the candidate's contract-valid 200/202 throughput is **at least 10% lower than the
+release baseline**. An exact 10% regression fails. The
+[calibration report](benchmarks/2026-10-19/report.md) derives a proposed 1.35%
+threshold from 20 identical-source runs. That tighter value is not configured;
+its behavior across independent days and runner conditions remains unvalidated.
 
 Methodology, exactly as the workflow runs it:
 
 - **Harness:** `cmd/stress-test` first measures the fresh candidate and baseline
   concurrently, before candidate-only load can mutate the bounded escalation
-  store. It then fires a realistic allow/deny mix of `/evaluate` envelopes at
+  store. It then fires an allow/deny/escalate mix of `/evaluate` envelopes at
   the candidate loaded with the shipped `policies/` directory, stepping
   concurrency through 1, 10, 50, 200, before an overload phase (2,000
-  in-flight) that must fail *closed* (clean rejections — never a 200 with the
-  wrong decision, never a hang).
+  in-flight). This phase passes if the server handles every request correctly
+  or sheds load with clean rejections. Wrong decisions or hangs fail the check.
 - **Throughput denominator:** every contract-valid HTTP 200/202 evaluation
   response counts, including HTTP 202 for a valid escalation. Earlier harness versions counted
   only HTTP 200, so the reported rate changed with the random allow/deny/
@@ -49,19 +50,20 @@ Methodology, exactly as the workflow runs it:
 - **Correctness under load:** after the load and overload phases
   complete, the harness shells out to `tg verify` and asserts the audit
   hash chain written by the concurrent goroutines is still intact.
-- **Control selection:** `git describe --tags --abbrev=0` selects the latest
-  release reachable from the candidate. The workflow fetches complete history
-  and tags, builds that checkout in a detached worktree, and logs both refs.
-- **Hardware:** GitHub-hosted `ubuntu-latest` x64, Go 1.25.13, without the race
+- **Control selection:** `scripts/select-stress-baseline.sh` selects the highest
+  version-sorted stable `vMAJOR.MINOR.PATCH` tag reachable from the candidate,
+  excluding tags that point to the candidate commit itself. It fails if no
+  distinct stable release is reachable. The workflow fetches complete history
+  and tags, builds the selected checkout in a detached worktree, and logs both refs.
+- **Hardware:** GitHub-hosted `ubuntu-latest` x64, Go 1.26.9, without the race
   detector. The workflow prints `uname -a`, `lscpu`, and `go version` so each
   run records its actual shared-runner environment. Running both proxies
-  together means host-wide throttling affects both sides of the comparison.
-- **Why relative, not absolute:** unchanged code on this shared runner produced
-  roughly 1,950-2,594 successful responses/second in five August 2026 runs,
-  then only 274.5 responses/second in a fresh run on 2026-08-25 while every
-  correctness, audit, overload, fuzz, and pathological-input check passed.
-  Runner allocation is therefore not stable enough for a defensible absolute
-  throughput or p99 assertion.
+  together exposes both to the same host conditions, but does not remove
+  scheduling, storage, or request-mix noise.
+- **Why relative, not absolute:** comparing both proxies on the same runner
+  controls for some differences between hosts. It does not establish an
+  absolute throughput or p99 capacity floor. Matched identical-source runs
+  are needed to measure the noise in the relative comparison.
 - **Interpretation:** this detects a candidate that regresses against the
   latest release under the same immediate host conditions. It is not a
   capacity promise for arbitrary deployments.
@@ -109,7 +111,7 @@ CTE buried behind 5,000 UNION branches.
 Measurement conditions:
 
 - **Runner:** GitHub-hosted `ubuntu-latest` x64, without the race detector.
-- **Toolchain:** Go 1.25.13.
+- **Toolchain:** Go 1.26.9.
 - **Evidence:** the nightly workflow prints `uname -a`, `lscpu`, and
   `go version` before the assertion so each result records the actual shared
   runner CPU and image environment.
