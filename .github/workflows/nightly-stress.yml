@@ -7,7 +7,7 @@ name: Nightly stress
 #
 # NOT run on every PR: GitHub-hosted runners have noisy, shared-tenant
 # performance. Candidate and latest-release proxies run concurrently so
-# host-wide throttling affects both measurements. A candidate at least 10%
+# host-wide throttling affects both measurements. A candidate at least 1.35%
 # slower than the release baseline fails. This is a regression signal, not a
 # capacity claim; docs/performance.md records the method and limitations.
 
@@ -95,7 +95,7 @@ jobs:
             -baseline-target http://127.0.0.1:9091 \
             -compare-concurrency 50 \
             -compare-duration 15s \
-            -max-regression-pct 10
+            -max-regression-pct 1.35
 
       - name: Stop candidate and baseline tg-proxy
         if: always()

@@ -29,8 +29,10 @@ include those costs.
 builds the candidate commit and a distinct reachable stable release tag, starts both
 real `tg-proxy` binaries on the same GitHub runner, and drives them
 simultaneously at concurrency 50 for 15 seconds each. The gate fails when the
-candidate's contract-valid 200/202 throughput is **at least 10% lower than the
-release baseline**. An exact 10% regression fails.
+candidate's contract-valid 200/202 throughput is **at least 1.35% lower than the
+release baseline**. An exact 1.35% regression fails. This investigation trigger
+comes from 20 identical-source runs on 19 October 2026; the
+[calibration report](benchmarks/2026-10-19/report.md) gives its derivation and limits.
 
 Methodology, exactly as the workflow runs it:
 
@@ -79,7 +81,7 @@ go run ./cmd/stress-test -target http://127.0.0.1:9090 \
   -concurrency 1,10,50,200 -overload 2000 \
   -tg-bin ./bin/tg -audit-log /path/to/decisions.jsonl \
   -baseline-target http://127.0.0.1:9091 \
-  -compare-concurrency 50 -compare-duration 15s -max-regression-pct 10
+  -compare-concurrency 50 -compare-duration 15s -max-regression-pct 1.35
 ```
 
 For a capacity floor on dedicated hardware, first record the CPU model,

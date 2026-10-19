@@ -1,0 +1,143 @@
+{
+  "outcome": "not isolated",
+  "candidate_budget": 10,
+  "elapsed": {
+    "seconds": 1796.5338361929753
+  },
+  "reason": "Ten-candidate exploration budget exhausted with five noisy or inconclusive skipped candidates. Local co-load and adaptive nominal intervals prevent causal attribution. Fresh controlled confirmation required.",
+  "method": {
+    "seed": 20261020,
+    "max_candidates": 10,
+    "max_seconds": 1800,
+    "boundary_adjusted_log": -0.07091677325859495,
+    "replicates": [
+      3,
+      6
+    ],
+    "controls": "old/old interleaved randomized per pair",
+    "control_skip": "any invalid run or absolute mean control log ratio >0.06",
+    "classification": "nominal t95 exploratory; not multiplicity-controlled; no causal claim"
+  },
+  "candidates": [
+    {
+      "sha": "e953a124b966b898be100fd901d8487ffe4a288e",
+      "classification": "skip",
+      "build_exit": 0,
+      "mean": -0.10614181491804468,
+      "ci": [
+        -0.15722849688709162,
+        -0.055055132948997755
+      ],
+      "control_mean": 0.02218893650835531,
+      "paired_blocks": 6
+    },
+    {
+      "sha": "1f0380ee309a6874f0b9a71be4fc261ff22f7ed6",
+      "classification": "good",
+      "build_exit": 0,
+      "mean": 0.026177373237142188,
+      "ci": [
+        -0.050458308358439674,
+        0.10281305483272404
+      ],
+      "control_mean": -0.008787949254074013,
+      "paired_blocks": 6
+    },
+    {
+      "sha": "19dc7db2333c71f881c935908f959250cd0cdda3",
+      "classification": "skip",
+      "build_exit": 0,
+      "mean": -0.08884395641020498,
+      "ci": [
+        -0.17721831409313443,
+        -0.0004695987272755192
+      ],
+      "control_mean": -0.007358036538128214,
+      "paired_blocks": 6
+    },
+    {
+      "sha": "cb64864bfdd3205ddf59a67f226a5185c14696c3",
+      "classification": "bad",
+      "build_exit": 0,
+      "mean": -0.17610058508471368,
+      "ci": [
+        -0.21198104350339161,
+        -0.14022012666603575
+      ],
+      "control_mean": -0.005155553824926175,
+      "paired_blocks": 3
+    },
+    {
+      "sha": "1504eeceb9b7d52c532bc2a6529ce9297cd4efe4",
+      "classification": "skip",
+      "build_exit": 0,
+      "mean": -0.058360084620567264,
+      "ci": [
+        -0.07924248133196984,
+        -0.037477687909164684
+      ],
+      "control_mean": 0.014508988180252048,
+      "paired_blocks": 6
+    },
+    {
+      "sha": "ac3c82d1f83c5dee65704586df3e4acc3ca65324",
+      "classification": "good",
+      "build_exit": 0,
+      "mean": -0.030768067215819962,
+      "ci": [
+        -0.06270330627821286,
+        0.0011671718465729383
+      ],
+      "control_mean": -0.005425928494777104,
+      "paired_blocks": 6
+    },
+    {
+      "sha": "c7f85880153d2d26490340cdf8178f7517651e66",
+      "classification": "good",
+      "build_exit": 0,
+      "mean": -0.04020873102017038,
+      "ci": [
+        -0.06535600344019611,
+        -0.015061458600144642
+      ],
+      "control_mean": 0.0014330113485340715,
+      "paired_blocks": 6
+    },
+    {
+      "sha": "3c2579dd721eb403f61ecfb064a1728c1feba403",
+      "classification": "good",
+      "build_exit": 0,
+      "mean": -0.008881300147565633,
+      "ci": [
+        -0.017785059249397092,
+        2.245895426582732e-05
+      ],
+      "control_mean": -0.0055010992256527185,
+      "paired_blocks": 3
+    },
+    {
+      "sha": "43aa5ac89bb663a2b344efd80d56d392797dd29f",
+      "classification": "skip",
+      "build_exit": 0,
+      "mean": -0.11056742145592675,
+      "ci": [
+        -0.23387625151417313,
+        0.012741408602319607
+      ],
+      "control_mean": -0.018792659067713064,
+      "paired_blocks": 6
+    },
+    {
+      "sha": "2a45d8f8fcbea77de30e9809b5a897e787f381d5",
+      "classification": "skip",
+      "build_exit": 0,
+      "mean": -0.01296774471730616,
+      "ci": [
+        -0.08806196651485862,
+        0.062126477080246295
+      ],
+      "control_mean": -0.00802355475122963,
+      "paired_blocks": 6
+    }
+  ]
+}
