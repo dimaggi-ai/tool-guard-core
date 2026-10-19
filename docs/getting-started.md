@@ -6,7 +6,7 @@ commands.
 
 ## Prerequisites
 
-- Go 1.25 or later (`go version`)
+- Go 1.26.0 or later (`go version`)
 - `make`, `curl`, and `jq` (used by the build and the example assertion suites)
 - (optional) Docker + Docker Compose for the postgres-attack and content-gen bundles
 - (optional, for the content-gen / ollama-agent bundles) Ollama with `gemma4:e4b` pulled

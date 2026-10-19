@@ -23,6 +23,7 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Tool Guard now requires Go 1.26.0, keeps the preferred toolchain at Go 1.26.9, and includes the golang.org/x/sys v0.49.0 update from PR #51.
 - CI pins govulncheck to v1.9.0 instead of `@latest`, and a new weekly
   workflow scans `main` for newly published Go advisories.
 - The policy-protection workflow builds with Go 1.26.9, the same toolchain
