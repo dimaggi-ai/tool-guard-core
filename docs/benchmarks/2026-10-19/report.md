@@ -1,6 +1,6 @@
 # Throughput investigation, 19 October 2026
 
-The historical nightly comparisons show a persistent measured loss. The proposed nightly investigation trigger is 1.35%, derived from 20 current-release identical-source runs. Crossing 1.35% makes the harness exit nonzero and fails that nightly workflow, including on a noisy healthy run. A failure requires investigation; it does not itself attribute the loss to code. This does not accept the historical loss or establish a capacity guarantee.
+The historical nightly comparisons show a persistent measured loss. The proposed nightly investigation trigger is 1.35%, derived from 20 current-release identical-source runs. If activated, crossing 1.35% would make the harness exit nonzero and fail that nightly workflow, including on a noisy healthy run. This PR leaves the configured threshold at 10%; the tighter proposal needs validation across independent days and runner conditions. A failure requires investigation; it does not itself attribute the loss to code. This does not accept the historical loss or establish a capacity guarantee.
 
 ## Historical observations
 
@@ -37,6 +37,6 @@ A bounded adaptive bisect retained all raw results, including noisy classificati
 
 ## Decision and evidence
 
-Do not accept the historical loss as harmless. Propose the calibrated trigger and corrected baseline-selection documentation, while keeping causal attribution unresolved until a controlled confirmation isolates it. No performance repair is justified by a noisy commit classification alone.
+Do not accept the historical loss as harmless. Retain 1.35% as a calculated proposal and deliver the corrected baseline-selection documentation. Do not activate the tighter gate from this one-day sample. Causal attribution remains unresolved until a controlled confirmation isolates it. No performance repair is justified by a noisy commit classification alone.
 
 `hosted-analysis.json` includes every hosted run URL, exact counts and raw-log SHA-256. `historical16.json` retains the historical observations; `screen-analysis.json` retains the local screen calculations. `hosted-evidence.tar.gz` contains all 20 raw hosted logs and metadata; `reproduce_calibration.py` checks their hashes, counts, provenance and both prediction bounds. Complete local logs, scripts and review evidence are retained in the private task evidence directory `/tmp/cto-sweep-finish-20261019/throughput/` on the review host. Local paths are not a portable archive and must not be treated as independently accessible evidence.
