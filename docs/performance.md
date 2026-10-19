@@ -28,9 +28,9 @@ include those costs.
 [`.github/workflows/nightly-stress.yml`](../.github/workflows/nightly-stress.yml)
 builds the candidate commit and a distinct reachable stable release tag, starts both
 real `tg-proxy` binaries on the same GitHub runner, and drives them
-simultaneously at concurrency 50 for 15 seconds each. The gate fails when the
+simultaneously at concurrency 50 for 15 seconds each. This branch configures the gate to fail when the
 candidate's contract-valid 200/202 throughput is **at least 1.35% lower than the
-release baseline**. An exact 1.35% regression fails. This investigation trigger
+release baseline**. An exact 1.35% regression makes the harness exit nonzero and fails the nightly workflow, requiring investigation. This investigation trigger
 comes from 20 identical-source runs on 19 October 2026; the
 [calibration report](benchmarks/2026-10-19/report.md) gives its derivation and limits.
 
