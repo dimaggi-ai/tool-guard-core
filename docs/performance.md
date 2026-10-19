@@ -39,8 +39,8 @@ Methodology, exactly as the workflow runs it:
   store. It then fires an allow/deny/escalate mix of `/evaluate` envelopes at
   the candidate loaded with the shipped `policies/` directory, stepping
   concurrency through 1, 10, 50, 200, before an overload phase (2,000
-  in-flight) that must fail *closed* (clean rejections, never a 200 with the
-  wrong decision, never a hang).
+  in-flight). This phase passes if the server handles every request correctly
+  or sheds load with clean rejections. Wrong decisions or hangs fail the check.
 - **Throughput denominator:** every contract-valid HTTP 200/202 evaluation
   response counts, including HTTP 202 for a valid escalation. Earlier harness versions counted
   only HTTP 200, so the reported rate changed with the random allow/deny/
@@ -58,12 +58,10 @@ Methodology, exactly as the workflow runs it:
   run records its actual shared-runner environment. Running both proxies
   together exposes both to the same host conditions, but does not remove
   scheduling, storage, or request-mix noise.
-- **Why relative, not absolute:** unchanged code on this shared runner produced
-  roughly 1,950-2,594 successful responses/second in five August 2026 runs,
-  then only 274.5 responses/second in a fresh run on 2026-08-25 while every
-  correctness, audit, overload, fuzz, and pathological-input check passed.
-  Those runs do not support a defensible absolute throughput or p99
-  assertion on shared runners.
+- **Why relative, not absolute:** comparing both proxies on the same runner
+  controls for some differences between hosts. It does not establish an
+  absolute throughput or p99 capacity floor. Matched identical-source runs
+  are needed to measure the noise in the relative comparison.
 - **Interpretation:** this detects a candidate that regresses against the
   latest release under the same immediate host conditions. It is not a
   capacity promise for arbitrary deployments.
