@@ -9,7 +9,7 @@ require (
 	github.com/pingcap/tidb/pkg/parser v0.0.0-20260606125118-d568a8528e9c
 	github.com/rqlite/sql v0.0.0-20260224021119-1b2524a41372
 	golang.org/x/sys v0.47.0
-	google.golang.org/protobuf v1.31.0
+	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
 )
 
