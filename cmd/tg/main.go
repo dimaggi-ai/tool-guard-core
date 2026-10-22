@@ -577,7 +577,7 @@ func conditionChecksFreeText(c domain.Condition) bool {
 	if c.Not != nil && conditionChecksFreeText(*c.Not) {
 		return true
 	}
-	if c.SQLClassify != nil || c.ShellClassify != nil || c.PathClassify != nil {
+	if c.CommandClassify != nil || c.SQLClassify != nil || c.ShellClassify != nil || c.PathClassify != nil {
 		return true
 	}
 	op := string(c.Operator)

@@ -1,0 +1,127 @@
+{
+  "note": "Fixed synthetic example replay, not historical production evidence. The real historical corpus replay remains open. No matching gh regex exists in shipped policies at 8d45152; old_regex is the family-style expression supplied in the task specification, not an installed rule. Old results are regex matches, not full policy decisions.",
+  "baseline_commit": "8d45152",
+  "old_regex": "\\bgh\\s+(pr|repo|issue|api)\\b",
+  "cases": [
+    {
+      "command": "gh pr --repo X create",
+      "source": "task #75 implementation specification",
+      "old_regex_match": true,
+      "new_match": true
+    },
+    {
+      "command": "gh pr new",
+      "source": "task #75 implementation specification",
+      "old_regex_match": true,
+      "new_match": true
+    },
+    {
+      "command": "gh issue new",
+      "source": "task #75 implementation specification",
+      "old_regex_match": true,
+      "new_match": true
+    },
+    {
+      "command": "gh release -R X delete",
+      "source": "task #75 implementation specification",
+      "old_regex_match": false,
+      "new_match": true
+    },
+    {
+      "command": "gh api ... -iXPATCH",
+      "source": "task #75 implementation specification",
+      "old_regex_match": true,
+      "new_match": true
+    },
+    {
+      "command": "gh api ... -X PATCH",
+      "source": "task #75 implementation specification",
+      "old_regex_match": true,
+      "new_match": true
+    },
+    {
+      "command": "gh api ... --method=PATCH",
+      "source": "task #75 implementation specification",
+      "old_regex_match": true,
+      "new_match": true
+    },
+    {
+      "command": "gh api '/repos/o/r/issues?a&b' -X POST",
+      "source": "task #75 implementation specification",
+      "old_regex_match": true,
+      "new_match": true
+    },
+    {
+      "command": "gh pr view 12",
+      "source": "task #75 implementation specification",
+      "old_regex_match": true,
+      "new_match": false
+    },
+    {
+      "command": "gh pr list --repo o/r",
+      "source": "task #75 implementation specification",
+      "old_regex_match": true,
+      "new_match": false
+    },
+    {
+      "command": "gh issue view 5 -R o/r --json title",
+      "source": "task #75 implementation specification",
+      "old_regex_match": true,
+      "new_match": false
+    },
+    {
+      "command": "gh api repos/o/r/pulls",
+      "source": "task #75 implementation specification",
+      "old_regex_match": true,
+      "new_match": false
+    },
+    {
+      "command": "gh pr checks 3",
+      "source": "task #75 implementation specification",
+      "old_regex_match": true,
+      "new_match": false
+    },
+    {
+      "command": "gh pr diff 3",
+      "source": "task #75 implementation specification",
+      "old_regex_match": true,
+      "new_match": false
+    },
+    {
+      "command": "gh pr view 1 && gh pr merge 1",
+      "source": "task #75 implementation specification",
+      "old_regex_match": true,
+      "new_match": true
+    },
+    {
+      "command": "echo $HOME",
+      "source": "pkg/engine/shell_tokenize_test.go at 8d45152",
+      "old_regex_match": false,
+      "new_match": false
+    },
+    {
+      "command": "rm $HOME/x",
+      "source": "pkg/engine/shell_tokenize_test.go at 8d45152",
+      "old_regex_match": false,
+      "new_match": false
+    },
+    {
+      "command": "cp $SRC /tmp/dst",
+      "source": "pkg/engine/shell_tokenize_test.go at 8d45152",
+      "old_regex_match": false,
+      "new_match": false
+    },
+    {
+      "command": "find . -exec gh pr merge 1 \\;",
+      "source": "coordinator review of #75 implementation, 2026-10-22",
+      "old_regex_match": true,
+      "new_match": true
+    },
+    {
+      "command": "ssh host gh pr merge 1",
+      "source": "coordinator review of #75 implementation, 2026-10-22",
+      "old_regex_match": true,
+      "new_match": true
+    }
+  ]
+}
