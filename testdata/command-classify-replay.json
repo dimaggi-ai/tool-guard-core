@@ -217,6 +217,139 @@
       "new_match": true,
       "old_regex_match": false,
       "source": "round 3 cross-review of #75, 2026-10-22"
+    },
+    {
+      "command": "gh '' pr view 12",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "gh \"\" pr view 12",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "gh pr '' view 12",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": true,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "gh pr \"\" view 12",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": true,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "gh -R o/r '' pr view 12",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "gh repo '' list",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": true,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "ls -la",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "git status",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "python3 --version",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "jq .",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "jq -r .title",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "jq -- .title",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "jq -f f",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "jq -L d .title",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "jq .title file",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "jq .title >out",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "jq .title",
+      "decision_regex_match": false,
+      "new_match": false,
+      "old_regex_match": false,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "jq '.title'",
+      "decision_regex_match": false,
+      "new_match": false,
+      "old_regex_match": false,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "jq \".title\"",
+      "decision_regex_match": false,
+      "new_match": false,
+      "old_regex_match": false,
+      "source": "round 4 requirements review of #75, 2026-10-22"
     }
   ],
   "decision_regex": "\\bgh\\s+pr\\s+create\\b",

@@ -221,6 +221,13 @@ func TestCommandClassifyEvaluatorEscalation(t *testing.T) {
 		{"gh pr --repo X create", domain.DecisionEscalated},
 		{"gh api repos/o/r/pulls -iXPATCH", domain.DecisionEscalated},
 		{"gh unknown", domain.DecisionEscalated},
+		{`gh '' pr view 12`, domain.DecisionEscalated},
+		{`gh "" pr view 12`, domain.DecisionEscalated},
+		{`gh pr '' view 12`, domain.DecisionEscalated},
+		{`gh pr "" view 12`, domain.DecisionEscalated},
+		{`gh -R o/r '' pr view 12`, domain.DecisionEscalated},
+		{`gh repo '' list`, domain.DecisionEscalated},
+
 		{"ls -la", domain.DecisionEscalated},
 		{"git status", domain.DecisionEscalated},
 		{"python3 --version", domain.DecisionEscalated},
@@ -422,6 +429,15 @@ func TestCommandClassifyConstructedCommandsInCompounds(t *testing.T) {
 					t.Errorf("unverified compound accepted: %q", command)
 				}
 			}
+		}
+	}
+}
+
+func TestCommandClassifyEmptyCommandPositions(t *testing.T) {
+	for _, command := range []string{`gh '' pr view 12`, `gh "" pr view 12`, `gh pr '' view 12`, `gh pr "" view 12`, `gh -R o/r '' pr view 12`, `gh repo '' list`} {
+		results := classifyCommandSegments(command)
+		if len(results) != 1 || !results[0].Match || results[0].Reason != "empty gh command argument" {
+			t.Errorf("%q: %+v", command, results)
 		}
 	}
 }
