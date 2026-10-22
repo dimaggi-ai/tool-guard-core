@@ -1,5 +1,5 @@
 {
-  "baseline_commit": "8d45152",
+  "baseline_commit": "8d451527367a073db72f3c3018b0c2bd637ff3ce",
   "cases": [
     {
       "command": "gh pr --repo X create",
@@ -51,7 +51,7 @@
       "source": "coordinator implementation brief for #75"
     },
     {
-      "command": "gh api '/repos/o/r/issues?a\u0026b' -X POST",
+      "command": "gh api '/repos/o/r/issues?a&b' -X POST",
       "decision_regex_match": false,
       "new_match": true,
       "old_regex_match": true,
@@ -100,7 +100,7 @@
       "source": "coordinator implementation brief for #75"
     },
     {
-      "command": "gh pr view 1 \u0026\u0026 gh pr merge 1",
+      "command": "gh pr view 1 && gh pr merge 1",
       "decision_regex_match": false,
       "new_match": true,
       "old_regex_match": true,
@@ -196,6 +196,27 @@
       "new_match": true,
       "old_regex_match": false,
       "source": "round 2 cross-review of #75, 2026-10-22"
+    },
+    {
+      "command": "gh pr view 1 |& jq .title",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": true,
+      "source": "round 3 Codex cross-review of #75, 2026-10-22"
+    },
+    {
+      "command": "jq .title |& gh issue view 2",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": true,
+      "source": "round 3 Codex cross-review of #75, 2026-10-22"
+    },
+    {
+      "command": "jq .title |& jq .title",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 3 Codex cross-review of #75, 2026-10-22"
     }
   ],
   "decision_regex": "\\bgh\\s+pr\\s+create\\b",

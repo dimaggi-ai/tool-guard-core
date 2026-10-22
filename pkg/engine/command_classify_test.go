@@ -34,6 +34,7 @@ func TestCommandClassifyReads(t *testing.T) {
 		"gh pr ls", "gh issue ls", "gh repo ls", "gh release ls",
 		"gh pr status", "gh issue status", "gh release view v1",
 		"gh api --hostname example.test repos/o/r/pulls --help",
+		"gh --hostname example.test api repos/o/r/pulls",
 		"gh repo view o/r",
 		"gh release list -R o/r",
 	} {
@@ -226,6 +227,9 @@ func TestCommandClassifyEvaluatorEscalation(t *testing.T) {
 		{"gh pr view \\\n12", domain.DecisionEscalated},
 		{"gh pr view 12 2>/dev/null", domain.DecisionEscalated},
 		{"jq .title", domain.DecisionAllowed},
+		{"gh pr view 1 |& jq .title", domain.DecisionEscalated},
+		{"jq .title |& gh issue view 2", domain.DecisionEscalated},
+		{"jq .title |& jq .title", domain.DecisionEscalated},
 	} {
 		t.Run(tc.command, func(t *testing.T) {
 			result := NewEvaluator().Evaluate(envCmd("bash", tc.command), []domain.Policy{policy}, domain.PolicyModeEnforcement)
@@ -264,6 +268,16 @@ func TestCommandClassifyOtherCommandMentions(t *testing.T) {
 func TestCommandClassifyFailClosedReasons(t *testing.T) {
 	for _, tc := range []struct{ command, reason string }{
 		{"\r", "unsupported control character"},
+		{"gh api repos/o/r/issues --repo o/r", "unknown gh option"},
+		{"gh --repo o/r api repos/o/r/issues", "unknown gh option"},
+		{"gh -Ro/r api repos/o/r/issues", "unknown gh option"},
+		{"gh pr view 12 --hostname example.test", "unknown gh option"},
+		{"gh --hostname example.test pr view 12", "unknown gh option"},
+		{"gh repo view o/r -R o/r", "unknown gh option"},
+		{"gh -Ro/r repo list", "unknown gh option"},
+		{"gh pr view 1 |& jq .title", "stderr pipe redirection is not verified"},
+		{"jq .title |& gh issue view 2", "stderr pipe redirection is not verified"},
+		{"jq .title |& jq .title", "stderr pipe redirection is not verified"},
 		{"fc -s", "wrapper or shell grammar is not verified"},
 		{"gh pr view #'\ngh pr merge 1 #'", "shell comment is not verified"},
 		{"#'\ngh pr merge 1", "shell comment is not verified"},

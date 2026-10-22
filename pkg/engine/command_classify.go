@@ -85,7 +85,10 @@ func classifyCommandSegments(cmd string) []commandSegmentResult {
 		}
 		flush()
 		switch t.value {
-		case "&&", "||", "|", "|&":
+		case "|&":
+			results = append(results, commandSegmentResult{t.value, true, "stderr pipe redirection is not verified"})
+			pendingCommand = true
+		case "&&", "||", "|":
 			pendingCommand = true
 		case ";", "&":
 			if pendingCommand {
@@ -253,8 +256,10 @@ func commandLiteral(raw string) bool {
 // Values are consumed before deciding which words name commands or endpoints.
 func ghFlag(name, group, verb string) (takesValue, known bool) {
 	switch name {
-	case "--repo", "-R", "--hostname":
-		return true, true
+	case "--repo", "-R":
+		return true, group == "" || group == "pr" || group == "issue" || group == "release"
+	case "--hostname":
+		return true, group == "" || group == "api"
 	case "--help":
 		return false, true
 	}
@@ -323,6 +328,7 @@ func ghReadVerb(group, verb string) bool {
 func classifyGH(args []string) (bool, string) {
 	group, verb := "", ""
 	var operands []string
+	var parsedFlags []string
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if strings.HasPrefix(arg, "-") {
@@ -352,6 +358,7 @@ func classifyGH(args []string) (bool, string) {
 			}
 			for _, flag := range flags {
 				name, value, attached := strings.Cut(flag, "=")
+				parsedFlags = append(parsedFlags, name)
 				takesValue, known := ghFlag(name, group, verb)
 				if !known {
 					return true, "unknown gh option"
@@ -391,6 +398,12 @@ func classifyGH(args []string) (bool, string) {
 			continue
 		}
 		operands = append(operands, arg)
+	}
+	// Selectors may precede the command group, but must belong to the final command.
+	for _, name := range parsedFlags {
+		if _, known := ghFlag(name, group, verb); !known {
+			return true, "unknown gh option"
+		}
 	}
 	if group == "api" {
 		if len(operands) != 1 || !ghRESTEndpoint(operands[0]) {
