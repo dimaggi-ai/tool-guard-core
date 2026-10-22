@@ -8,6 +8,20 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Opt-in `command_classify` with the `gh_read` profile checks every shell
+  command segment and matches unverified operations for escalation. Delimited
+  `gh` mentions inside other commands also escalate, including literal mentions
+  and paths. Runtime program-name construction needs separate interpreter rules.
+  Includes counterexample tests, per-segment reasons, and a fixed example replay;
+  the unavailable historical corpus remains an open verification item.
+  Shipped policies and installed rules are unchanged.
+- Go API: `domain.CommandClassify` and `domain.Condition.CommandClassify`.
+  The condition field is additive; positional `Condition` literals must switch
+  to keyed fields. YAML and JSON configurations use `field` and `profile`.
+- Literal-path protection regressions cover assignments, quoting, parameter
+  defaults and substitutions. Use literal paths with `-protect-paths`;
+  unresolved-path denial remains unchanged.
+
 - `tg prune` previews retention of a closed audit log and writes a new file with
   `--yes`. A versioned checkpoint preserves the removed boundary and retained
   hashes. `tg verify` and `tg export` reject pruned chains unless
