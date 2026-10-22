@@ -251,7 +251,7 @@ shell-meta / env-wrap / interpreter-substitution bypasses (`env`,
 `command_classify` accepts a free-text shell command. It is opt-in and is not
 used by shipped policies. A match means the rule applies its effect; use an
 `escalate` or `deny` effect, never `allow`. Validation does not reject an
-`allow` effect; it would allow the unverified commands that this condition matches.
+`allow` effect; that effect allows the unverified commands this condition matches.
 
 ```yaml
 conditions:
@@ -323,8 +323,8 @@ Interpreter commands match regardless of whether their arguments contain a gh me
 Classification checks command text without executing it. It assumes supported executable names resolve to the expected programs with the documented behavior. It does not verify executable contents, pre-existing aliases or shell functions, configuration, environment, or remote service behavior. This profile is not a sandbox or a guarantee of runtime containment.
 
 The fixed replay fixture in `testdata/command-classify-replay.json` uses implementation-brief examples, cases found during review and existing repository test strings.
-No matching shipped regex was found at baseline `8d45152`; a family-style regex
-is used for comparison only.
+No matching shipped regex was found at baseline `8d45152`; the replay uses
+`\bgh\s+(pr|repo|issue|api)\b` for comparison only.
 The historical corpus replay remains incomplete, so the operational false-positive rate is unknown. Shipped policies and installed rules remain unchanged pending independent verification and separate policy-activation approval.
 
 ### Write classifier
