@@ -261,7 +261,7 @@ conditions:
 effect: escalate
 ```
 
-The only profile is `gh_read`. Missing, empty or non-string commands match.
+The only profile is `gh_read`. A missing, empty or non-string command value matches.
 A blank field, unknown profile, mixed condition forms, or a classifier beneath
 `not` is rejected during validation. A condition has mixed forms when more than one
 form is set on that node. JSON uses the same keys as YAML.
@@ -314,7 +314,7 @@ Nested command strings, scripts, callbacks, and commands supplied through stdin 
 Mention checks are case insensitive, include the `.exe` suffix, and inspect
 raw text, resolved words and text with quotes and backslashes stripped.
 Literal mentions such as `echo gh` and paths such as `.config/gh/hosts.yml`
-therefore match. The condition matches; the rule effect escalates or denies.
+therefore match. The condition matches; the rule applies its configured effect.
 These mention checks also apply to helper segments before helper acceptance.
 Interpreter commands match regardless of whether their arguments contain a gh mention.
 
