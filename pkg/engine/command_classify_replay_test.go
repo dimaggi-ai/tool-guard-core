@@ -32,7 +32,7 @@ func TestCommandClassify_FixedExampleReplay(t *testing.T) {
 	if err := json.Unmarshal(data, &fixture); err != nil {
 		t.Fatal(err)
 	}
-	if fixture.Baseline != "8d45152" || len(fixture.Cases) == 0 {
+	if fixture.Baseline != "8d451527367a073db72f3c3018b0c2bd637ff3ce" || len(fixture.Cases) == 0 {
 		t.Fatal("missing fixed baseline")
 	}
 	if fixture.DecisionRegex != `\bgh\s+pr\s+create\b` {

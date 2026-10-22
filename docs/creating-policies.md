@@ -250,7 +250,8 @@ shell-meta / env-wrap / interpreter-substitution bypasses (`env`,
 
 `command_classify` accepts a free-text shell command. It is opt-in and is not
 used by shipped policies. A match means the rule applies its effect; use an
-`escalate` or `deny` effect, never `allow`.
+`escalate` or `deny` effect, never `allow`. Validation does not reject an
+`allow` effect; it would allow the unverified commands that this condition matches.
 
 ```yaml
 conditions:
@@ -262,8 +263,8 @@ effect: escalate
 
 The only profile is `gh_read`. Missing, empty or non-string commands match.
 A blank field, unknown profile, mixed condition forms, or a classifier beneath
-`not` is rejected during validation. Mixed condition forms means more than one
-form is set on a condition node. JSON uses the same keys as YAML.
+`not` is rejected during validation. A condition has mixed forms when more than one
+form is set on that node. JSON uses the same keys as YAML.
 
 Each control-separated segment is checked, including pipelines, background
 commands and newlines. Bare `gh` supports these read operations:
@@ -277,7 +278,9 @@ commands and newlines. Bare `gh` supports these read operations:
 
 `ls` normalizes to `list` in these groups; `pr new` and `issue new` normalize
 to `create` and match. Unknown commands, aliases and options in a `gh` invocation
-match. `--repo`/`-R`, `--hostname` and `--help` are consumed wherever they appear;
+match. Selectors may precede the command group: `--repo`/`-R` is supported
+only for `pr`, `issue` and `release`, and `--hostname` only for `api`.
+`--help` is consumed wherever it appears;
 help does not make a mutation a verified read. Short options that take a value accept
 attached values and clusters, so `-iXPATCH` is recognized as a non-GET method.
 
@@ -293,8 +296,8 @@ custom headers, browser launch and template options.
 Flag and alias meanings were checked against the
 gh 2.102.0 (2026-09-30) manual pages for `gh-pr`, `gh-issue`, `gh-repo`,
 `gh-release` and `gh-api`.
-`--repo` is inherited by repository-oriented groups and `--hostname` belongs
-to API requests; the profile consumes them as selectors in any position.
+Selector flags are checked against the final command group, including when
+they appear before it.
 
 Substitutions, groups, here-documents, assignments, unresolved program names,
 quoted/escaped program names, and path-qualified `gh` match. A program whose
