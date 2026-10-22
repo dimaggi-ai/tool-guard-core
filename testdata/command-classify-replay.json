@@ -202,21 +202,21 @@
       "decision_regex_match": false,
       "new_match": true,
       "old_regex_match": true,
-      "source": "round 3 Codex cross-review of #75, 2026-10-22"
+      "source": "round 3 cross-review of #75, 2026-10-22"
     },
     {
       "command": "jq .title |& gh issue view 2",
       "decision_regex_match": false,
       "new_match": true,
       "old_regex_match": true,
-      "source": "round 3 Codex cross-review of #75, 2026-10-22"
+      "source": "round 3 cross-review of #75, 2026-10-22"
     },
     {
       "command": "jq .title |& jq .title",
       "decision_regex_match": false,
       "new_match": true,
       "old_regex_match": false,
-      "source": "round 3 Codex cross-review of #75, 2026-10-22"
+      "source": "round 3 cross-review of #75, 2026-10-22"
     }
   ],
   "decision_regex": "\\bgh\\s+pr\\s+create\\b",
