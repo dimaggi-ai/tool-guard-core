@@ -36,6 +36,14 @@ func evalCommandClassify(c *domain.CommandClassify, fields map[string]interface{
 }
 
 func classifyCommandSegments(cmd string) []commandSegmentResult {
+	// Check raw text before the shared tokenizer can remove continuations or
+	// treat legacy arithmetic syntax as literal text.
+	if strings.Contains(cmd, "\\\n") {
+		return []commandSegmentResult{{cmd, true, "line continuation is not verified"}}
+	}
+	if strings.Contains(cmd, "$[") {
+		return []commandSegmentResult{{cmd, true, "legacy arithmetic expansion is unresolved"}}
+	}
 	for i := 0; i < len(cmd); i++ {
 		if (cmd[i] < 32 && cmd[i] != '\t' && cmd[i] != '\n') || cmd[i] == 127 {
 			return []commandSegmentResult{{cmd, true, "unsupported control character"}}
@@ -182,7 +190,15 @@ func classifyCommandSegment(tokens []shellToken) (bool, string) {
 				return true, "unresolved word in another command"
 			}
 		}
-		return false, "segment does not invoke gh"
+		for _, t := range tokens {
+			if t.kind != tokWord {
+				return true, "redirection in helper segment is not verified"
+			}
+		}
+		if head.raw == "jq" && len(words) == 2 && words[1].value == ".title" {
+			return false, "verified jq .title helper"
+		}
+		return true, "unsupported command form"
 	}
 	for _, t := range tokens {
 		if t.kind != tokWord {
