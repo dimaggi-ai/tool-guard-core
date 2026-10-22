@@ -262,7 +262,8 @@ effect: escalate
 
 The only profile is `gh_read`. Missing, empty or non-string commands match.
 A blank field, unknown profile, mixed condition forms, or a classifier beneath
-`not` is rejected during validation. JSON uses the same keys as YAML.
+`not` is rejected during validation. Mixed condition forms means more than one
+form is set on a condition node. JSON uses the same keys as YAML.
 
 Each control-separated segment is checked, including pipelines, background
 commands and newlines. Bare `gh` supports these read operations:
@@ -277,7 +278,7 @@ commands and newlines. Bare `gh` supports these read operations:
 `ls` normalizes to `list` in these groups; `pr new` and `issue new` normalize
 to `create` and match. Unknown commands, aliases and options in a `gh` invocation
 match. `--repo`/`-R`, `--hostname` and `--help` are consumed wherever they appear;
-help does not make a mutation a verified read. Short value options accept
+help does not make a mutation a verified read. Short options that take a value accept
 attached values and clusters, so `-iXPATCH` is recognized as a non-GET method.
 
 The accepted command-option subset is deliberately limited: `--json` and
@@ -289,30 +290,47 @@ The accepted command-option subset is deliberately limited: `--json` and
 `--slurp` and `--verbose`. Other flags match, including field/input flags,
 custom headers, browser launch and template options.
 
-Flag and alias meanings were checked against the local September 2026
-`gh-pr`, `gh-issue`, `gh-repo`, `gh-release` and `gh-api` manual pages.
+Flag and alias meanings were checked against the
+gh 2.102.0 (2026-09-30) manual pages for `gh-pr`, `gh-issue`, `gh-repo`,
+`gh-release` and `gh-api`.
 `--repo` is inherited by repository-oriented groups and `--hostname` belongs
 to API requests; the profile consumes them as selectors in any position.
 
-Substitutions, groups, here-documents, assignments, wrappers, unresolved program
-names, quoted/escaped program names, and path-qualified `gh` match. No shell
-code runs during classification. Redirections, unresolved arguments, unquoted
-globs and malformed quoting in a `gh` segment also match. Conservative checks
-can match literal substitution/group text inside quotes.
+Substitutions, groups, here-documents, assignments, unresolved program names,
+quoted/escaped program names, and path-qualified `gh` match. A program whose
+basename becomes `gh` after case folding and stripping `.exe` also matches
+unless its raw command head is exactly `gh`. ANSI-C quotes (`$'...'`) and
+locale quotes (`$"..."`) match. ASCII control characters other than tab and LF,
+and unquoted word-initial `#` comments, match. No shell code runs during
+classification. Redirections, unresolved arguments, unquoted globs and malformed
+quoting in a `gh` segment also match. Conservative checks can match literal
+substitution/group text inside quotes. Unresolved words in non-`gh` commands
+also match, including unquoted globs, tilde expansion and malformed quoting;
+use literal paths.
 
-A delimited `gh` mention inside any other command escalates, including literal
-mentions such as `echo gh` and paths such as `.config/gh/hosts.yml`. String
-construction inside interpreters, such as building the program name at runtime,
-is outside this profile, so interpreter commands need their own rules.
+Wrappers are programs that run other programs, such as `find -exec` and `ssh`.
+Known shell execution builtins, including `eval` and history replay with `fc`,
+match without a `gh` mention.
+Nested or remote shell strings passed to `ssh`, `su -c`, `script -c` and
+interpreters are not parsed as shell commands. These commands match when they
+contain a delimited `gh` mention; independently unsupported syntax also matches.
+Mention checks are case insensitive, include the `.exe` suffix, and inspect
+raw text, resolved words and
+text with quotes and backslashes stripped after removing line continuations.
+Literal mentions such as `echo gh` and paths such as `.config/gh/hosts.yml`
+therefore match. The condition matches; the rule effect escalates or denies.
+String construction inside interpreters, such as building the program name at
+runtime, is outside this profile, so interpreter commands need their own rules.
 
 Ordinary non-`gh` segments without such mentions are outside this profile, so
 a verified read piped to `jq` passes. This is not a general shell sandbox: use other rules for other
-programs. The profile assumes normal built-in CLI command behavior; it does
+programs. The profile assumes the CLI's default behavior; it does
 not inspect executable files, shell functions, CLI configuration or environment.
 
 The fixed replay fixture in `testdata/command-classify-replay.json` uses only
-issue examples, coordinator review cases and existing repository test strings.
-No matching shipped regex was found at baseline `8d45152`; the comparison regex comes from the task.
+issue examples, cases found during review and existing repository test strings.
+No matching shipped regex was found at baseline `8d45152`; a family-style regex
+is used for comparison only.
 The real historical corpus remains unavailable and its replay is still open.
 Installed rules remain unchanged pending independent verification and separate
 approval of any policy activation.

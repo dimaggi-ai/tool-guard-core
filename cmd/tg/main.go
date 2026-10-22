@@ -560,7 +560,7 @@ var knownOperators = map[string]struct{}{
 // conditionChecksFreeText reports whether the condition tree contains any
 // leaf that semantically inspects a string-shaped field — a regex or
 // contains operator on a parameters.* field other than `amount`, or any
-// sql_classify / shell_classify / path_classify leaf. Used by the
+// sql_classify / shell_classify / path_classify / command_classify leaf. Used by the
 // amount-without-semantic-check heuristic so the warning is suppressed
 // once the policy author has added the recommended tripwire.
 func conditionChecksFreeText(c domain.Condition) bool {

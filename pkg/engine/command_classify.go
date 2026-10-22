@@ -8,10 +8,10 @@ import (
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 )
 
-var ghMention = regexp.MustCompile(`(^|[^a-zA-Z0-9_.-])gh($|[^a-zA-Z0-9_.-])`)
+var ghMention = regexp.MustCompile(`(?i)(^|[^a-z0-9_.-])gh(?:\.exe)?($|[^a-z0-9_.-])`)
 
 // commandSegmentResult is test-visible so learning examples can show every
-// segment, including those after the first violation. Match means escalate.
+// segment, including those after the first violation. A match applies the rule effect.
 type commandSegmentResult struct {
 	Command string
 	Match   bool
@@ -24,8 +24,8 @@ func evalCommandClassify(c *domain.CommandClassify, fields map[string]interface{
 	}
 	raw, ok := resolveField(c.Field, fields)
 	cmd, isString := raw.(string)
-	if !ok || !isString || strings.TrimSpace(cmd) == "" {
-		return true, "command_classify: command is missing, empty or not a string"
+	if !ok || !isString {
+		return true, "command_classify: command is missing or not a string"
 	}
 	for _, result := range classifyCommandSegments(cmd) {
 		if result.Match {
@@ -36,6 +36,17 @@ func evalCommandClassify(c *domain.CommandClassify, fields map[string]interface{
 }
 
 func classifyCommandSegments(cmd string) []commandSegmentResult {
+	for i := 0; i < len(cmd); i++ {
+		if (cmd[i] < 32 && cmd[i] != '\t' && cmd[i] != '\n') || cmd[i] == 127 {
+			return []commandSegmentResult{{cmd, true, "unsupported control character"}}
+		}
+	}
+	if strings.TrimSpace(cmd) == "" {
+		return []commandSegmentResult{{cmd, true, "empty command"}}
+	}
+	if commandHasComment(cmd) {
+		return []commandSegmentResult{{cmd, true, "shell comment is not verified"}}
+	}
 	var results []commandSegmentResult
 	var segment []shellToken
 	flush := func() {
@@ -72,7 +83,7 @@ func classifyCommandSegments(cmd string) []commandSegmentResult {
 			if pendingCommand {
 				results = append(results, commandSegmentResult{t.value, true, "control operator has no command"})
 			}
-		case "\n", "\r":
+		case "\n":
 		default:
 			results = append(results, commandSegmentResult{t.value, true, "unsupported shell control syntax"})
 		}
@@ -87,8 +98,50 @@ func classifyCommandSegments(cmd string) []commandSegmentResult {
 	return results
 }
 
+// Check comments before tokenization: quotes in a comment must not hide later
+// commands by being interpreted as quotes that span a newline.
+func commandHasComment(cmd string) bool {
+	var quote byte
+	wordStart := true
+	for i := 0; i < len(cmd); i++ {
+		c := cmd[i]
+		if quote == '\'' {
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		if c == '\\' && (quote == 0 || (i+1 < len(cmd) && isDquoteEscape(cmd[i+1]))) {
+			if i+1 < len(cmd) && cmd[i+1] != '\n' {
+				wordStart = false
+			}
+			i++
+			continue
+		}
+		if quote == '"' {
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		if c == '#' && wordStart {
+			return true
+		}
+		if c == '\'' || c == '"' {
+			quote = c
+		}
+		wordStart = strings.ContainsRune(" \t\n;&|()<>", rune(c))
+	}
+	return false
+}
+
+var commandMentionText = strings.NewReplacer("\\\n", "", "'", "", "\"", "", "\\", "")
+
 func classifyCommandSegment(tokens []shellToken) (bool, string) {
 	for _, t := range tokens {
+		if strings.Contains(t.raw, "$'") || strings.Contains(t.raw, "$\"") {
+			return true, "ANSI-C or locale quoting is not verified"
+		}
 		// Reject substitutions even in otherwise unrelated commands. Inspecting
 		// their output cannot establish that executing their bodies is read-only.
 		if strings.Contains(t.raw, "$(") || strings.ContainsAny(t.raw, "`{}") || strings.HasPrefix(t.value, "<<") {
@@ -100,11 +153,15 @@ func classifyCommandSegment(tokens []shellToken) (bool, string) {
 		return true, "segment has no literal program"
 	}
 	head := words[0]
+	program := strings.TrimSuffix(strings.ToLower(path.Base(strings.ReplaceAll(head.value, "\\", "/"))), ".exe")
+	if program == "gh" && head.raw != "gh" {
+		return true, "gh program name is not the exact literal gh"
+	}
 	if head.unresolved || head.raw != head.value || strings.ContainsAny(head.raw, "*?[]~\\") {
 		return true, "program name is not a bare literal"
 	}
 	switch path.Base(head.value) {
-	case "eval", "sh", "bash", "env", "command", "exec", "xargs", "sudo", "nohup", "time",
+	case "eval", "fc", "sh", "bash", "env", "command", "exec", "xargs", "sudo", "nohup", "time",
 		"nice", "timeout", "source", ".", "builtin", "alias", "unalias", "hash", "enable",
 		"export", "unset", "set", "shopt", "declare", "typeset", "local", "readonly",
 		"zsh", "dash", "ksh", "fish", "watch", "parallel", "runuser", "if", "then", "else", "elif", "fi", "for", "while", "until", "do", "done", "case", "esac", "function", "!", "coproc", "select":
@@ -113,16 +170,19 @@ func classifyCommandSegment(tokens []shellToken) (bool, string) {
 	if strings.Contains(head.value, "=") {
 		return true, "assignment scope is unresolved"
 	}
-	if path.Base(head.value) != "gh" {
+	if program != "gh" {
 		for _, t := range tokens {
-			if t.kind == tokWord && ghMention.MatchString(t.raw) {
+			if t.kind != tokWord {
+				continue
+			}
+			if ghMention.MatchString(t.raw) || ghMention.MatchString(t.value) || ghMention.MatchString(commandMentionText.Replace(t.raw)) {
 				return true, "gh appears inside another command"
+			}
+			if t.unresolved || !commandLiteral(t.raw) {
+				return true, "unresolved word in another command"
 			}
 		}
 		return false, "segment does not invoke gh"
-	}
-	if head.value != "gh" {
-		return true, "path-qualified gh is not verified"
 	}
 	for _, t := range tokens {
 		if t.kind != tokWord {
@@ -172,7 +232,7 @@ func commandLiteral(raw string) bool {
 	return quote == 0
 }
 
-// Flags are a deliberately small subset of the local Sep 2026 CLI manual:
+// Flags are a deliberately small subset of gh 2.102.0 (2026-09-30) manual pages:
 // gh-pr, gh-issue, gh-repo, gh-release and gh-api. Unknown flags never pass.
 // Values are consumed before deciding which words name commands or endpoints.
 func ghFlag(name, group, verb string) (takesValue, known bool) {
