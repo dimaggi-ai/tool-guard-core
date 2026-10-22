@@ -302,38 +302,27 @@ basename becomes `gh` after case folding and stripping `.exe` also matches
 unless its raw command head is exactly `gh`. ANSI-C quotes (`$'...'`) and
 locale quotes (`$"..."`) match. ASCII control characters other than tab and LF,
 and unquoted word-initial `#` comments, match. No shell code runs during
-classification. Redirections, unresolved arguments, unquoted globs and malformed
-quoting in a `gh` segment also match. Conservative checks can match literal
-substitution/group text inside quotes. Unresolved words in non-`gh` commands
-also match, including unquoted globs, tilde expansion and malformed quoting;
-use literal paths.
+classification. All shell redirections match in every segment. Unresolved words, unquoted globs and malformed quoting also match, including in helper segments; use literal paths. Literal paths alone do not make an unsupported command form supported. Conservative checks can match literal substitution or group text inside quotes.
 
-Wrappers are programs that run other programs, such as `find -exec` and `ssh`.
-Known shell execution builtins, including `eval` and history replay with `fc`,
-match without a `gh` mention.
-Nested or remote shell strings passed to `ssh`, `su -c`, `script -c` and
-interpreters are not parsed as shell commands. These commands match when they
-contain a delimited `gh` mention; independently unsupported syntax also matches.
+Programs and builtins outside the supported command forms match regardless of any gh mention.
+
+Nested command strings, scripts, callbacks, and commands supplied through stdin or files are not recursively verified. Programs and builtins that execute them are excluded from the supported command forms and therefore match regardless of any gh mention. Findings involving constructed or nested gh commands are not accepted no-match exceptions.
+
 Mention checks are case insensitive, include the `.exe` suffix, and inspect
-raw text, resolved words and
-text with quotes and backslashes stripped after removing line continuations.
+raw text, resolved words and text with quotes and backslashes stripped.
 Literal mentions such as `echo gh` and paths such as `.config/gh/hosts.yml`
 therefore match. The condition matches; the rule effect escalates or denies.
-String construction inside interpreters, such as building the program name at
-runtime, is outside this profile, so interpreter commands need their own rules.
+These mention checks also apply to helper segments before helper acceptance.
+Interpreter commands match regardless of whether their arguments contain a gh mention.
 
-Ordinary non-`gh` segments without such mentions are outside this profile, so
-a verified read piped to `jq` passes. This is not a general shell sandbox: use other rules for other
-programs. The profile assumes the CLI's default behavior; it does
-not inspect executable files, shell functions, CLI configuration or environment.
+`gh_read` matches unless every segment uses a supported gh read operation or an explicitly supported helper command form. Initially, the only supported helper has the bare executable name `jq` and exactly one literal filter operand whose resolved value is `.title`, with no options or file operands, reading stdin only. Helper segments remain subject to gh-mention and unresolved-word checks. Unsupported programs and argument forms match even when they are harmless and contain no gh mention. With an enforced `escalate` rule, these commands require escalation. All shell redirections match, including in otherwise supported reads. Every backslash immediately followed by a newline matches, including inside quoted text. Ordinary newline-separated supported reads remain supported. A no-match does not itself grant permission; other policy rules still apply. If no rule matches, the default decision is allow.
 
-The fixed replay fixture in `testdata/command-classify-replay.json` uses only
-issue examples, cases found during review and existing repository test strings.
+Classification checks command text without executing it. It assumes supported executable names resolve to the expected programs with the documented behavior. It does not verify executable contents, pre-existing aliases or shell functions, configuration, environment, or remote service behavior. This profile is not a sandbox or a guarantee of runtime containment.
+
+The fixed replay fixture in `testdata/command-classify-replay.json` uses implementation-brief examples, cases found during review and existing repository test strings.
 No matching shipped regex was found at baseline `8d45152`; a family-style regex
 is used for comparison only.
-The real historical corpus remains unavailable and its replay is still open.
-Installed rules remain unchanged pending independent verification and separate
-approval of any policy activation.
+The historical corpus replay remains incomplete, so the operational false-positive rate is unknown. Shipped policies and installed rules remain unchanged pending independent verification and separate policy-activation approval.
 
 ### Write classifier
 

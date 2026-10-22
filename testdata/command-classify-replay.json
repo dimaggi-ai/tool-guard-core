@@ -175,6 +175,27 @@
       "new_match": true,
       "old_regex_match": false,
       "source": "round 1 cross-review of #75, 2026-10-22"
+    },
+    {
+      "command": "ssh host 'g[h] pr merge 1'",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 2 cross-review of #75, 2026-10-22"
+    },
+    {
+      "command": "python3 -c 'import os; os.system(\"g\" + \"h pr merge 1\")'",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 2 cross-review of #75, 2026-10-22"
+    },
+    {
+      "command": "python3 -c 'import os; os.system(\"g\"+\"h\"+\" pr merge 1\")'",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 2 cross-review of #75, 2026-10-22"
     }
   ],
   "decision_regex": "\\bgh\\s+pr\\s+create\\b",

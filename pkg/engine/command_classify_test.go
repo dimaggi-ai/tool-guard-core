@@ -14,6 +14,8 @@ func commandReadCondition() domain.Condition {
 func TestCommandClassifyReads(t *testing.T) {
 	for _, command := range []string{
 		"gh pr view 12",
+		"jq .title", "jq '.title'", `jq ".title"`, `jq .ti\tle`,
+		`gh pr view '#1'`, `gh pr view \#1`, `gh pr view x#1`, `gh pr view "#1"`,
 		"gh pr view 1\ngh issue view 2",
 		"gh pr list --repo o/r",
 		"gh issue view 5 -R o/r --json title",
@@ -218,6 +220,12 @@ func TestCommandClassifyEvaluatorEscalation(t *testing.T) {
 		{"gh pr --repo X create", domain.DecisionEscalated},
 		{"gh api repos/o/r/pulls -iXPATCH", domain.DecisionEscalated},
 		{"gh unknown", domain.DecisionEscalated},
+		{"ls -la", domain.DecisionEscalated},
+		{"git status", domain.DecisionEscalated},
+		{"python3 --version", domain.DecisionEscalated},
+		{"gh pr view \\\n12", domain.DecisionEscalated},
+		{"gh pr view 12 2>/dev/null", domain.DecisionEscalated},
+		{"jq .title", domain.DecisionAllowed},
 	} {
 		t.Run(tc.command, func(t *testing.T) {
 			result := NewEvaluator().Evaluate(envCmd("bash", tc.command), []domain.Policy{policy}, domain.PolicyModeEnforcement)
@@ -232,20 +240,21 @@ func TestCommandClassifyOtherCommandMentions(t *testing.T) {
 	for _, tc := range []struct {
 		command string
 		match   bool
+		reason  string
 	}{
-		{"jq .title", false}, {"ls -la", false}, {"git status", false}, {"echo ghost", false},
-		{"echo agh", false}, {"echo gh1", false}, {"echo 1gh", false},
-		{"echo _gh", false}, {"echo gh_", false}, {"echo .gh", false}, {"echo gh.", false},
-		{"echo -gh", false}, {"echo gh-", false}, {"echo GH", true},
-		{"echo gh", true}, {"echo 'gh'", true}, {"echo /gh/", true},
-		{"cat ~/.config/gh/hosts.yml", true},
+		{"jq .title", false, "verified jq .title helper"}, {"ls -la", true, "unsupported command form"}, {"git status", true, "unsupported command form"}, {"echo ghost", true, "unsupported command form"},
+		{"echo agh", true, "unsupported command form"}, {"echo gh1", true, "unsupported command form"}, {"echo 1gh", true, "unsupported command form"},
+		{"echo _gh", true, "unsupported command form"}, {"echo gh_", true, "unsupported command form"}, {"echo .gh", true, "unsupported command form"}, {"echo gh.", true, "unsupported command form"},
+		{"echo -gh", true, "unsupported command form"}, {"echo gh-", true, "unsupported command form"}, {"echo GH", true, "gh appears inside another command"},
+		{"echo gh", true, "gh appears inside another command"}, {"echo 'gh'", true, "gh appears inside another command"}, {"echo /gh/", true, "gh appears inside another command"},
+		{"cat ~/.config/gh/hosts.yml", true, "gh appears inside another command"},
 	} {
 		t.Run(tc.command, func(t *testing.T) {
 			segments := classifyCommandSegments(tc.command)
 			if len(segments) != 1 || segments[0].Match != tc.match {
 				t.Fatalf("segments=%+v, want one segment with match=%v", segments, tc.match)
 			}
-			if tc.match && segments[0].Reason != "gh appears inside another command" {
+			if segments[0].Reason != tc.reason {
 				t.Fatalf("unexpected reason: %q", segments[0].Reason)
 			}
 		})
@@ -288,8 +297,106 @@ func TestCommandClassifyFailClosedReasons(t *testing.T) {
 
 func TestCommandClassifyLiteralHashes(t *testing.T) {
 	for _, command := range []string{`echo '#text'`, `echo \#text`, `echo x#text`, `echo "#text"`, "echo x\\\n#text"} {
-		if results := classifyCommandSegments(command); len(results) != 1 || results[0].Match {
+		if results := classifyCommandSegments(command); len(results) != 1 || !results[0].Match {
 			t.Fatalf("literal hash %q: %+v", command, results)
+		}
+	}
+}
+
+func TestCommandClassifyAllowlistBoundaries(t *testing.T) {
+	for _, tc := range []struct{ command, reason string }{
+		{`ssh host 'g[h] pr merge 1'`, "unsupported command form"},
+		{`python3 -c 'import os; os.system("g"+"h"+" pr merge 1")'`, "unsupported command form"},
+		{`python3 -c 'import os; os.system("g" + "h pr merge 1")'`, "unsupported command form"},
+		{`printf -v X '%s%s' g h; trap '$X pr merge 1' EXIT`, "unsupported command form"},
+		{`printf 'g%s pr merge 1' h | busybox sh`, "unsupported command form"},
+		{`./run.sh`, "unsupported command form"},
+		{`jq -r .title`, "unsupported command form"},
+		{`jq .`, "unsupported command form"},
+		{`jq .title file`, "unsupported command form"},
+		{`jq -f f`, "unsupported command form"},
+		{`jq -L d .title`, "unsupported command form"},
+		{`jq -L d`, "unsupported command form"},
+		{`jq -- .title`, "unsupported command form"},
+		{`JQ .title`, "unsupported command form"},
+		{`"jq" .title`, "program name is not a bare literal"},
+		{`j\q .title`, "program name is not a bare literal"},
+		{`/usr/bin/jq .title`, "unsupported command form"},
+		{`X=1 jq .title`, "assignment scope is unresolved"},
+		{`jq .title >out`, "redirection in helper segment is not verified"},
+		{`jq '$FILTER'`, "unsupported command form"},
+		{`jq "$FILTER"`, "unresolved word in another command"},
+		{`jq 'gh'`, "gh appears inside another command"},
+		{`jq '.title`, "unresolved word in another command"},
+		{`sort --compress-program=x`, "unsupported command form"},
+		{`sort -o out`, "unsupported command form"},
+		{`gh pr view "$[1+1]"`, "legacy arithmetic expansion is unresolved"},
+		{`gh pr view '$[1+1]'`, "legacy arithmetic expansion is unresolved"},
+		{`gh pr view $[1+1]`, "legacy arithmetic expansion is unresolved"},
+	} {
+		t.Run(tc.command, func(t *testing.T) {
+			match, reason := EvalConditionWithDetail(commandReadCondition(), map[string]interface{}{"parameters.command": tc.command})
+			if !match || reason != "command_classify: "+tc.reason {
+				t.Fatalf("match=%v reason=%q, want %q", match, reason, tc.reason)
+			}
+		})
+	}
+	for _, program := range []string{"trap", "mapfile", "readarray", "compgen", "complete", "bind", "ash", "mksh", "yash", "csh", "tcsh", "rbash", "busybox", "python3", "find", "ssh", "ls", "git", "echo"} {
+		results := classifyCommandSegments(program)
+		if len(results) != 1 || !results[0].Match || results[0].Reason != "unsupported command form" {
+			t.Errorf("program %q: %+v", program, results)
+		}
+	}
+	for _, operand := range []string{"1\\\n2", "\"1\\\n2\"", "'1\\\n2'", "$\\\nNUMBER", "\"$\\\nNUMBER\"", "$\\\n(gh pr merge 1)", "\"$\\\n(gh pr merge 1)\""} {
+		results := classifyCommandSegments("gh pr view " + operand)
+		if len(results) != 1 || !results[0].Match || results[0].Reason != "line continuation is not verified" {
+			t.Errorf("continued operand %q: %+v", operand, results)
+		}
+	}
+	for _, command := range []string{"gh pr view 1", "jq .title", "echo ok"} {
+		for _, redirect := range []string{">out", ">>out", ">|out", "2>/dev/null", ">&2", ">&-", "<&0", "<&-", "<file", "<>file", "&>out", "&>>out", "<<EOF\ntext\nEOF", "<<-EOF\ntext\nEOF", "<<<text"} {
+			match, reason := EvalConditionWithDetail(commandReadCondition(), map[string]interface{}{"parameters.command": command + " " + redirect})
+			if !match {
+				t.Errorf("redirection %q %q: %s", command, redirect, reason)
+			}
+		}
+	}
+}
+
+func TestCommandClassifyEscalationOverridesAllow(t *testing.T) {
+	policy := makePolicy([]domain.Rule{
+		{RuleID: "allow", Conditions: domain.Condition{Field: "tool_name", Operator: domain.OpEq, Value: "bash"}, Effect: domain.EffectAllow},
+		{RuleID: "read", Conditions: commandReadCondition(), Effect: domain.EffectEscalate},
+	})
+	policy.OrgID = ""
+	policy.Scope = domain.PolicyScope{ToolNames: []string{"bash"}}
+	for _, command := range []string{"ls -la", "git status", "python3 --version"} {
+		result := NewEvaluator().Evaluate(envCmd("bash", command), []domain.Policy{policy}, domain.PolicyModeEnforcement)
+		if result.Decision != domain.DecisionEscalated {
+			t.Errorf("%q: decision=%s", command, result.Decision)
+		}
+	}
+}
+
+func TestCommandClassifyConstructedCommandsInCompounds(t *testing.T) {
+	for _, payload := range []string{
+		`ssh host 'g[h] pr merge 1'`,
+		`python3 -c 'import os; os.system("g" + "h pr merge 1")'`,
+		`trap '$X pr merge 1' EXIT`,
+		`mapfile -C '$X pr merge 1' -c 1 a < /etc/hosts`,
+		`readarray -C '$X pr merge 1' -c 1 a`,
+		`compgen -C '$X pr merge 1'`,
+		`complete -C '$X pr merge 1' x`,
+		`bind -x '"x":$X pr merge 1'`,
+		`./run.sh`, `jq .title ''`, `jq .title; g[h] pr merge 1`,
+		"gh api $\\\nARGS", "gh api \"$\\\nARGS\"",
+	} {
+		for _, op := range []string{";", "&&", "||", "|", "|&", "&", "\n"} {
+			for _, command := range []string{"gh pr view 1 " + op + " " + payload, payload + " " + op + " jq .title"} {
+				if match, _ := EvalConditionWithDetail(commandReadCondition(), map[string]interface{}{"parameters.command": command}); !match {
+					t.Errorf("unverified compound accepted: %q", command)
+				}
+			}
 		}
 	}
 }
