@@ -384,10 +384,16 @@ func classifyGH(args []string) (bool, string) {
 			continue
 		}
 		if group == "" {
+			if arg == "" {
+				return true, "empty gh command argument"
+			}
 			group = arg
 			continue
 		}
 		if group != "api" && verb == "" {
+			if arg == "" {
+				return true, "empty gh command argument"
+			}
 			verb = arg
 			if (group == "pr" || group == "issue") && verb == "new" {
 				verb = "create"
