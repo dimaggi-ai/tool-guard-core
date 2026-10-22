@@ -311,7 +311,11 @@ func TestCommandClassifyFailClosedReasons(t *testing.T) {
 
 func TestCommandClassifyLiteralHashes(t *testing.T) {
 	for _, command := range []string{`echo '#text'`, `echo \#text`, `echo x#text`, `echo "#text"`, "echo x\\\n#text"} {
-		if results := classifyCommandSegments(command); len(results) != 1 || !results[0].Match {
+		want := "unsupported command form"
+		if strings.Contains(command, "\\\n") {
+			want = "line continuation is not verified"
+		}
+		if results := classifyCommandSegments(command); len(results) != 1 || !results[0].Match || results[0].Reason != want {
 			t.Fatalf("literal hash %q: %+v", command, results)
 		}
 	}
@@ -370,8 +374,15 @@ func TestCommandClassifyAllowlistBoundaries(t *testing.T) {
 	for _, command := range []string{"gh pr view 1", "jq .title", "echo ok"} {
 		for _, redirect := range []string{">out", ">>out", ">|out", "2>/dev/null", ">&2", ">&-", "<&0", "<&-", "<file", "<>file", "&>out", "&>>out", "<<EOF\ntext\nEOF", "<<-EOF\ntext\nEOF", "<<<text"} {
 			match, reason := EvalConditionWithDetail(commandReadCondition(), map[string]interface{}{"parameters.command": command + " " + redirect})
-			if !match {
-				t.Errorf("redirection %q %q: %s", command, redirect, reason)
+			want := "command_classify: redirection in helper segment is not verified"
+			if strings.HasPrefix(command, "gh ") {
+				want = "command_classify: redirection in gh segment is not verified"
+			}
+			if strings.HasPrefix(redirect, "<<") {
+				want = "command_classify: substitution, group or here-document is unresolved"
+			}
+			if !match || reason != want {
+				t.Errorf("redirection %q %q: match=%v reason=%q, want %q", command, redirect, match, reason, want)
 			}
 		}
 	}
