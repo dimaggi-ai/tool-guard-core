@@ -10,8 +10,12 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 - Opt-in `command_classify` with the `gh_read` profile checks every shell
   command segment and matches unverified operations for escalation. Delimited
-  `gh` mentions inside other commands also escalate, including literal mentions
-  and paths. Runtime program-name construction needs separate interpreter rules.
+  `gh` mentions inside other commands also match, including literal mentions
+  and paths; the rule effect escalates or denies. Checks cover case variants,
+  escaped mentions, ANSI-C/locale quotes, comments, control characters and
+  unresolved words. Shell history replay with `fc` also matches.
+  Nested shell strings are checked for mentions, not parsed.
+  Runtime program-name construction needs separate interpreter rules.
   Includes counterexample tests, per-segment reasons, and a fixed example replay;
   the unavailable historical corpus remains an open verification item.
   Shipped policies and installed rules are unchanged.
@@ -40,6 +44,8 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 - Tool Guard now requires Go 1.26.0 and sets the preferred toolchain to Go 1.26.10,
   which fixes [GO-2026-6809](https://pkg.go.dev/vuln/GO-2026-6809) in the standard
   library. Tool Guard also includes the golang.org/x/sys v0.49.0 update from PR #51.
+- Three existing structural-validation messages now list `command_classify`: empty
+  conditions, multiple populated forms and classifiers beneath `not`.
 - CI pins govulncheck to v1.9.0 instead of `@latest`, and a new weekly
   workflow scans `main` for newly published Go advisories.
 - The policy-protection workflow builds with Go 1.26.10, matching the other

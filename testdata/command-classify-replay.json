@@ -1,127 +1,183 @@
 {
-  "note": "Fixed synthetic example replay, not historical production evidence. The real historical corpus replay remains open. No matching gh regex exists in shipped policies at 8d45152; old_regex is the family-style expression supplied in the task specification, not an installed rule. Old results are regex matches, not full policy decisions.",
   "baseline_commit": "8d45152",
-  "old_regex": "\\bgh\\s+(pr|repo|issue|api)\\b",
   "cases": [
     {
       "command": "gh pr --repo X create",
-      "source": "task #75 implementation specification",
+      "decision_regex_match": false,
+      "new_match": true,
       "old_regex_match": true,
-      "new_match": true
+      "source": "coordinator implementation brief for #75"
     },
     {
       "command": "gh pr new",
-      "source": "task #75 implementation specification",
+      "decision_regex_match": false,
+      "new_match": true,
       "old_regex_match": true,
-      "new_match": true
+      "source": "coordinator implementation brief for #75"
     },
     {
       "command": "gh issue new",
-      "source": "task #75 implementation specification",
+      "decision_regex_match": false,
+      "new_match": true,
       "old_regex_match": true,
-      "new_match": true
+      "source": "coordinator implementation brief for #75"
     },
     {
       "command": "gh release -R X delete",
-      "source": "task #75 implementation specification",
+      "decision_regex_match": false,
+      "new_match": true,
       "old_regex_match": false,
-      "new_match": true
+      "source": "coordinator implementation brief for #75"
     },
     {
       "command": "gh api ... -iXPATCH",
-      "source": "task #75 implementation specification",
+      "decision_regex_match": false,
+      "new_match": true,
       "old_regex_match": true,
-      "new_match": true
+      "source": "coordinator implementation brief for #75"
     },
     {
       "command": "gh api ... -X PATCH",
-      "source": "task #75 implementation specification",
+      "decision_regex_match": false,
+      "new_match": true,
       "old_regex_match": true,
-      "new_match": true
+      "source": "coordinator implementation brief for #75"
     },
     {
       "command": "gh api ... --method=PATCH",
-      "source": "task #75 implementation specification",
+      "decision_regex_match": false,
+      "new_match": true,
       "old_regex_match": true,
-      "new_match": true
+      "source": "coordinator implementation brief for #75"
     },
     {
-      "command": "gh api '/repos/o/r/issues?a&b' -X POST",
-      "source": "task #75 implementation specification",
+      "command": "gh api '/repos/o/r/issues?a\u0026b' -X POST",
+      "decision_regex_match": false,
+      "new_match": true,
       "old_regex_match": true,
-      "new_match": true
+      "source": "coordinator implementation brief for #75"
     },
     {
       "command": "gh pr view 12",
-      "source": "task #75 implementation specification",
+      "decision_regex_match": false,
+      "new_match": false,
       "old_regex_match": true,
-      "new_match": false
+      "source": "coordinator implementation brief for #75"
     },
     {
       "command": "gh pr list --repo o/r",
-      "source": "task #75 implementation specification",
+      "decision_regex_match": false,
+      "new_match": false,
       "old_regex_match": true,
-      "new_match": false
+      "source": "coordinator implementation brief for #75"
     },
     {
       "command": "gh issue view 5 -R o/r --json title",
-      "source": "task #75 implementation specification",
+      "decision_regex_match": false,
+      "new_match": false,
       "old_regex_match": true,
-      "new_match": false
+      "source": "coordinator implementation brief for #75"
     },
     {
       "command": "gh api repos/o/r/pulls",
-      "source": "task #75 implementation specification",
+      "decision_regex_match": false,
+      "new_match": false,
       "old_regex_match": true,
-      "new_match": false
+      "source": "coordinator implementation brief for #75"
     },
     {
       "command": "gh pr checks 3",
-      "source": "task #75 implementation specification",
+      "decision_regex_match": false,
+      "new_match": false,
       "old_regex_match": true,
-      "new_match": false
+      "source": "coordinator implementation brief for #75"
     },
     {
       "command": "gh pr diff 3",
-      "source": "task #75 implementation specification",
+      "decision_regex_match": false,
+      "new_match": false,
       "old_regex_match": true,
-      "new_match": false
+      "source": "coordinator implementation brief for #75"
     },
     {
-      "command": "gh pr view 1 && gh pr merge 1",
-      "source": "task #75 implementation specification",
+      "command": "gh pr view 1 \u0026\u0026 gh pr merge 1",
+      "decision_regex_match": false,
+      "new_match": true,
       "old_regex_match": true,
-      "new_match": true
+      "source": "coordinator implementation brief for #75"
     },
     {
       "command": "echo $HOME",
-      "source": "pkg/engine/shell_tokenize_test.go at 8d45152",
+      "decision_regex_match": false,
+      "new_match": true,
       "old_regex_match": false,
-      "new_match": false
+      "source": "pkg/engine/shell_tokenize_test.go at 8d45152"
     },
     {
       "command": "rm $HOME/x",
-      "source": "pkg/engine/shell_tokenize_test.go at 8d45152",
+      "decision_regex_match": false,
+      "new_match": true,
       "old_regex_match": false,
-      "new_match": false
+      "source": "pkg/engine/shell_tokenize_test.go at 8d45152"
     },
     {
       "command": "cp $SRC /tmp/dst",
-      "source": "pkg/engine/shell_tokenize_test.go at 8d45152",
+      "decision_regex_match": false,
+      "new_match": true,
       "old_regex_match": false,
-      "new_match": false
+      "source": "pkg/engine/shell_tokenize_test.go at 8d45152"
     },
     {
       "command": "find . -exec gh pr merge 1 \\;",
-      "source": "coordinator review of #75 implementation, 2026-10-22",
+      "decision_regex_match": false,
+      "new_match": true,
       "old_regex_match": true,
-      "new_match": true
+      "source": "coordinator review of #75 implementation, 2026-10-22"
     },
     {
       "command": "ssh host gh pr merge 1",
-      "source": "coordinator review of #75 implementation, 2026-10-22",
+      "decision_regex_match": false,
+      "new_match": true,
       "old_regex_match": true,
-      "new_match": true
+      "source": "coordinator review of #75 implementation, 2026-10-22"
+    },
+    {
+      "command": "gh api user/repos --jq .\r -X POST -f name=evil",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": true,
+      "source": "round 1 cross-review of #75, 2026-10-22"
+    },
+    {
+      "command": "gh pr view #'\ngh pr merge 1 --admin #'",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": true,
+      "source": "round 1 cross-review of #75, 2026-10-22"
+    },
+    {
+      "command": "gh pr view --repo # '\ngh pr merge 1 # '",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": true,
+      "source": "round 1 cross-review of #75, 2026-10-22"
+    },
+    {
+      "command": "GH pr merge 1",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 1 cross-review of #75, 2026-10-22"
+    },
+    {
+      "command": "find . -exec g''h pr merge 1 \\;",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 1 cross-review of #75, 2026-10-22"
     }
-  ]
+  ],
+  "decision_regex": "\\bgh\\s+pr\\s+create\\b",
+  "note": "Fixed synthetic example replay, not historical production evidence. The real historical corpus replay remains open. No matching gh regex exists in shipped policies at 8d45152; old_regex is the family-style expression from the coordinator implementation brief for #75, not an installed rule. The posted decision cites decision_regex. Regex results are matches, not full policy decisions.",
+  "old_regex": "\\bgh\\s+(pr|repo|issue|api)\\b"
 }

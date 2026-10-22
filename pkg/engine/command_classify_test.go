@@ -14,6 +14,7 @@ func commandReadCondition() domain.Condition {
 func TestCommandClassifyReads(t *testing.T) {
 	for _, command := range []string{
 		"gh pr view 12",
+		"gh pr view 1\ngh issue view 2",
 		"gh pr list --repo o/r",
 		"gh issue view 5 -R o/r --json title",
 		"gh api repos/o/r/pulls",
@@ -44,6 +45,27 @@ func TestCommandClassifyReads(t *testing.T) {
 
 func TestCommandClassifyRejectsUnverifiedCommands(t *testing.T) {
 	commands := []string{
+		"gh api user/repos --jq .\r -X POST -f name=evil",
+		"gh pr view #'\ngh pr merge 1 --admin #'",
+		"gh pr view --repo # '\ngh pr merge 1 # '",
+		"GH pr merge 1", "Gh pr merge 1", "gh.exe pr merge 1",
+		`find . -exec g\h pr merge 1 \;`,
+		`find . -exec "g"h pr merge 1 \;`,
+		`find . -exec g''h pr merge 1 \;`,
+		`find . -exec g$'\x68' pr merge 1 \;`,
+		`stdbuf -o0 g\h pr merge 1`,
+		`setsid g""h pr merge 12`,
+		`ssh host 'g""h pr merge 1'`,
+		`find . -exec $P pr merge 1 \;`,
+		"\r", "gh pr view 1 # comment",
+		// Further runtime expansion and executable-suffix cases found in review.
+		"fc -s",
+		`find . -exec g[h] pr merge 1 \;`,
+		`find . -exec gh.exe pr merge 1 \;`,
+		`ssh host 'GH.EXE pr merge 1'`,
+		"ssh host 'g\\\nh pr merge 1'",
+		"gh pr view \\\n#'\ngh pr merge 1 #'",
+
 		`find . -exec gh pr merge 1 \;`,
 		`python3 -c 'import os; os.system("gh pr merge 1")'`,
 		"ssh host gh pr merge 1", "flock /tmp/l gh pr merge 1",
@@ -214,7 +236,7 @@ func TestCommandClassifyOtherCommandMentions(t *testing.T) {
 		{"jq .title", false}, {"ls -la", false}, {"git status", false}, {"echo ghost", false},
 		{"echo agh", false}, {"echo gh1", false}, {"echo 1gh", false},
 		{"echo _gh", false}, {"echo gh_", false}, {"echo .gh", false}, {"echo gh.", false},
-		{"echo -gh", false}, {"echo gh-", false}, {"echo GH", false},
+		{"echo -gh", false}, {"echo gh-", false}, {"echo GH", true},
 		{"echo gh", true}, {"echo 'gh'", true}, {"echo /gh/", true},
 		{"cat ~/.config/gh/hosts.yml", true},
 	} {
@@ -227,5 +249,47 @@ func TestCommandClassifyOtherCommandMentions(t *testing.T) {
 				t.Fatalf("unexpected reason: %q", segments[0].Reason)
 			}
 		})
+	}
+}
+
+func TestCommandClassifyFailClosedReasons(t *testing.T) {
+	for _, tc := range []struct{ command, reason string }{
+		{"\r", "unsupported control character"},
+		{"fc -s", "wrapper or shell grammar is not verified"},
+		{"gh pr view #'\ngh pr merge 1 #'", "shell comment is not verified"},
+		{"#'\ngh pr merge 1", "shell comment is not verified"},
+		{"echo ok;#'\ngh pr merge 1", "shell comment is not verified"},
+		{"GH.EXE pr merge 1", "gh program name is not the exact literal gh"},
+		{"'/usr/bin/gh' pr view 1", "gh program name is not the exact literal gh"},
+		{`find . -exec g$'\x68' pr merge 1 \;`, "ANSI-C or locale quoting is not verified"},
+		{`echo $"x"`, "ANSI-C or locale quoting is not verified"},
+		{`find . -exec $P pr merge 1 \;`, "unresolved word in another command"},
+		{`find . -exec g[h] pr merge 1 \;`, "unresolved word in another command"},
+	} {
+		t.Run(tc.command, func(t *testing.T) {
+			got, reason := EvalConditionWithDetail(commandReadCondition(), map[string]interface{}{"parameters.command": tc.command})
+			if !got || reason != "command_classify: "+tc.reason {
+				t.Fatalf("match=%v reason=%q, want %q", got, reason, tc.reason)
+			}
+		})
+	}
+	for c := byte(0); c <= 127; c++ {
+		if c >= 32 && c != 127 || c == '\t' || c == '\n' {
+			continue
+		}
+		for _, command := range []string{string(c), "gh pr view '" + string(c) + "'", "echo " + string(c)} {
+			results := classifyCommandSegments(command)
+			if len(results) != 1 || !results[0].Match || results[0].Reason != "unsupported control character" {
+				t.Fatalf("control %d: %+v", c, results)
+			}
+		}
+	}
+}
+
+func TestCommandClassifyLiteralHashes(t *testing.T) {
+	for _, command := range []string{`echo '#text'`, `echo \#text`, `echo x#text`, `echo "#text"`, "echo x\\\n#text"} {
+		if results := classifyCommandSegments(command); len(results) != 1 || results[0].Match {
+			t.Fatalf("literal hash %q: %+v", command, results)
+		}
 	}
 }

@@ -18,13 +18,15 @@ func TestCommandClassify_FixedExampleReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	var fixture struct {
-		Baseline string `json:"baseline_commit"`
-		OldRegex string `json:"old_regex"`
-		Cases    []struct {
-			Command string `json:"command"`
-			Source  string `json:"source"`
-			Old     bool   `json:"old_regex_match"`
-			New     bool   `json:"new_match"`
+		Baseline      string `json:"baseline_commit"`
+		OldRegex      string `json:"old_regex"`
+		DecisionRegex string `json:"decision_regex"`
+		Cases         []struct {
+			Command  string `json:"command"`
+			Source   string `json:"source"`
+			Decision *bool  `json:"decision_regex_match"`
+			Old      *bool  `json:"old_regex_match"`
+			New      *bool  `json:"new_match"`
 		} `json:"cases"`
 	}
 	if err := json.Unmarshal(data, &fixture); err != nil {
@@ -33,21 +35,31 @@ func TestCommandClassify_FixedExampleReplay(t *testing.T) {
 	if fixture.Baseline != "8d45152" || len(fixture.Cases) == 0 {
 		t.Fatal("missing fixed baseline")
 	}
+	if fixture.DecisionRegex != `\bgh\s+pr\s+create\b` {
+		t.Fatal("unexpected decision regex")
+	}
 	old := regexp.MustCompile(fixture.OldRegex)
+	decision := regexp.MustCompile(fixture.DecisionRegex)
 	cond := domain.Condition{CommandClassify: &domain.CommandClassify{Field: "command", Profile: "gh_read"}}
 	for _, tc := range fixture.Cases {
 		t.Run(tc.Command, func(t *testing.T) {
+			if tc.Old == nil || tc.New == nil || tc.Decision == nil {
+				t.Fatal("missing computed result")
+			}
+			if got := decision.MatchString(tc.Command); got != *tc.Decision {
+				t.Errorf("decision regex match=%v, want %v", got, *tc.Decision)
+			}
 			if tc.Source == "" {
 				t.Fatal("missing source attribution")
 			}
-			if got := old.MatchString(tc.Command); got != tc.Old {
-				t.Errorf("old regex match=%v, want %v", got, tc.Old)
+			if got := old.MatchString(tc.Command); got != *tc.Old {
+				t.Errorf("old regex match=%v, want %v", got, *tc.Old)
 			}
 			got, detail := EvalConditionWithDetail(cond, map[string]interface{}{"command": tc.Command})
-			if got != tc.New {
-				t.Errorf("new match=%v, want %v: %s", got, tc.New, detail)
+			if got != *tc.New {
+				t.Errorf("new match=%v, want %v: %s", got, *tc.New, detail)
 			}
-			t.Logf("baseline=%s old_regex_match=%v new_match=%v detail=%q", fixture.Baseline, tc.Old, got, detail)
+			t.Logf("baseline=%s old_regex_match=%v new_match=%v detail=%q", fixture.Baseline, *tc.Old, got, detail)
 		})
 	}
 }
