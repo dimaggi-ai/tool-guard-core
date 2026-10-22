@@ -8,10 +8,10 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- Opt-in `command_classify` with the `gh_read` profile checks every shell
-  command segment and matches unverified operations. Delimited
+- Opt-in `command_classify` with the `gh_read` profile checks each control-separated
+  segment of the command text and matches unverified operations. Delimited
   `gh` mentions inside other commands also match, including literal mentions
-  and paths; the rule effect escalates or denies. Checks cover case variants,
+  and paths; the rule applies its configured effect. Checks cover case variants,
   escaped mentions, ANSI-C/locale quotes, unquoted word-initial `#` comments,
   ASCII control characters other than tab and LF, and unresolved words. Shell history replay with `fc` also matches.
   `gh_read` matches unless every segment uses a supported gh read operation or an explicitly supported helper command form. Initially, the only supported helper has the bare executable name `jq` and exactly one literal filter operand whose resolved value is `.title`, with no options or file operands, reading stdin only. Helper segments remain subject to gh-mention and unresolved-word checks. Unsupported programs and argument forms match even when they are harmless and contain no gh mention. With an enforced `escalate` rule, these commands require escalation. All shell redirections match, including in otherwise supported reads. Every backslash immediately followed by a newline matches, including inside quoted text. Ordinary newline-separated supported reads remain supported. A no-match does not itself grant permission; other policy rules still apply. If no rule matches, the default decision is allow.
@@ -21,7 +21,7 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 - Go API: `domain.CommandClassify` and `domain.Condition.CommandClassify`.
   The condition field is additive; positional `Condition` literals must switch
   to keyed fields. YAML and JSON configurations use `field` and `profile`.
-- Literal-path protection regressions cover assignments, quoting, parameter
+- Regression tests for literal-path protection cover assignments, quoting, parameter
   defaults and substitutions. Use literal paths with `-protect-paths`;
   unresolved-path denial remains unchanged.
 
