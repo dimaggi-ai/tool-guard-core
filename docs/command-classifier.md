@@ -14,6 +14,42 @@ result := commandclassify.Classify("gh pr list --state open --limit 20")
 // No command is executed. An independent authority still decides any action.
 ```
 
+## Proposed exported API and compatibility
+
+**Unreleased; independent API review and release remain pending.** The package
+adds a public import path, `github.com/dimaggi-ai/tool-guard-core/pkg/commandclassify`,
+and therefore adds support surface even though no installed call site uses it.
+The complete exported surface in this candidate is:
+
+| Export | Shape / meaning |
+| --- | --- |
+| `Classify` | `func Classify(input string) Result`; bounded, stateless syntax classification |
+| `Decision` | Defined string type |
+| `ReadOnlyCandidate`, `Escalate` | Typed `Decision` constants: `"read_only_candidate"`, `"escalate"`; neither grants permission |
+| `MaxInputBytes`, `MaxWords`, `MaxWordBytes` | Untyped integer constants: `8192`, `128`, `1024` |
+| `Span` | Struct with `Start int`, `End int`; half-open original-input byte offsets |
+| `Word` | Struct with `Value string`, `Span Span`; decoded literal and source range |
+| `Result` | Struct with `Decision Decision`, `Reason string`, `Span Span`, `Words []Word`, `Command string` |
+
+The exported fields carry JSON names `start`/`end`, `value`/`span`, and
+`decision`/`reason`/`span`/`words`/`command`, respectively; `words` and `command`
+use `omitempty`. These fields and diagnostic output are part of the proposed
+consumer-facing surface, not authenticated evidence or a permission protocol.
+There are no exported methods or variables beyond the declarations listed above.
+
+This is additive: no existing exported symbol is removed or changed, no existing
+consumer migration is required, and no engine, CLI, hook, policy, dependency or
+installed behavior changes. A new caller must explicitly import the package and
+keep authorization separate; this proposal does not authorize such an integration.
+The accepted syntax remains the narrow **gh 2.57.0** slice and fixed bounds below,
+not a general shell parser or future CLI compatibility promise.
+
+The hosted API check reports `package .../pkg/commandclassify: added`. Its reviewed
+baseline is intentionally unchanged pending the review sequence in
+[Go API stability](api-stability.md) and [Releasing](../RELEASING.md).
+Documentation of this impact is not approval to refresh `api/go-api.current`,
+release the package, activate a control or claim the API gate passes.
+
 ## Supported slice
 
 The source is the installed GitHub CLI **2.57.0 (2024-09-16)** help for the six

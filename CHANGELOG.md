@@ -8,6 +8,14 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Pending review/release:** inactive advisory `pkg/commandclassify` exposes
+  `Classify`, `Decision`, `ReadOnlyCandidate`, `Escalate`, `Span`, `Word`, `Result`
+  and the three parser-bound constants. This additive support surface removes
+  or changes no existing API and requires no existing consumer migration.
+  A read-only candidate is never execution permission; installed engine, CLI,
+  hooks and policy behavior are unchanged. The gh 2.57.0 subset, field shapes,
+  bounds and limitations are in the [guide](docs/command-classifier.md).
+  Independent API review and the reviewed-baseline update remain pending.
 - `tg prune` previews retention of a closed audit log and writes a new file with
   `--yes`. A versioned checkpoint preserves the removed boundary and retained
   hashes. `tg verify` and `tg export` reject pruned chains unless
