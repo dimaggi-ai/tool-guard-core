@@ -8,6 +8,23 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Opt-in `command_classify` with the `gh_read` profile checks each control-separated
+  segment of the command text and matches unverified operations. Delimited
+  `gh` mentions inside other commands also match, including literal mentions
+  and paths; the rule applies its configured effect. Checks cover case variants,
+  escaped mentions, ANSI-C/locale quotes, unquoted word-initial `#` comments,
+  ASCII control characters other than tab and LF, and unresolved words. Shell history replay with `fc` also matches.
+  `gh_read` matches unless every segment uses a supported gh read operation or an explicitly supported helper command form. Initially, the only supported helper has the bare executable name `jq` and exactly one literal filter operand whose resolved value is `.title`, with no options or file operands, reading stdin only. Helper segments remain subject to gh-mention and unresolved-word checks. Unsupported programs and argument forms match even when they are harmless and contain no gh mention. With an enforced `escalate` rule, these commands require escalation. All shell redirections match, including in otherwise supported reads. Every backslash immediately followed by a newline matches, including inside quoted text. Ordinary newline-separated supported reads remain supported. A no-match does not itself grant permission; other policy rules still apply. If no rule matches, the default decision is allow.
+  Nested command strings, scripts, callbacks, and commands supplied through stdin or files are not recursively verified. Programs and builtins that execute them are excluded from the supported command forms and therefore match regardless of any gh mention. Findings involving constructed or nested gh commands are not accepted no-match exceptions.
+  Classification checks command text without executing it. It assumes supported executable names resolve to the expected programs with the documented behavior. It does not verify executable contents, pre-existing aliases or shell functions, configuration, environment, or remote service behavior. This profile is not a sandbox or a guarantee of runtime containment.
+  The fixed replay contains implementation-brief examples, review counterexamples, and repository test strings. The historical corpus replay remains incomplete, so the operational false-positive rate is unknown. Shipped policies and installed rules remain unchanged pending independent verification and separate policy-activation approval.
+- Go API: `domain.CommandClassify` and `domain.Condition.CommandClassify`.
+  The condition field is additive; positional `Condition` literals must switch
+  to keyed fields. YAML and JSON configurations use `field` and `profile`.
+- Regression tests for literal-path protection cover assignments, quoting, parameter
+  defaults and substitutions. Use literal paths with `-protect-paths`;
+  unresolved-path denial remains unchanged.
+
 - `tg prune` previews retention of a closed audit log and writes a new file with
   `--yes`. A versioned checkpoint preserves the removed boundary and retained
   hashes. `tg verify` and `tg export` reject pruned chains unless
@@ -23,10 +40,14 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Three existing structural-validation messages now list `command_classify`: empty
+  conditions, multiple populated forms and classifiers beneath `not`.
 - CI pins govulncheck to v1.9.0 instead of `@latest`, and a new weekly
   workflow scans `main` for newly published Go advisories.
-- The policy-protection workflow builds with Go 1.26.9, the same toolchain
-  as the other workflows since 0.8.1 (it was still on 1.25.11).
+- The build toolchain is Go 1.26.10, which fixes
+  [GO-2026-6809](https://pkg.go.dev/vuln/GO-2026-6809) in the standard library.
+- The policy-protection workflow builds with Go 1.26.10, matching the other
+  workflows (it was still on 1.25.11).
 - The Kubernetes example in `docs/integration.md` uses image tag `0.8.1`.
   The old `v0.2.0` tag does not match the published tag format, which has
   no `v` prefix.

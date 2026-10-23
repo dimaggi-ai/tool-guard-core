@@ -246,6 +246,87 @@ treats argv[0] as the binary and argv[1:] as its arguments. Closes
 shell-meta / env-wrap / interpreter-substitution bypasses (`env`,
 `sudo`, `nice`, `chroot` re-launching arbitrary binaries).
 
+### Shell command classifier
+
+`command_classify` accepts a free-text shell command. It is opt-in and is not
+used by shipped policies. A match means the rule applies its effect; use an
+`escalate` or `deny` effect, never `allow`. Validation does not reject an
+`allow` effect; that effect allows the unverified commands this condition matches.
+
+```yaml
+conditions:
+  command_classify:
+    field: parameters.command
+    profile: gh_read
+effect: escalate
+```
+
+The only profile is `gh_read`. A missing, empty or non-string command value matches.
+A blank field, unknown profile, mixed condition forms, or a classifier beneath
+`not` is rejected during validation. A condition has mixed forms when more than one
+form is set on that node. JSON uses the same keys as YAML.
+
+Each control-separated segment is checked, including pipelines, background
+commands and newlines. Bare `gh` supports these read operations:
+
+- `pr`: `view`, `list`, `status`, `diff`, `checks`.
+- `issue`: `view`, `list`, `status`.
+- `repo` and `release`: `view`, `list`.
+- `api`: a literal REST path with no method other than `GET`, no fields or input,
+  and no `graphql` path component. Absolute URLs, encoded paths and placeholders
+  are unresolved.
+
+`ls` normalizes to `list` in these groups; `pr new` and `issue new` normalize
+to `create` and match. Unknown commands, aliases and options in a `gh` invocation
+match. Selectors may precede the command group: `--repo`/`-R` is supported
+only for `pr`, `issue` and `release`, and `--hostname` only for `api`.
+`--help` is consumed wherever it appears;
+help does not make a mutation a verified read. Short options that take a value accept
+attached values and clusters, so `-iXPATCH` is recognized as a non-GET method.
+
+The accepted command-option subset is deliberately limited: `--json` and
+`--jq`/`-q` on reads other than `diff`; `--comments`/`-c` on issue/PR views;
+`--limit`/`-L` on lists; `--state`/`-s`, `--assignee`/`-a`, `--author`/`-A`,
+`--label`/`-l`, `--search`/`-S` on issue/PR lists; `--color`, `--patch`,
+`--name-only` on PR diffs; and `--required` on PR checks. API reads accept
+`--method`/`-X`, `--jq`/`-q`, `--include`/`-i`, `--silent`, `--paginate`,
+`--slurp` and `--verbose`. Other flags match, including field/input flags,
+custom headers, browser launch and template options.
+
+Flag and alias meanings were checked against the
+gh 2.102.0 (2026-09-30) manual pages for `gh-pr`, `gh-issue`, `gh-repo`,
+`gh-release` and `gh-api`.
+Selector flags are checked against the final command group, including when
+they appear before it.
+
+Substitutions, groups, here-documents, assignments, unresolved program names,
+quoted/escaped program names, and path-qualified `gh` match. A program whose
+basename becomes `gh` after case folding and stripping `.exe` also matches
+unless its raw command head is exactly `gh`. ANSI-C quotes (`$'...'`) and
+locale quotes (`$"..."`) match. ASCII control characters other than tab and LF,
+and unquoted word-initial `#` comments, match. No shell code runs during
+classification. All shell redirections match in every segment. Unresolved words, unquoted globs and malformed quoting also match, including in helper segments; use literal paths. Literal paths alone do not make an unsupported command form supported. Conservative checks can match literal substitution or group text inside quotes.
+
+Programs and builtins outside the supported command forms match regardless of any gh mention.
+
+Nested command strings, scripts, callbacks, and commands supplied through stdin or files are not recursively verified. Programs and builtins that execute them are excluded from the supported command forms and therefore match regardless of any gh mention. Findings involving constructed or nested gh commands are not accepted no-match exceptions.
+
+Mention checks are case insensitive, include the `.exe` suffix, and inspect
+raw text, resolved words and text with quotes and backslashes stripped.
+Literal mentions such as `echo gh` and paths such as `.config/gh/hosts.yml`
+therefore match. The condition matches; the rule applies its configured effect.
+These mention checks also apply to helper segments before helper acceptance.
+Interpreter commands match regardless of whether their arguments contain a gh mention.
+
+`gh_read` matches unless every segment uses a supported gh read operation or an explicitly supported helper command form. Initially, the only supported helper has the bare executable name `jq` and exactly one literal filter operand whose resolved value is `.title`, with no options or file operands, reading stdin only. Helper segments remain subject to gh-mention and unresolved-word checks. Unsupported programs and argument forms match even when they are harmless and contain no gh mention. With an enforced `escalate` rule, these commands require escalation. All shell redirections match, including in otherwise supported reads. Every backslash immediately followed by a newline matches, including inside quoted text. Ordinary newline-separated supported reads remain supported. A no-match does not itself grant permission; other policy rules still apply. If no rule matches, the default decision is allow.
+
+Classification checks command text without executing it. It assumes supported executable names resolve to the expected programs with the documented behavior. It does not verify executable contents, pre-existing aliases or shell functions, configuration, environment, or remote service behavior. This profile is not a sandbox or a guarantee of runtime containment.
+
+The fixed replay fixture in `testdata/command-classify-replay.json` uses implementation-brief examples, cases found during review and existing repository test strings.
+No matching shipped regex was found at baseline `8d45152`; the replay uses
+`\bgh\s+(pr|repo|issue|api)\b` for comparison only.
+The historical corpus replay remains incomplete, so the operational false-positive rate is unknown. Shipped policies and installed rules remain unchanged pending independent verification and separate policy-activation approval.
+
 ### Write classifier
 
 Governs a file-writing tool (write / edit / notebookedit / apply_patch /
@@ -392,7 +473,7 @@ conditions:
 ```
 
 `not:` may wrap a leaf condition (as above) but **not** a classifier
-(`sql_classify` / `path_classify` / `shell_classify` / `llm_classify` /
+(`sql_classify` / `path_classify` / `shell_classify` / `command_classify` / `llm_classify` /
 `write_classify` / `http_classify`).
 Classifiers are fail-closed - they fire on malformed or adversarial input
 so a deny rule trips - and negating one inverts that into fail-OPEN.

@@ -49,7 +49,7 @@ for run in 1 2; do
     env -i PATH="$PATH" HOME="$probe_dir/home$run" \
       TMPDIR="$probe_dir/tmp$run" GOPATH="$probe_dir/gopath$run" \
       GOMODCACHE="$probe_dir/gopath$run/pkg/mod" GOCACHE="$probe_dir/cache$run" \
-      GOTOOLCHAIN=go1.26.9 GOENV=off GOWORK=off \
+      GOTOOLCHAIN=go1.26.10 GOENV=off GOWORK=off \
       SOURCE_DATE_EPOCH="$epoch" TZ=UTC LC_ALL=C \
       "$goreleaser_bin" release --clean --timeout=30m --parallelism=1 \
       --skip=publish,announce,docker,sbom,sign "${mode_args[@]}" \

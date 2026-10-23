@@ -1,0 +1,358 @@
+{
+  "baseline_commit": "8d451527367a073db72f3c3018b0c2bd637ff3ce",
+  "cases": [
+    {
+      "command": "gh pr --repo X create",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": true,
+      "source": "coordinator implementation brief for #75"
+    },
+    {
+      "command": "gh pr new",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": true,
+      "source": "coordinator implementation brief for #75"
+    },
+    {
+      "command": "gh issue new",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": true,
+      "source": "coordinator implementation brief for #75"
+    },
+    {
+      "command": "gh release -R X delete",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "coordinator implementation brief for #75"
+    },
+    {
+      "command": "gh api ... -iXPATCH",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": true,
+      "source": "coordinator implementation brief for #75"
+    },
+    {
+      "command": "gh api ... -X PATCH",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": true,
+      "source": "coordinator implementation brief for #75"
+    },
+    {
+      "command": "gh api ... --method=PATCH",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": true,
+      "source": "coordinator implementation brief for #75"
+    },
+    {
+      "command": "gh api '/repos/o/r/issues?a&b' -X POST",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": true,
+      "source": "coordinator implementation brief for #75"
+    },
+    {
+      "command": "gh pr view 12",
+      "decision_regex_match": false,
+      "new_match": false,
+      "old_regex_match": true,
+      "source": "coordinator implementation brief for #75"
+    },
+    {
+      "command": "gh pr list --repo o/r",
+      "decision_regex_match": false,
+      "new_match": false,
+      "old_regex_match": true,
+      "source": "coordinator implementation brief for #75"
+    },
+    {
+      "command": "gh issue view 5 -R o/r --json title",
+      "decision_regex_match": false,
+      "new_match": false,
+      "old_regex_match": true,
+      "source": "coordinator implementation brief for #75"
+    },
+    {
+      "command": "gh api repos/o/r/pulls",
+      "decision_regex_match": false,
+      "new_match": false,
+      "old_regex_match": true,
+      "source": "coordinator implementation brief for #75"
+    },
+    {
+      "command": "gh pr checks 3",
+      "decision_regex_match": false,
+      "new_match": false,
+      "old_regex_match": true,
+      "source": "coordinator implementation brief for #75"
+    },
+    {
+      "command": "gh pr diff 3",
+      "decision_regex_match": false,
+      "new_match": false,
+      "old_regex_match": true,
+      "source": "coordinator implementation brief for #75"
+    },
+    {
+      "command": "gh pr view 1 && gh pr merge 1",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": true,
+      "source": "coordinator implementation brief for #75"
+    },
+    {
+      "command": "echo $HOME",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "pkg/engine/shell_tokenize_test.go at 8d45152"
+    },
+    {
+      "command": "rm $HOME/x",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "pkg/engine/shell_tokenize_test.go at 8d45152"
+    },
+    {
+      "command": "cp $SRC /tmp/dst",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "pkg/engine/shell_tokenize_test.go at 8d45152"
+    },
+    {
+      "command": "find . -exec gh pr merge 1 \\;",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": true,
+      "source": "coordinator review of #75 implementation, 2026-10-22"
+    },
+    {
+      "command": "ssh host gh pr merge 1",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": true,
+      "source": "coordinator review of #75 implementation, 2026-10-22"
+    },
+    {
+      "command": "gh api user/repos --jq .\r -X POST -f name=evil",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": true,
+      "source": "round 1 cross-review of #75, 2026-10-22"
+    },
+    {
+      "command": "gh pr view #'\ngh pr merge 1 --admin #'",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": true,
+      "source": "round 1 cross-review of #75, 2026-10-22"
+    },
+    {
+      "command": "gh pr view --repo # '\ngh pr merge 1 # '",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": true,
+      "source": "round 1 cross-review of #75, 2026-10-22"
+    },
+    {
+      "command": "GH pr merge 1",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 1 cross-review of #75, 2026-10-22"
+    },
+    {
+      "command": "find . -exec g''h pr merge 1 \\;",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 1 cross-review of #75, 2026-10-22"
+    },
+    {
+      "command": "ssh host 'g[h] pr merge 1'",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 2 cross-review of #75, 2026-10-22"
+    },
+    {
+      "command": "python3 -c 'import os; os.system(\"g\" + \"h pr merge 1\")'",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 2 cross-review of #75, 2026-10-22"
+    },
+    {
+      "command": "python3 -c 'import os; os.system(\"g\"+\"h\"+\" pr merge 1\")'",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 2 cross-review of #75, 2026-10-22"
+    },
+    {
+      "command": "gh pr view 1 |& jq .title",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": true,
+      "source": "round 3 cross-review of #75, 2026-10-22"
+    },
+    {
+      "command": "jq .title |& gh issue view 2",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": true,
+      "source": "round 3 cross-review of #75, 2026-10-22"
+    },
+    {
+      "command": "jq .title |& jq .title",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 3 cross-review of #75, 2026-10-22"
+    },
+    {
+      "command": "gh '' pr view 12",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "gh \"\" pr view 12",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "gh pr '' view 12",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": true,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "gh pr \"\" view 12",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": true,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "gh -R o/r '' pr view 12",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "gh repo '' list",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": true,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "ls -la",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "git status",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "python3 --version",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "jq .",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "jq -r .title",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "jq -- .title",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "jq -f f",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "jq -L d .title",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "jq .title file",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "jq .title >out",
+      "decision_regex_match": false,
+      "new_match": true,
+      "old_regex_match": false,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "jq .title",
+      "decision_regex_match": false,
+      "new_match": false,
+      "old_regex_match": false,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "jq '.title'",
+      "decision_regex_match": false,
+      "new_match": false,
+      "old_regex_match": false,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    },
+    {
+      "command": "jq \".title\"",
+      "decision_regex_match": false,
+      "new_match": false,
+      "old_regex_match": false,
+      "source": "round 4 requirements review of #75, 2026-10-22"
+    }
+  ],
+  "decision_regex": "\\bgh\\s+pr\\s+create\\b",
+  "note": "Fixed synthetic example replay, not historical production evidence. The real historical corpus replay remains open. No matching gh regex exists in shipped policies at 8d45152; old_regex is the family-style expression from the coordinator implementation brief for #75, not an installed rule. The posted decision cites decision_regex. Regex results are matches, not full policy decisions.",
+  "old_regex": "\\bgh\\s+(pr|repo|issue|api)\\b"
+}
