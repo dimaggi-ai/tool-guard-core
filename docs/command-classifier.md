@@ -60,8 +60,12 @@ Values are bounded and checked:
   Repository visibility is `public`, `private` or `internal`.
 - JSON fields are nonempty, unique, comma-separated exact names from that
   command's pinned help. Command-specific field sets live in `classify.go`.
-- A label is nonempty literal text, at most 256 bytes, without edge whitespace
-  or an initial hyphen. Quoted shell-looking text can be literal label data.
+- A label is one nonempty literal value, at most 256 bytes, without edge
+  whitespace, an initial hyphen, comma or decoded double-quote characters.
+  The pinned [pflag string-slice parser](https://github.com/spf13/pflag/blob/v1.0.5/string_slice.go)
+  uses CSV; lists and CSV quoting are deliberately unsupported here rather than
+  partially interpreted. Ordinary/spaced labels and quoted shell-looking literal
+  text remain supported.
 
 Every other form escalates, including `gh api` (even GET), mutations, custom
 aliases, `gh pr diff/checks/status`, cloning, branch/URL selectors, `--web`,

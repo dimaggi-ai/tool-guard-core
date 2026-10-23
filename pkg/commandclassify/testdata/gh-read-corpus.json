@@ -663,5 +663,35 @@
     "name": "multiword-issue-json",
     "input": "gh issue view 1 --json 'title updatedAt'",
     "decision": "escalate"
+  },
+  {
+    "name": "bare-double-quote-label",
+    "input": "gh issue list --label 'bug\"'",
+    "decision": "escalate"
+  },
+  {
+    "name": "unclosed-csv-quote-label",
+    "input": "gh issue list --label '\"unterminated'",
+    "decision": "escalate"
+  },
+  {
+    "name": "csv-label-list-unsupported",
+    "input": "gh issue list --label bug,docs",
+    "decision": "escalate"
+  },
+  {
+    "name": "empty-csv-label-unsupported",
+    "input": "gh issue list --label ,",
+    "decision": "escalate"
+  },
+  {
+    "name": "csv-quoted-label-unsupported",
+    "input": "gh issue list --label '\"help wanted\"'",
+    "decision": "escalate"
+  },
+  {
+    "name": "csv-trailing-comma-label-unsupported",
+    "input": "gh issue list --label bug,",
+    "decision": "escalate"
   }
 ]

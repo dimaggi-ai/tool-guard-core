@@ -153,7 +153,7 @@ func Classify(input string) Result {
 		case "--visibility":
 			valid = o.value == "public" || o.value == "private" || o.value == "internal"
 		case "--label":
-			valid = len(o.value) <= 256 && strings.TrimSpace(o.value) == o.value && !strings.HasPrefix(o.value, "-")
+			valid = !strings.ContainsAny(o.value, ",\"") && len(o.value) <= 256 && strings.TrimSpace(o.value) == o.value && !strings.HasPrefix(o.value, "-")
 		case "--archived", "--no-archived":
 			if seen["--archived"] && seen["--no-archived"] {
 				return refuse("conflicting_options", o.span)
