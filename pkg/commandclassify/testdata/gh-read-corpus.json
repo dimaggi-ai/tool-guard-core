@@ -1,0 +1,667 @@
+[
+  {
+    "name": "pr-current",
+    "input": "gh pr view",
+    "decision": "read_only_candidate"
+  },
+  {
+    "name": "pr-number",
+    "input": "gh pr view 7",
+    "decision": "read_only_candidate"
+  },
+  {
+    "name": "issue-number",
+    "input": "gh issue view 7",
+    "decision": "read_only_candidate"
+  },
+  {
+    "name": "pr-comments",
+    "input": "gh pr view 7 --comments",
+    "decision": "read_only_candidate"
+  },
+  {
+    "name": "issue-comments",
+    "input": "gh issue view -c 8",
+    "decision": "read_only_candidate"
+  },
+  {
+    "name": "pr-json",
+    "input": "gh pr view --json number,title",
+    "decision": "read_only_candidate"
+  },
+  {
+    "name": "issue-json",
+    "input": "gh issue list --json number,title",
+    "decision": "read_only_candidate"
+  },
+  {
+    "name": "repo-view",
+    "input": "gh repo view example-org/example-repo",
+    "decision": "read_only_candidate"
+  },
+  {
+    "name": "repo-current",
+    "input": "gh repo view",
+    "decision": "read_only_candidate"
+  },
+  {
+    "name": "repo-list",
+    "input": "gh repo list example-org",
+    "decision": "read_only_candidate"
+  },
+  {
+    "name": "repo-visibility",
+    "input": "gh repo list example-org --visibility public --limit 50",
+    "decision": "read_only_candidate"
+  },
+  {
+    "name": "pr-alias",
+    "input": "gh pr ls",
+    "decision": "read_only_candidate"
+  },
+  {
+    "name": "issue-alias",
+    "input": "gh issue ls",
+    "decision": "read_only_candidate"
+  },
+  {
+    "name": "repo-alias",
+    "input": "gh repo ls",
+    "decision": "read_only_candidate"
+  },
+  {
+    "name": "flags-before-resource",
+    "input": "gh -R example-org/example-repo --state open pr list",
+    "decision": "read_only_candidate"
+  },
+  {
+    "name": "flags-before-verb",
+    "input": "gh pr --repo example-org/example-repo --json title list",
+    "decision": "read_only_candidate"
+  },
+  {
+    "name": "flags-after-verb",
+    "input": "gh pr list --repo github.com/example-org/example-repo --state merged",
+    "decision": "read_only_candidate"
+  },
+  {
+    "name": "flags-between-positionals",
+    "input": "gh issue -R example-org/example-repo view --comments 1",
+    "decision": "read_only_candidate"
+  },
+  {
+    "name": "equal-values",
+    "input": "gh issue list --state=closed --limit=30 --json=title",
+    "decision": "read_only_candidate"
+  },
+  {
+    "name": "quoted-literal-substitution",
+    "input": "gh pr list --label '$(not-executed)'",
+    "decision": "read_only_candidate"
+  },
+  {
+    "name": "quoted-literal-backticks",
+    "input": "gh pr list --label '`not-executed`'",
+    "decision": "read_only_candidate"
+  },
+  {
+    "name": "quoted-literal-operators",
+    "input": "gh pr list --label \"semicolon; pipe| comment# redirect>\"",
+    "decision": "read_only_candidate"
+  },
+  {
+    "name": "escaped-literal-dollar",
+    "input": "gh pr list --label \"\\$literal\"",
+    "decision": "read_only_candidate"
+  },
+  {
+    "name": "quoted-label",
+    "input": "gh issue list --label \"help wanted\"",
+    "decision": "read_only_candidate"
+  },
+  {
+    "name": "repo-archived-fork",
+    "input": "gh repo list --archived --fork",
+    "decision": "read_only_candidate"
+  },
+  {
+    "name": "repo-active-source",
+    "input": "gh repo list --no-archived --source",
+    "decision": "read_only_candidate"
+  },
+  {
+    "name": "empty",
+    "input": "",
+    "decision": "escalate"
+  },
+  {
+    "name": "not-gh",
+    "input": "git status",
+    "decision": "escalate"
+  },
+  {
+    "name": "custom-path",
+    "input": "/usr/bin/gh pr list",
+    "decision": "escalate"
+  },
+  {
+    "name": "relative-path",
+    "input": "./gh pr list",
+    "decision": "escalate"
+  },
+  {
+    "name": "quoted-executable",
+    "input": "'gh' pr list",
+    "decision": "escalate"
+  },
+  {
+    "name": "wrapper",
+    "input": "env gh pr list",
+    "decision": "escalate"
+  },
+  {
+    "name": "sudo",
+    "input": "sudo gh pr list",
+    "decision": "escalate"
+  },
+  {
+    "name": "assignment",
+    "input": "X=value gh pr list",
+    "decision": "escalate"
+  },
+  {
+    "name": "assignment-expansion",
+    "input": "X=/etc; cmd $X",
+    "decision": "escalate"
+  },
+  {
+    "name": "export",
+    "input": "export X=value; gh pr list",
+    "decision": "escalate"
+  },
+  {
+    "name": "create",
+    "input": "gh pr create --fill",
+    "decision": "escalate"
+  },
+  {
+    "name": "flag-before-create",
+    "input": "gh pr --repo example-org/example-repo create --fill",
+    "decision": "escalate"
+  },
+  {
+    "name": "new-pr",
+    "input": "gh pr new --fill",
+    "decision": "escalate"
+  },
+  {
+    "name": "new-issue",
+    "input": "gh issue new",
+    "decision": "escalate"
+  },
+  {
+    "name": "release-delete",
+    "input": "gh release -R example-org/example-repo delete v1",
+    "decision": "escalate"
+  },
+  {
+    "name": "api-get",
+    "input": "gh api /user",
+    "decision": "escalate"
+  },
+  {
+    "name": "api-post",
+    "input": "gh api 'repos/example-org/example-repo/issues?labels=x&state=open' -X POST -f title=test",
+    "decision": "escalate"
+  },
+  {
+    "name": "api-combined-short",
+    "input": "gh api /user -iXPATCH",
+    "decision": "escalate"
+  },
+  {
+    "name": "clone-is-not-read",
+    "input": "gh repo clone example-org/example-repo",
+    "decision": "escalate"
+  },
+  {
+    "name": "diff-outside-scope",
+    "input": "gh pr diff 1",
+    "decision": "escalate"
+  },
+  {
+    "name": "checks-outside-scope",
+    "input": "gh pr checks 1",
+    "decision": "escalate"
+  },
+  {
+    "name": "status-outside-scope",
+    "input": "gh pr status",
+    "decision": "escalate"
+  },
+  {
+    "name": "unknown-alias",
+    "input": "gh prs",
+    "decision": "escalate"
+  },
+  {
+    "name": "compound-semicolon",
+    "input": "gh pr list; gh pr create",
+    "decision": "escalate"
+  },
+  {
+    "name": "compound-and",
+    "input": "gh pr list && gh pr create",
+    "decision": "escalate"
+  },
+  {
+    "name": "compound-or",
+    "input": "gh pr list || gh pr create",
+    "decision": "escalate"
+  },
+  {
+    "name": "pipeline",
+    "input": "gh pr list | cat",
+    "decision": "escalate"
+  },
+  {
+    "name": "background",
+    "input": "gh pr list &",
+    "decision": "escalate"
+  },
+  {
+    "name": "redirect-output",
+    "input": "gh pr list > output.txt",
+    "decision": "escalate"
+  },
+  {
+    "name": "redirect-input",
+    "input": "gh pr list < input.txt",
+    "decision": "escalate"
+  },
+  {
+    "name": "redirect-stderr",
+    "input": "gh pr list 2>&1",
+    "decision": "escalate"
+  },
+  {
+    "name": "process-substitution",
+    "input": "gh pr list <(cat x)",
+    "decision": "escalate"
+  },
+  {
+    "name": "loop",
+    "input": "for x in 1; do gh pr view $x; done",
+    "decision": "escalate"
+  },
+  {
+    "name": "subshell",
+    "input": "(gh pr list)",
+    "decision": "escalate"
+  },
+  {
+    "name": "command-substitution",
+    "input": "gh pr view $(echo 1)",
+    "decision": "escalate"
+  },
+  {
+    "name": "backtick-substitution",
+    "input": "gh pr view `echo 1`",
+    "decision": "escalate"
+  },
+  {
+    "name": "parameter-expansion",
+    "input": "gh pr view ${X:-1}",
+    "decision": "escalate"
+  },
+  {
+    "name": "variable",
+    "input": "gh pr view $X",
+    "decision": "escalate"
+  },
+  {
+    "name": "double-quoted-expansion",
+    "input": "gh pr list --label \"$X\"",
+    "decision": "escalate"
+  },
+  {
+    "name": "arithmetic",
+    "input": "gh pr view $((1+1))",
+    "decision": "escalate"
+  },
+  {
+    "name": "comment",
+    "input": "gh pr list # comment",
+    "decision": "escalate"
+  },
+  {
+    "name": "newline",
+    "input": "gh pr list\ngh pr create",
+    "decision": "escalate"
+  },
+  {
+    "name": "nul",
+    "input": "gh pr list\u0000",
+    "decision": "escalate"
+  },
+  {
+    "name": "unclosed-single",
+    "input": "gh pr list --label 'bug",
+    "decision": "escalate"
+  },
+  {
+    "name": "unclosed-double",
+    "input": "gh pr list --label \"bug",
+    "decision": "escalate"
+  },
+  {
+    "name": "dangling-escape",
+    "input": "gh pr list \\",
+    "decision": "escalate"
+  },
+  {
+    "name": "unsupported-escape",
+    "input": "gh pr list --label \\q",
+    "decision": "escalate"
+  },
+  {
+    "name": "glob",
+    "input": "gh pr view *",
+    "decision": "escalate"
+  },
+  {
+    "name": "brace",
+    "input": "gh pr view {1,2}",
+    "decision": "escalate"
+  },
+  {
+    "name": "tilde",
+    "input": "gh repo view ~/repo",
+    "decision": "escalate"
+  },
+  {
+    "name": "non-ascii",
+    "input": "gh pr list --label caf\u00e9",
+    "decision": "escalate"
+  },
+  {
+    "name": "unknown-flag",
+    "input": "gh pr list --unknown",
+    "decision": "escalate"
+  },
+  {
+    "name": "web-flag",
+    "input": "gh pr list --web",
+    "decision": "escalate"
+  },
+  {
+    "name": "jq",
+    "input": "gh pr list --json title --jq .",
+    "decision": "escalate"
+  },
+  {
+    "name": "template",
+    "input": "gh pr list --template x",
+    "decision": "escalate"
+  },
+  {
+    "name": "search",
+    "input": "gh pr list --search x",
+    "decision": "escalate"
+  },
+  {
+    "name": "terminator",
+    "input": "gh pr list --",
+    "decision": "escalate"
+  },
+  {
+    "name": "combined-short",
+    "input": "gh pr list -cL3",
+    "decision": "escalate"
+  },
+  {
+    "name": "short-attached",
+    "input": "gh pr list -L30",
+    "decision": "escalate"
+  },
+  {
+    "name": "missing-limit",
+    "input": "gh pr list --limit",
+    "decision": "escalate"
+  },
+  {
+    "name": "missing-limit-before-flag",
+    "input": "gh pr list --limit --state open",
+    "decision": "escalate"
+  },
+  {
+    "name": "empty-json",
+    "input": "gh pr list --json=",
+    "decision": "escalate"
+  },
+  {
+    "name": "unknown-json",
+    "input": "gh pr list --json notAField",
+    "decision": "escalate"
+  },
+  {
+    "name": "duplicate-json",
+    "input": "gh pr list --json title,title",
+    "decision": "escalate"
+  },
+  {
+    "name": "repeat-flag",
+    "input": "gh pr list -L 3 --limit 4",
+    "decision": "escalate"
+  },
+  {
+    "name": "repeat-label",
+    "input": "gh pr list --label bug --label docs",
+    "decision": "escalate"
+  },
+  {
+    "name": "conflicting-archive",
+    "input": "gh repo list --archived --no-archived",
+    "decision": "escalate"
+  },
+  {
+    "name": "conflicting-kind",
+    "input": "gh repo list --fork --source",
+    "decision": "escalate"
+  },
+  {
+    "name": "comments-on-list",
+    "input": "gh pr list --comments",
+    "decision": "escalate"
+  },
+  {
+    "name": "state-on-view",
+    "input": "gh pr view 1 --state open",
+    "decision": "escalate"
+  },
+  {
+    "name": "repo-flag-on-repo-list",
+    "input": "gh repo list --repo example-org/example-repo",
+    "decision": "escalate"
+  },
+  {
+    "name": "issue-merged-state",
+    "input": "gh issue list --state merged",
+    "decision": "escalate"
+  },
+  {
+    "name": "bad-visibility",
+    "input": "gh repo list --visibility unknown",
+    "decision": "escalate"
+  },
+  {
+    "name": "bad-bool",
+    "input": "gh pr view 1 --comments=false",
+    "decision": "escalate"
+  },
+  {
+    "name": "extra-positional",
+    "input": "gh pr list stray",
+    "decision": "escalate"
+  },
+  {
+    "name": "trailing-verb",
+    "input": "gh pr view 1 create",
+    "decision": "escalate"
+  },
+  {
+    "name": "missing-issue-number",
+    "input": "gh issue view",
+    "decision": "escalate"
+  },
+  {
+    "name": "zero-number",
+    "input": "gh issue view 0",
+    "decision": "escalate"
+  },
+  {
+    "name": "signed-number",
+    "input": "gh pr view +1",
+    "decision": "escalate"
+  },
+  {
+    "name": "overflow-number",
+    "input": "gh pr view 999999999999999999999999999999",
+    "decision": "escalate"
+  },
+  {
+    "name": "url-selector",
+    "input": "gh issue view https://github.com/example-org/example-repo/issues/1",
+    "decision": "escalate"
+  },
+  {
+    "name": "branch-selector",
+    "input": "gh pr view feature",
+    "decision": "escalate"
+  },
+  {
+    "name": "invalid-repo",
+    "input": "gh pr list --repo example-org/example-repo/extra",
+    "decision": "escalate"
+  },
+  {
+    "name": "url-repo",
+    "input": "gh pr list --repo https://github.com/example-org/example-repo",
+    "decision": "escalate"
+  },
+  {
+    "name": "other-host",
+    "input": "gh pr list --repo other.example/example-org/example-repo",
+    "decision": "escalate"
+  },
+  {
+    "name": "empty-owner",
+    "input": "gh repo view /example-repo",
+    "decision": "escalate"
+  },
+  {
+    "name": "dotdot-repo",
+    "input": "gh repo view example-org/..",
+    "decision": "escalate"
+  },
+  {
+    "name": "repo-owner-slash",
+    "input": "gh repo list example-org/example-repo",
+    "decision": "escalate"
+  },
+  {
+    "name": "negative-limit",
+    "input": "gh pr list --limit=-1",
+    "decision": "escalate"
+  },
+  {
+    "name": "fraction-limit",
+    "input": "gh pr list --limit 1.5",
+    "decision": "escalate"
+  },
+  {
+    "name": "huge-limit",
+    "input": "gh pr list --limit 1001",
+    "decision": "escalate"
+  },
+  {
+    "name": "numeric-junk",
+    "input": "gh pr list --limit 20junk",
+    "decision": "escalate"
+  },
+  {
+    "name": "empty-label",
+    "input": "gh pr list --label ''",
+    "decision": "escalate"
+  },
+  {
+    "name": "flag-like-label",
+    "input": "gh pr list --label='--state'",
+    "decision": "escalate"
+  },
+  {
+    "name": "zsh-equals-expansion",
+    "input": "gh issue list --label =ls",
+    "decision": "escalate"
+  },
+  {
+    "name": "zsh-glob-negation",
+    "input": "gh issue list --label ^cache",
+    "decision": "escalate"
+  },
+  {
+    "name": "empty-quote-equals-expansion",
+    "input": "gh issue list --label ''=ls",
+    "decision": "escalate"
+  },
+  {
+    "name": "quoted-equals-literal",
+    "input": "gh issue list --label '=ls'",
+    "decision": "read_only_candidate"
+  },
+  {
+    "name": "quoted-caret-literal",
+    "input": "gh issue list --label \"^cache\"",
+    "decision": "read_only_candidate"
+  },
+  {
+    "name": "noninitial-equals-literal",
+    "input": "gh issue list --label type=cache",
+    "decision": "read_only_candidate"
+  },
+  {
+    "name": "boolean-before-resource",
+    "input": "gh --comments pr view 1",
+    "decision": "escalate"
+  },
+  {
+    "name": "boolean-before-verb",
+    "input": "gh pr --comments view 1",
+    "decision": "escalate"
+  },
+  {
+    "name": "fork-before-verb",
+    "input": "gh repo --fork list",
+    "decision": "escalate"
+  },
+  {
+    "name": "multiword-pr-json",
+    "input": "gh pr list --json 'title updatedAt'",
+    "decision": "escalate"
+  },
+  {
+    "name": "multiword-status-json",
+    "input": "gh pr list --json 'state statusCheckRollup title'",
+    "decision": "escalate"
+  },
+  {
+    "name": "multiword-repo-json",
+    "input": "gh repo list --json 'name nameWithOwner'",
+    "decision": "escalate"
+  },
+  {
+    "name": "multiword-issue-json",
+    "input": "gh issue view 1 --json 'title updatedAt'",
+    "decision": "escalate"
+  }
+]
