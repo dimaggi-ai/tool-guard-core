@@ -49,6 +49,9 @@ authoring policies for, and operating Tool Guard Core.
 
 ## Reference
 
+- [**Advisory command classifier**](command-classifier.md) - inactive literal
+  `gh` read-syntax classification; never execution permission.
+
 - [**Rebuild Go release artifacts**](reproducible-builds.md) - clean builds
   and comparison with published checksums.
 
