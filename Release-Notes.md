@@ -5,6 +5,32 @@ per-change record see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## Unreleased — pending review and release
+
+### Inactive advisory command-classification API
+
+The proposed `pkg/commandclassify` package adds a bounded literal `gh`
+read-syntax classifier. It exposes `Classify`, the `Decision` type and its two
+constants, `Span`, `Word`, `Result`, and input/word bounds. The
+[guide](docs/command-classifier.md#proposed-exported-api-and-compatibility)
+lists the exact exported fields and JSON names. Existing consumers need no
+migration: no existing symbol is removed or changed, and installed engine, CLI,
+hook and policy behavior stays unchanged.
+
+A `read_only_candidate` result is advisory syntax evidence, **never execution
+permission**. The supported grammar is pinned to gh 2.57.0's documented
+`pr`/`issue`/`repo` `view`/`list` slice and `ls` aliases, with 8,192 input bytes,
+128 words and 1,024 decoded bytes per word. Unsupported syntax escalates;
+executable identity, authorization, source accuracy and full historical replay
+remain unproven by this package. No prompt-reduction claim is made.
+
+The API gate correctly identifies a new public package. Independent review and
+any subsequent reviewed-baseline refresh under
+[Go API stability](docs/api-stability.md) remain pending. These notes neither
+announce a released version nor authorize activation or baseline regeneration.
+
+---
+
 ## 0.8.1 — 2026-10-17
 
 A patch release that does not change Tool Guard's behavior. It fixes a
