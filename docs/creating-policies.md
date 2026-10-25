@@ -308,7 +308,8 @@ locale quotes (`$"..."`) match. ASCII control characters other than tab and LF,
 and unquoted word-initial `#` comments, match. Unquoted, unescaped characters
 that zsh can expand also match: `#` and `^` anywhere in a word, `=` at the start
 of a word (including after empty quotes) or immediately after an unquoted `=` or
-`:`, and `!` outside single quotes. Quoted or escaped forms remain literal. No
+`:` (including across empty quotes), and `!` outside single quotes. Otherwise,
+quoted or escaped forms of these characters remain literal. No
 shell code runs during classification. All shell redirections match in every segment. Unresolved words, unquoted globs and malformed quoting also match, including in helper segments; use literal paths. Literal paths alone do not make an unsupported command form supported. Conservative checks can match literal substitution or group text inside quotes.
 
 Programs and builtins outside the supported command forms match regardless of any gh mention.

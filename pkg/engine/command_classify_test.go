@@ -269,9 +269,9 @@ func TestCommandClassifyOtherCommandMentions(t *testing.T) {
 func TestCommandClassifyFailClosedReasons(t *testing.T) {
 	for _, tc := range []struct{ command, reason string }{
 		{"\r", "unsupported control character"},
-		{"gh api repos/o/r/issues --repo o/r", "unknown gh option"},
-		{"gh --repo o/r api repos/o/r/issues", "unknown gh option"},
-		{"gh -Ro/r api repos/o/r/issues", "unknown gh option"},
+		{"gh api repos/o/r/issues --repo o/r", "gh api is not verified"},
+		{"gh --repo o/r api repos/o/r/issues", "gh api is not verified"},
+		{"gh -Ro/r api repos/o/r/issues", "gh api is not verified"},
 		{"gh pr view 12 --hostname example.test", "unknown gh option"},
 		{"gh --hostname example.test pr view 12", "unknown gh option"},
 		{"gh repo view o/r -R o/r", "unknown gh option"},
@@ -445,11 +445,12 @@ func TestCommandClassifyAPIAndHostname(t *testing.T) {
 		{"gh api repos/o/r/pulls", "gh api is not verified"},
 		{"gh api /repos/o/r/pulls", "gh api is not verified"},
 		{"gh api user", "gh api is not verified"},
-		{"gh api repos/o/r/pulls -X GET", "unknown gh option"},
-		{"gh api repos/o/r/pulls -iXGET", "unknown gh option"},
-		{"gh api '/repos/o/r/issues?a&b' --method=GET", "unknown gh option"},
+		{"gh api repos/o/r/pulls -X GET", "gh api is not verified"},
+		{"gh api repos/o/r/pulls -iXGET", "gh api is not verified"},
+		{"gh api '/repos/o/r/issues?a&b' --method=GET", "gh api is not verified"},
 		{"gh api repos/o/r/pulls --help", "gh api is not verified"},
-		{"gh api --hostname example.test repos/o/r/pulls --help", "unknown gh option"},
+		{"gh api --hostname example.test repos/o/r/pulls --help", "gh api is not verified"},
+		{"gh -R o/r api user", "gh api is not verified"},
 		{"gh --hostname example.test api repos/o/r/pulls", "unknown gh option"},
 		{"gh --hostname=example.test api repos/o/r/pulls", "unknown gh option"},
 		{"gh pr view 12 --hostname=example.test", "unknown gh option"},
@@ -488,8 +489,8 @@ func TestCommandClassifyShellExpansionLiterals(t *testing.T) {
 		"gh pr view '1!'", `gh pr view \!1`, `gh pr view "\!1"`,
 	} {
 		t.Run(command, func(t *testing.T) {
-			if got, reason := EvalConditionWithDetail(commandReadCondition(), map[string]interface{}{"parameters.command": command}); got {
-				t.Fatalf("read matched: %q: %s", command, reason)
+			if got, reason := EvalConditionWithDetail(commandReadCondition(), map[string]interface{}{"parameters.command": command}); got || reason != "" {
+				t.Fatalf("match=%v reason=%q", got, reason)
 			}
 		})
 	}

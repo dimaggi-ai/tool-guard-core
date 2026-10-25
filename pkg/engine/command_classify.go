@@ -266,8 +266,8 @@ func commandLiteral(raw string) bool {
 }
 
 // Flags are a deliberately small subset of gh 2.102.0 (2026-09-30) manual pages:
-// gh-pr, gh-issue, gh-repo, gh-release and gh-api. Unknown flags never pass.
-// Values are consumed before deciding which words name commands or endpoints.
+// gh-pr, gh-issue, gh-repo and gh-release. Unknown flags never pass.
+// Values are consumed before deciding which words name commands.
 func ghFlag(name, group, verb string) (takesValue, known bool) {
 	switch name {
 	case "--repo", "-R":
@@ -336,7 +336,7 @@ func classifyGH(args []string) (bool, string) {
 		arg := args[i]
 		if strings.HasPrefix(arg, "-") {
 			// Short clusters are parsed one letter at a time. Value-taking flags
-			// consume the remaining suffix, so -iXPATCH cannot hide a method.
+			// consume the remaining suffix, so an attached value cannot hide a later flag.
 			flags := []string{arg}
 			short := !strings.HasPrefix(arg, "--")
 			if short {
@@ -388,9 +388,14 @@ func classifyGH(args []string) (bool, string) {
 				return true, "empty gh command argument"
 			}
 			group = arg
+			// No host or route allowlist is approved, path shape does not establish API
+			// semantics, and ambient GH_HOST or gh configuration is not observable.
+			if group == "api" {
+				return true, "gh api is not verified"
+			}
 			continue
 		}
-		if group != "api" && verb == "" {
+		if verb == "" {
 			if arg == "" {
 				return true, "empty gh command argument"
 			}
@@ -410,11 +415,6 @@ func classifyGH(args []string) (bool, string) {
 		if _, known := ghFlag(name, group, verb); !known {
 			return true, "unknown gh option"
 		}
-	}
-	// No host or route allowlist is approved, path shape does not establish API
-	// semantics, and ambient GH_HOST or gh configuration is not observable.
-	if group == "api" {
-		return true, "gh api is not verified"
 	}
 	if !ghReadVerb(group, verb) {
 		return true, "gh operation is not a verified read"
