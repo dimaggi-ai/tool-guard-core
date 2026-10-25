@@ -23,7 +23,7 @@ version: 2
 project_name: tool-guard-core
 
 env:
-  - GOTOOLCHAIN=go1.26.9
+  - GOTOOLCHAIN=go1.26.10
   - GOENV=off
   - GOFLAGS=
   - GOEXPERIMENT=

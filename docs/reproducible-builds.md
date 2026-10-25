@@ -4,7 +4,7 @@ The Go release check covers `tg`, `tg-proxy`, and their archives for
 Linux and macOS on amd64 and arm64, and Windows on amd64. It compares
 SHA-256 digests from two clean builds of the same commit.
 
-Use a Linux host with Bash, Git, Python 3, GNU coreutils, Go 1.26.9,
+Use a Linux host with Bash, Git, Python 3, GNU coreutils, Go 1.26.10,
 and the official GoReleaser 2.18.3 binary on `PATH`. Use the release
 binary of GoReleaser, rather than compiling it with another Go version:
 its compression implementation also affects archive bytes.
@@ -25,7 +25,7 @@ bash scripts/verify-go-reproducible.sh .git/go-reproducible --release
 The script uses committed source, rejects tracked changes, and requires
 an exact tag in release mode. Each build has its own checkout, home,
 GOPATH, module cache, build cache, and temporary directory. It downloads
-Go 1.26.9 and dependencies as needed. Allow network access to the Go
+Go 1.26.10 and dependencies as needed. Allow network access to the Go
 module proxy and checksum database. No release credentials are needed.
 
 The output directory must be empty. On success it contains both build
@@ -57,7 +57,7 @@ the binaries packaged inside them.
 
 ## Fixed inputs
 
-`.goreleaser.yaml` fixes Go 1.26.9, disables CGO, and sets `-trimpath`,
+`.goreleaser.yaml` fixes Go 1.26.10, disables CGO, and sets `-trimpath`,
 `-buildvcs=false`, and `-mod=readonly`. It clears ambient Go flags and
 experiments, disables workspace discovery, and fixes architecture levels.
 Version and commit strings keep their existing meanings. `BuildDate`
