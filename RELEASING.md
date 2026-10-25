@@ -131,7 +131,7 @@ release attempt.
 
 ## Go artifact reproducibility
 
-Use Go 1.26.9 and the official GoReleaser 2.18.3 binary. Keep
+Use Go 1.26.10 and the official GoReleaser 2.18.3 binary. Keep
 `--parallelism=1` on release builds so the binary order in archives is deterministic. The local Go
 verification command above builds every target twice and compares binaries
 and archives. The release workflow repeats this check and verifies each actual

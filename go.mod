@@ -2,7 +2,7 @@ module github.com/dimaggi-ai/tool-guard-core
 
 go 1.26.0
 
-toolchain go1.26.9
+toolchain go1.26.10
 
 require (
 	github.com/pganalyze/pg_query_go/v5 v5.1.0
