@@ -15,11 +15,10 @@ func TestCommandClassifyReads(t *testing.T) {
 	for _, command := range []string{
 		"gh pr view 12",
 		"jq .title", "jq '.title'", `jq ".title"`, `jq .ti\tle`,
-		`gh pr view '#1'`, `gh pr view \#1`, `gh pr view x#1`, `gh pr view "#1"`,
+		`gh pr view '#1'`, `gh pr view \#1`, `gh pr view "#1"`,
 		"gh pr view 1\ngh issue view 2",
 		"gh pr list --repo o/r",
 		"gh issue view 5 -R o/r --json title",
-		"gh api repos/o/r/pulls",
 		"gh pr checks 3",
 		"gh pr diff 3",
 		"gh pr view 12 && gh issue view 5",
@@ -28,13 +27,8 @@ func TestCommandClassifyReads(t *testing.T) {
 		"gh pr --repo o/r view 12",
 		"gh pr view 12 --repo=o/r",
 		"gh pr view 12 -Ro/r",
-		"gh api repos/o/r/pulls -X GET",
-		"gh api repos/o/r/pulls -iXGET",
-		"gh api '/repos/o/r/issues?a&b' --method=GET",
 		"gh pr ls", "gh issue ls", "gh repo ls", "gh release ls",
 		"gh pr status", "gh issue status", "gh release view v1",
-		"gh api --hostname example.test repos/o/r/pulls --help",
-		"gh --hostname example.test api repos/o/r/pulls",
 		"gh repo view o/r",
 		"gh release list -R o/r",
 	} {
@@ -321,6 +315,8 @@ func TestCommandClassifyLiteralHashes(t *testing.T) {
 		want := "unsupported command form"
 		if strings.Contains(command, "\\\n") {
 			want = "line continuation is not verified"
+		} else if command == "echo x#text" {
+			want = "unresolved word in another command"
 		}
 		if results := classifyCommandSegments(command); len(results) != 1 || !results[0].Match || results[0].Reason != want {
 			t.Fatalf("literal hash %q: %+v", command, results)
@@ -439,5 +435,62 @@ func TestCommandClassifyEmptyCommandPositions(t *testing.T) {
 		if len(results) != 1 || !results[0].Match || results[0].Reason != "empty gh command argument" {
 			t.Errorf("%q: %+v", command, results)
 		}
+	}
+}
+
+func TestCommandClassifyAPIAndHostname(t *testing.T) {
+	// No host or route allowlist is approved for gh_read, so every gh api command
+	// and every --hostname option matches, including GET and attached forms.
+	for _, tc := range []struct{ command, reason string }{
+		{"gh api repos/o/r/pulls", "gh api is not verified"},
+		{"gh api /repos/o/r/pulls", "gh api is not verified"},
+		{"gh api user", "gh api is not verified"},
+		{"gh api repos/o/r/pulls -X GET", "unknown gh option"},
+		{"gh api repos/o/r/pulls -iXGET", "unknown gh option"},
+		{"gh api '/repos/o/r/issues?a&b' --method=GET", "unknown gh option"},
+		{"gh api repos/o/r/pulls --help", "gh api is not verified"},
+		{"gh api --hostname example.test repos/o/r/pulls --help", "unknown gh option"},
+		{"gh --hostname example.test api repos/o/r/pulls", "unknown gh option"},
+		{"gh --hostname=example.test api repos/o/r/pulls", "unknown gh option"},
+		{"gh pr view 12 --hostname=example.test", "unknown gh option"},
+		{"gh --hostname=example.test pr view 12", "unknown gh option"},
+	} {
+		t.Run(tc.command, func(t *testing.T) {
+			got, reason := EvalConditionWithDetail(commandReadCondition(), map[string]interface{}{"parameters.command": tc.command})
+			if !got || reason != "command_classify: "+tc.reason {
+				t.Fatalf("match=%v reason=%q, want %q", got, reason, tc.reason)
+			}
+		})
+	}
+}
+
+func TestCommandClassifyShellExpansionLiterals(t *testing.T) {
+	// zsh EXTENDED_GLOB, EQUALS, MAGIC_EQUAL_SUBST and history expansion.
+	for _, command := range []string{
+		"gh pr view x#1", "gh pr view 1#", "gh pr view ^1", "gh pr view x^1",
+		"gh pr view =ls", "gh pr view ''=ls", `gh pr view ""=ls`,
+		"gh issue list --label==ls", "gh issue list --label=cache:=ls",
+		"gh issue list --label=''=ls", `gh issue list --label=""=ls`, "gh issue list --label=cache:''=ls",
+		"gh issue list --label =ls", "gh pr view 1!", `gh pr view "1!"`,
+	} {
+		t.Run(command, func(t *testing.T) {
+			got, reason := EvalConditionWithDetail(commandReadCondition(), map[string]interface{}{"parameters.command": command})
+			if !got || reason != "command_classify: gh argument is unresolved or malformed" {
+				t.Fatalf("match=%v reason=%q", got, reason)
+			}
+		})
+	}
+	for _, command := range []string{
+		`gh pr view '#1'`, `gh pr view \#1`, `gh pr view "#1"`,
+		`gh pr view '^1'`, `gh pr view "^1"`, `gh pr view \^1`,
+		"gh issue list --label='=ls'", `gh issue list --label="=ls"`, `gh issue list --label=\=ls`,
+		"gh issue list --label=cache:ls", "gh issue list --label=a=b",
+		"gh pr view '1!'", `gh pr view \!1`, `gh pr view "\!1"`,
+	} {
+		t.Run(command, func(t *testing.T) {
+			if got, reason := EvalConditionWithDetail(commandReadCondition(), map[string]interface{}{"parameters.command": command}); got {
+				t.Fatalf("read matched: %q: %s", command, reason)
+			}
+		})
 	}
 }

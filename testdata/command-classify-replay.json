@@ -81,7 +81,7 @@
     {
       "command": "gh api repos/o/r/pulls",
       "decision_regex_match": false,
-      "new_match": false,
+      "new_match": true,
       "old_regex_match": true,
       "source": "coordinator implementation brief for #75"
     },

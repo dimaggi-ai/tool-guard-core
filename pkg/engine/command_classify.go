@@ -217,14 +217,21 @@ func classifyCommandSegment(tokens []shellToken) (bool, string) {
 // commandLiteral checks the syntax the shared detector intentionally tolerates:
 // unmatched quotes, trailing escapes and runtime glob/tilde expansion. It does
 // not resolve any expansion. Quoted query punctuation remains literal.
+// It also rejects unquoted characters that zsh can expand under EXTENDED_GLOB
+// (`^`, `#`), EQUALS and MAGIC_EQUAL_SUBST (`=` at word start or after an
+// unquoted `=` or `:`) and history expansion (`!` outside single quotes).
+// Empty quotes do not end a word start or separate an `=` from what precedes it.
 func commandLiteral(raw string) bool {
 	var quote byte
+	start, afterAssign := true, false
 	for i := 0; i < len(raw); i++ {
 		c := raw[i]
 		if quote == '\'' {
 			if c == quote {
 				quote = 0
+				continue
 			}
+			start, afterAssign = false, false
 			continue
 		}
 		if c == '\\' {
@@ -232,21 +239,28 @@ func commandLiteral(raw string) bool {
 			if i == len(raw) {
 				return false
 			}
+			start, afterAssign = false, false
 			continue
 		}
 		if quote == '"' {
 			if c == quote {
 				quote = 0
+				continue
 			}
+			if c == '!' {
+				return false
+			}
+			start, afterAssign = false, false
 			continue
 		}
 		if c == '\'' || c == '"' {
 			quote = c
 			continue
 		}
-		if strings.ContainsRune("*?[]~", rune(c)) {
+		if strings.ContainsRune("*?[]~^#!", rune(c)) || c == '=' && (start || afterAssign) {
 			return false
 		}
+		start, afterAssign = false, c == '=' || c == ':'
 	}
 	return quote == 0
 }
@@ -258,19 +272,8 @@ func ghFlag(name, group, verb string) (takesValue, known bool) {
 	switch name {
 	case "--repo", "-R":
 		return true, group == "" || group == "pr" || group == "issue" || group == "release"
-	case "--hostname":
-		return true, group == "" || group == "api"
 	case "--help":
 		return false, true
-	}
-	if group == "api" {
-		switch name {
-		case "--method", "-X", "--jq", "-q":
-			return true, true
-		case "--include", "-i", "--silent", "--paginate", "--slurp", "--verbose":
-			return false, true
-		}
-		return false, false
 	}
 	if !ghReadVerb(group, verb) {
 		return false, false
@@ -374,9 +377,6 @@ func classifyGH(args []string) (bool, string) {
 					if value == "" || strings.HasPrefix(value, "-") {
 						return true, "invalid gh option value"
 					}
-					if (name == "-X" || name == "--method") && value != "GET" {
-						return true, "API method is not GET"
-					}
 				} else if attached {
 					return true, "unsupported boolean option value"
 				}
@@ -411,11 +411,10 @@ func classifyGH(args []string) (bool, string) {
 			return true, "unknown gh option"
 		}
 	}
+	// No host or route allowlist is approved, path shape does not establish API
+	// semantics, and ambient GH_HOST or gh configuration is not observable.
 	if group == "api" {
-		if len(operands) != 1 || !ghRESTEndpoint(operands[0]) {
-			return true, "API endpoint is not a literal REST path"
-		}
-		return false, "verified gh API GET"
+		return true, "gh api is not verified"
 	}
 	if !ghReadVerb(group, verb) {
 		return true, "gh operation is not a verified read"
@@ -428,20 +427,4 @@ func classifyGH(args []string) (bool, string) {
 		return true, "unsupported gh operands"
 	}
 	return false, "verified gh " + group + " " + verb
-}
-
-func ghRESTEndpoint(endpoint string) bool {
-	// Absolute URLs, encoded paths and placeholders need semantics this profile
-	// does not establish. Reject every graphql path component, including /graphql.
-	p, _, _ := strings.Cut(endpoint, "?")
-	if strings.ContainsAny(p, ":%\\#") {
-		return false
-	}
-	p = strings.TrimPrefix(p, "/")
-	for _, part := range strings.Split(p, "/") {
-		if part == "" || part == "." || part == ".." || strings.EqualFold(part, "graphql") {
-			return false
-		}
-	}
-	return true
 }
