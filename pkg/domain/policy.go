@@ -192,6 +192,9 @@ type Condition struct {
 	// glob, redirection) — none of those happen when no shell runs.
 	ShellClassify *ShellClassify `json:"shell_classify,omitempty"`
 
+	// CommandClassify checks a shell string for unverified gh operations.
+	CommandClassify *CommandClassify `json:"command_classify,omitempty"`
+
 	// LLMClassify, if non-nil, asks a local Ollama-served model
 	// (Gemma 4 multimodal variants by default) or a TypeSafe System
 	// One model (backend: systemone) to classify a
@@ -385,6 +388,14 @@ type ShellClassify struct {
 	Require ShellRequire `json:"require"`
 }
 
+// CommandClassify configures opt-in, fail-closed shell command classification.
+type CommandClassify struct {
+	// Field resolves to a free-text shell command string.
+	Field string `json:"field"`
+	// Profile must be "gh_read". Unknown profiles match at evaluation time.
+	Profile string `json:"profile"`
+}
+
 // ShellRequire enumerates the predicates an argv list must satisfy.
 // Empty/zero fields are not checked.
 type ShellRequire struct {
@@ -427,7 +438,7 @@ type ShellRequire struct {
 // IsLeaf returns true if this is a leaf condition (has a field comparison
 // or a sql/path/shell/llm/write/http classify leaf).
 func (c *Condition) IsLeaf() bool {
-	return c.SQLClassify != nil || c.PathClassify != nil || c.ShellClassify != nil ||
+	return c.CommandClassify != nil || c.SQLClassify != nil || c.PathClassify != nil || c.ShellClassify != nil ||
 		c.LLMClassify != nil || c.WriteClassify != nil || c.HTTPClassify != nil ||
 		(c.Field != "" && c.Operator != "")
 }

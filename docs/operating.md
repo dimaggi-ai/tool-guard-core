@@ -228,10 +228,15 @@ are resolved before matching. The guard fires on writes (tools carrying
 `sed -i`, `dd of=`, and similar mutating commands). Read-only tools
 (`read`, `glob`, `grep`, `ls`, …) are explicitly excluded.
 
-**Shell limitation**: quoting, variable expansion, and command substitution
-in `bash` / `run_command` commands are not resolved. Use `-protect-paths`
-for the policy and audit paths; keep `bash` out of the write-capable policy
-scope if you need stronger shell containment.
+**Shell paths: use literal paths.** Quotes and escapes are tokenized, but
+variables and substitutions are never evaluated. Unresolved redirect targets
+and arguments to recognized mutating commands are denied, including
+`X=/etc; rm $X/passwd`, `X=/etc rm $X/passwd`, `export X=/etc; rm $X/f`,
+`(X=/etc; rm $X/f)`, `rm "$X"/f`, `rm ${X:-/etc}/f`, and
+`rm $(echo /etc)/f`. Assignment order and scope do not establish a literal
+path. `echo $HOME` remains allowed by this path check. No static expansion
+has been added. Keep shell tools out of the write-capable policy scope if
+you need stronger shell containment.
 
 When the guard fires, the proxy returns **HTTP 403** and records a
 boundary-deny trace in the audit chain so `tg verify` remains intact.
