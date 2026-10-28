@@ -332,6 +332,42 @@ No matching shipped regex was found at baseline `8d45152`; the replay uses
 `\bgh\s+(pr|repo|issue|api)\b` for comparison only.
 The historical corpus replay remains incomplete, so the operational false-positive rate is unknown. Shipped policies and installed rules remain unchanged pending independent verification and separate policy-activation approval.
 
+#### Hook dispatch (`tg hook -dispatch gh_read`)
+
+A `gh_read` rule can only match or not match, and an unmatched Bash command
+returns allow from `tg hook`. On its own, a hook allow skips the client's
+permission prompt. With `-dispatch gh_read`, `tg hook` first applies
+protected paths and every loaded enforcing rule. If they allow a Bash call,
+the hook classifies the complete command into one of three outcomes:
+
+| Outcome | Commands | Hook output |
+|---|---|---|
+| Verified read | Every segment is a supported gh read or the `jq .title` helper, or a proven unrelated segment, and at least one is a read or helper | `allow` |
+| Proven unrelated | Every segment is the bare program `pwd` (no arguments, `-L` or `-P`) or `ls` with literal words only | No permission decision, so the client's own permission rules apply |
+| Unverified | Everything else, including a missing command | `ask` |
+
+Proven unrelated segments must have no redirection, expansion, substitution,
+glob, tilde, backslash, assignment or gh mention. Other Bash commands ask, so
+dispatch alone does not reduce prompts for them. Tools other than Bash keep the
+engine decision.
+
+Load the dispatcher without a broad rule that escalates gh commands. Escalate
+outranks allow, so such a rule still asks for every verified read.
+
+`-dispatch` requires `-mode enforcement`. It makes every internal error deny for
+every tool, including malformed input, a missing policy and a policy load error.
+The hook then evaluates in a child process of the same binary. The parent
+denies when the child crashes, exits non-zero, runs longer than 10 seconds, or
+writes anything other than one well-formed PreToolUse object. An object
+without a decision writes nothing. The parent itself can still be stopped by
+the client's own hook timeout or a signal; how the client treats that is
+outside this hook and must be tested with the actual client.
+
+The classification assumptions above still apply, and the dispatcher adds
+these: `gh`, `jq`, `pwd` and `ls` resolve to the expected programs, there are no
+pre-existing aliases or shell functions for them, `GH_HOST` is not inherited,
+and gh configuration is unchanged. Tool Guard does not verify any of these.
+
 ### Write classifier
 
 Governs a file-writing tool (write / edit / notebookedit / apply_patch /

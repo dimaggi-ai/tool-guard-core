@@ -16,6 +16,43 @@ type commandSegmentResult struct {
 	Command string
 	Match   bool
 	Reason  string
+	// Unrelated marks a matched segment that is a validated literal pwd or ls.
+	// It never changes Match, so gh_read policy results are unaffected.
+	Unrelated bool
+}
+
+// CommandClass is the outcome of ClassifyCommand.
+type CommandClass string
+
+const (
+	// CommandVerifiedRead: every segment is a supported gh_read read or helper,
+	// or a proven unrelated segment, and at least one is a read or helper.
+	CommandVerifiedRead CommandClass = "verified_read"
+	// CommandProvenUnrelated: every segment is a validated literal pwd or ls.
+	CommandProvenUnrelated CommandClass = "proven_unrelated"
+	// CommandUnverified: anything else, including malformed text.
+	CommandUnverified CommandClass = "unverified"
+)
+
+// ClassifyCommand sorts a complete shell command into one of three classes
+// for a hook dispatcher, using the gh_read profile checks. The reason names
+// the first unverified segment, or the class. It never executes the command
+// and grants nothing by itself.
+func ClassifyCommand(cmd string) (CommandClass, string) {
+	read := false
+	for _, r := range classifyCommandSegments(cmd) {
+		switch {
+		case !r.Match:
+			read = true
+		case r.Unrelated:
+		default:
+			return CommandUnverified, r.Reason
+		}
+	}
+	if read {
+		return CommandVerifiedRead, "verified gh read"
+	}
+	return CommandProvenUnrelated, "validated literal pwd or ls"
 }
 
 func evalCommandClassify(c *domain.CommandClassify, fields map[string]interface{}) (bool, string) {
@@ -39,21 +76,21 @@ func classifyCommandSegments(cmd string) []commandSegmentResult {
 	// Check raw text before the shared tokenizer can remove continuations or
 	// treat legacy arithmetic syntax as literal text.
 	if strings.Contains(cmd, "\\\n") {
-		return []commandSegmentResult{{cmd, true, "line continuation is not verified"}}
+		return []commandSegmentResult{{cmd, true, "line continuation is not verified", false}}
 	}
 	if strings.Contains(cmd, "$[") {
-		return []commandSegmentResult{{cmd, true, "legacy arithmetic expansion is unresolved"}}
+		return []commandSegmentResult{{cmd, true, "legacy arithmetic expansion is unresolved", false}}
 	}
 	for i := 0; i < len(cmd); i++ {
 		if (cmd[i] < 32 && cmd[i] != '\t' && cmd[i] != '\n') || cmd[i] == 127 {
-			return []commandSegmentResult{{cmd, true, "unsupported control character"}}
+			return []commandSegmentResult{{cmd, true, "unsupported control character", false}}
 		}
 	}
 	if strings.TrimSpace(cmd) == "" {
-		return []commandSegmentResult{{cmd, true, "empty command"}}
+		return []commandSegmentResult{{cmd, true, "empty command", false}}
 	}
 	if commandHasComment(cmd) {
-		return []commandSegmentResult{{cmd, true, "shell comment is not verified"}}
+		return []commandSegmentResult{{cmd, true, "shell comment is not verified", false}}
 	}
 	var results []commandSegmentResult
 	var segment []shellToken
@@ -70,7 +107,7 @@ func classifyCommandSegments(cmd string) []commandSegmentResult {
 			}
 		}
 		match, reason := classifyCommandSegment(segment)
-		results = append(results, commandSegmentResult{strings.Join(raw, " "), match, reason})
+		results = append(results, commandSegmentResult{strings.Join(raw, " "), match, reason, match && provenUnrelatedSegment(segment)})
 		segment = nil
 	}
 	pendingCommand := false
@@ -81,32 +118,60 @@ func classifyCommandSegments(cmd string) []commandSegmentResult {
 			continue
 		}
 		if (t.value == "&&" || t.value == "||" || t.value == "|" || t.value == "|&" || t.value == ";" || t.value == "&") && len(segment) == 0 {
-			results = append(results, commandSegmentResult{t.value, true, "control operator has no command"})
+			results = append(results, commandSegmentResult{t.value, true, "control operator has no command", false})
 		}
 		flush()
 		switch t.value {
 		case "|&":
-			results = append(results, commandSegmentResult{t.value, true, "stderr pipe redirection is not verified"})
+			results = append(results, commandSegmentResult{t.value, true, "stderr pipe redirection is not verified", false})
 			pendingCommand = true
 		case "&&", "||", "|":
 			pendingCommand = true
 		case ";", "&":
 			if pendingCommand {
-				results = append(results, commandSegmentResult{t.value, true, "control operator has no command"})
+				results = append(results, commandSegmentResult{t.value, true, "control operator has no command", false})
 			}
 		case "\n":
 		default:
-			results = append(results, commandSegmentResult{t.value, true, "unsupported shell control syntax"})
+			results = append(results, commandSegmentResult{t.value, true, "unsupported shell control syntax", false})
 		}
 	}
 	flush()
 	if pendingCommand {
-		results = append(results, commandSegmentResult{cmd, true, "control operator has no following command"})
+		results = append(results, commandSegmentResult{cmd, true, "control operator has no following command", false})
 	}
 	if len(results) == 0 {
-		results = append(results, commandSegmentResult{cmd, true, "empty command"})
+		results = append(results, commandSegmentResult{cmd, true, "empty command", false})
 	}
 	return results
+}
+
+// provenUnrelatedSegment accepts only the bare programs pwd (with -L or -P)
+// and ls with literal words: no redirections, expansions, substitutions,
+// assignments or gh mentions. Neither program writes files or runs others.
+func provenUnrelatedSegment(tokens []shellToken) bool {
+	if len(tokens) == 0 {
+		return false
+	}
+	for _, t := range tokens {
+		if t.kind != tokWord || t.unresolved || !commandLiteral(t.raw) ||
+			strings.ContainsAny(t.raw, "$`(){}<>|;&\\") ||
+			ghMention.MatchString(t.raw) || ghMention.MatchString(t.value) || ghMention.MatchString(commandMentionText.Replace(t.raw)) {
+			return false
+		}
+	}
+	switch tokens[0].raw {
+	case "pwd":
+		for _, t := range tokens[1:] {
+			if t.raw != "-L" && t.raw != "-P" {
+				return false
+			}
+		}
+		return true
+	case "ls":
+		return true
+	}
+	return false
 }
 
 // Check comments before tokenization: quotes in a comment must not hide later

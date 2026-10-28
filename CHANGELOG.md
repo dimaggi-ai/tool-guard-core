@@ -22,7 +22,19 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   Nested command strings, scripts, callbacks, and commands supplied through stdin or files are not recursively verified. Programs and builtins that execute them are excluded from the supported command forms and therefore match regardless of any gh mention. Findings involving constructed or nested gh commands are not accepted no-match exceptions.
   Classification checks command text without executing it. It assumes supported executable names resolve to the expected programs with the documented behavior. It does not verify executable contents, pre-existing aliases or shell functions, shell options, configuration, environment, or remote service behavior. This profile is not a sandbox or a guarantee of runtime containment.
   The fixed replay contains implementation-brief examples, review counterexamples, and repository test strings. The historical corpus replay remains incomplete, so the operational false-positive rate is unknown. Shipped policies and installed rules remain unchanged pending independent verification and separate policy-activation approval.
+- `tg hook -dispatch gh_read` (opt-in, enforcement mode only) classifies a
+  Bash call that protected paths and every enforcing rule allowed: a verified
+  gh read allows, a validated literal `pwd` or `ls` returns no permission
+  decision so the client's permission rules apply, and everything else asks.
+  With `-dispatch`, every internal error denies for every tool, and a
+  supervising parent denies when the evaluating child crashes, exits non-zero,
+  times out after 10 seconds or writes malformed output. See
+  [Hook dispatch](docs/creating-policies.md#hook-dispatch-tg-hook--dispatch-gh_read).
+  Without `-dispatch`, `tg hook` output is unchanged.
 - Go API: `domain.CommandClassify` and `domain.Condition.CommandClassify`.
+- Go API: `engine.ClassifyCommand`, `engine.CommandClass` and its constants
+  `CommandVerifiedRead`, `CommandProvenUnrelated` and `CommandUnverified`.
+  The additions are compatible.
   The condition field is additive; positional `Condition` literals must switch
   to keyed fields. YAML and JSON configurations use `field` and `profile`.
 - Regression tests for literal-path protection cover assignments, quoting, parameter

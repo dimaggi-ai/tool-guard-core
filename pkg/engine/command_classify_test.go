@@ -495,3 +495,81 @@ func TestCommandClassifyShellExpansionLiterals(t *testing.T) {
 		})
 	}
 }
+
+func TestClassifyCommandDispatchClasses(t *testing.T) {
+	for _, tc := range []struct {
+		command string
+		want    CommandClass
+	}{
+		{"gh pr list", CommandVerifiedRead},
+		{"gh issue view 75", CommandVerifiedRead},
+		{"gh pr view 12 --json title | jq .title", CommandVerifiedRead},
+		{"pwd && gh pr list", CommandVerifiedRead},
+		{"ls docs; gh issue view 5", CommandVerifiedRead},
+		{"pwd", CommandProvenUnrelated},
+		{"pwd -P", CommandProvenUnrelated},
+		{"ls", CommandProvenUnrelated},
+		{"ls -la docs", CommandProvenUnrelated},
+		{"pwd\nls", CommandProvenUnrelated},
+		{"pwd && ls -1", CommandProvenUnrelated},
+		{"pwd -X", CommandUnverified},
+		{"pwd foo", CommandUnverified},
+		{"/bin/ls", CommandUnverified},
+		{"'ls'", CommandUnverified},
+		{"l''s", CommandUnverified},
+		{"X=1 ls", CommandUnverified},
+		{"ls $HOME", CommandUnverified},
+		{"ls ${d:-x}", CommandUnverified},
+		{"ls $(rm -rf x)", CommandUnverified},
+		{"ls `id`", CommandUnverified},
+		{"ls > out.txt", CommandUnverified},
+		{"ls 2>&1", CommandUnverified},
+		{"ls *", CommandUnverified},
+		{"ls ~", CommandUnverified},
+		{"ls =ls", CommandUnverified},
+		{"ls a\\ b", CommandUnverified},
+		{"ls gh", CommandUnverified},
+		{"ls ./gh", CommandUnverified},
+		{"ls # x", CommandUnverified},
+		{"ls && rm -rf x", CommandUnverified},
+		{"pwd; git push", CommandUnverified},
+		{"pwd &&", CommandUnverified},
+		{"(ls)", CommandUnverified},
+		{"python3 script.py", CommandUnverified},
+		{"go test ./...", CommandUnverified},
+		{"git push", CommandUnverified},
+		{"gh pr create --fill", CommandUnverified},
+		{"'gh' pr create --fill", CommandUnverified},
+		{"g''h pr create --fill", CommandUnverified},
+		{"g\\h pr create --fill", CommandUnverified},
+		{"gh 'pr' create --fill", CommandUnverified},
+		{"sh -c 'g'\"h\"' pr create --fill'", CommandUnverified},
+		{"x=gh; \"$x\" pr create --fill", CommandUnverified},
+		{"$(printf gh) pr create --fill", CommandUnverified},
+		{"gh api repos/o/r/pulls", CommandUnverified},
+		{"gh --hostname h.example pr list", CommandUnverified},
+		{"gh pr list > /tmp/x", CommandUnverified},
+		{"", CommandUnverified},
+		{"   ", CommandUnverified},
+	} {
+		got, reason := ClassifyCommand(tc.command)
+		if got != tc.want {
+			t.Errorf("ClassifyCommand(%q) = %s (%s), want %s", tc.command, got, reason, tc.want)
+		}
+		if reason == "" {
+			t.Errorf("ClassifyCommand(%q) has no reason", tc.command)
+		}
+	}
+}
+
+// The dispatcher marks pwd and ls without changing gh_read policy results:
+// they still match, so a configured rule keeps applying its effect.
+func TestClassifyCommandUnrelatedKeepsPolicyMatch(t *testing.T) {
+	c := commandReadCondition()
+	for _, command := range []string{"pwd", "ls -la", "pwd && ls"} {
+		match, _ := evalCommandClassify(c.CommandClassify, map[string]interface{}{"parameters": map[string]interface{}{"command": command}})
+		if !match {
+			t.Errorf("gh_read no longer matches %q", command)
+		}
+	}
+}

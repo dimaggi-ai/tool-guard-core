@@ -42,6 +42,9 @@ import (
 // deny that tg-proxy applies, BEFORE policy evaluation. A policy cannot turn
 // it off (the point: the agent can edit the policy, but not these flags).
 func cmdHook(args []string) int {
+	if hookDispatchRequested(args) && os.Getenv(hookChildEnv) != "1" {
+		return superviseHook(os.Stdin, os.Stdout, os.Stderr, hookSuperviseTimeout, hookChildCommand(args))
+	}
 	return runHook(args, os.Stdin, os.Stdout)
 }
 
@@ -64,12 +67,17 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	protectSelf := fs.Bool("protect-self", false, "shorthand: also protect the policy dir/file and $HOME/.claude from writes")
 	auditLog := fs.String("audit-log", "", "append each hook decision to this SHA-256 hash-chained JSONL log (tamper-evident, verify with `tg verify`); empty disables")
 	unknownToolsDeny := fs.Bool("unknown-tools-deny", false, "deny any tool_name not declared in scope.tool_names of some loaded ENFORCEMENT policy (closes the tool-name-spoofing/new-tool-goes-ungoverned class); mirrors tg-proxy's -unknown-tools-deny")
+	dispatch := fs.String("dispatch", "", "gh_read: after policy evaluation allows a Bash call, allow verified gh reads, return no decision for validated literal pwd/ls, ask for everything else; every internal error denies")
 
 	parseErr := fs.Parse(args)
 
 	failTools := csvSet(*failClosedTools)
+	dispatching := *dispatch != "" || hookDispatchRequested(args)
 	// failDecide picks the on-error decision for a KNOWN tool name.
 	failDecide := func(tool string) (string, string) {
+		if dispatching {
+			return "deny", fmt.Sprintf("Tool Guard hook could not evaluate; failing closed for tool %q (-dispatch)", tool)
+		}
 		if len(failTools) > 0 {
 			if failTools[strings.ToLower(tool)] {
 				return "deny", fmt.Sprintf("Tool Guard hook could not evaluate; failing closed for tool %q (-fail-closed-tools)", tool)
@@ -88,7 +96,7 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	// asked for destructive calls to fail closed. Pure default (no fail-closed
 	// flags) still fails open so a transient glitch never wedges the agent.
 	failUnattributable := func(why string) (string, string) {
-		if *failClosed || len(failTools) > 0 {
+		if *failClosed || len(failTools) > 0 || dispatching {
 			return "deny", fmt.Sprintf("Tool Guard hook could not read/parse the tool call (%s); failing closed (fail-closed engaged)", why)
 		}
 		return "allow", ""
@@ -103,6 +111,12 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 		}
 		d, reason := failUnattributable("flag parse error")
 		emitHookDecisionTo(stdout, d, reason)
+		return 0
+	}
+	// The dispatcher replaces the default allow for Bash, so it is only
+	// meaningful when decisions are enforced.
+	if dispatching && (*dispatch != "gh_read" || *modeStr != "enforcement") {
+		emitHookDecisionTo(stdout, "deny", "Tool Guard hook -dispatch requires the value gh_read and -mode enforcement; failing closed")
 		return 0
 	}
 
@@ -175,8 +189,38 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	}
 
 	dec, reason, result, auditPolicyHash := evalHook(*policyDir, *policyFile, env, mode, failDecide, *unknownToolsDeny)
+	if dispatching && tool == "bash" && dec == "allow" {
+		dec, reason = dispatchBash(env)
+	}
 	emitAudited(dec, reason, result)
 	return 0
+}
+
+// hookNoDecision is the decision value for a proven unrelated command. The
+// hook writes no permissionDecision, so the client's own permission rules
+// apply. The audit record keeps the engine result and this reason.
+const hookNoDecision = ""
+
+// dispatchBash runs only after protected paths and every loaded enforcing
+// rule allowed the call. Verified reads allow, proven unrelated commands get
+// no decision, and everything else asks.
+func dispatchBash(env *domain.ActionEnvelope) (string, string) {
+	var params map[string]interface{}
+	cmd, ok := "", false
+	if json.Unmarshal(env.Parameters, &params) == nil {
+		cmd, ok = params["command"].(string)
+	}
+	if !ok {
+		return "ask", "Tool Guard dispatch: command is missing or not a string"
+	}
+	switch class, why := engine.ClassifyCommand(cmd); class {
+	case engine.CommandVerifiedRead:
+		return "allow", "Tool Guard dispatch: " + why
+	case engine.CommandProvenUnrelated:
+		return hookNoDecision, "Tool Guard dispatch: " + why + "; no decision, client permissions apply"
+	default:
+		return "ask", "Tool Guard dispatch: " + why
+	}
 }
 
 // evalHook loads the policy set and evaluates env, recovering from any panic
@@ -335,7 +379,7 @@ func selfProtectPaths(policyDir, policyFile string) []string {
 type hookOutput struct {
 	HookSpecificOutput struct {
 		HookEventName            string `json:"hookEventName"`
-		PermissionDecision       string `json:"permissionDecision"`
+		PermissionDecision       string `json:"permissionDecision,omitempty"`
 		PermissionDecisionReason string `json:"permissionDecisionReason,omitempty"`
 	} `json:"hookSpecificOutput"`
 }
@@ -399,7 +443,7 @@ Usage:
   tg hook (-policy-dir DIR | -policy FILE) [-mode shadow|enforcement]
           [-agent-id NAME] [-fail-closed] [-fail-closed-tools bash,write,edit]
           [-protect-path PATH ...] [-protect-paths P1,P2]
-          [-protect-self] [-unknown-tools-deny]
+          [-protect-self] [-unknown-tools-deny] [-dispatch gh_read]
 
 Reads ONE PreToolUse JSON object on stdin, evaluates it, and writes a
 hookSpecificOutput permissionDecision (deny|ask|allow) to stdout. Always
@@ -411,4 +455,12 @@ load failure, an evaluator panic) fails OPEN — allow — by default, so a
 tooling glitch never wedges the agent, but that also means the error is
 never denied either. That default suits local dev; it is not what you want
 once this hook is actually enforcing policy.
+
+-dispatch gh_read (enforcement mode only) changes what an allowed Bash call
+returns: a verified gh read allows, a validated literal pwd or ls returns no
+decision so the client's permission rules apply, and every other command
+asks. Load it without a broad rule that escalates gh commands, because
+escalate outranks allow. Every internal error then denies for every tool,
+and the hook runs its evaluation in a supervised child process: a crash,
+timeout, non-zero exit or malformed child output denies.
 `
