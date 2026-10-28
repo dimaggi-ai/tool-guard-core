@@ -364,7 +364,8 @@ and the child finishes within 10 seconds in total, exits 0 and writes exactly
 one well-formed PreToolUse object: string values only, no duplicate or unknown
 keys. An object without a decision writes nothing. Denials by the parent
 itself, and denials before the tool call is parsed (flag, configuration or
-input errors), are not written to the audit log. The parent itself can still be stopped by
+input errors) or after an internal failure outside policy evaluation, are not
+written to the audit log. The parent itself can still be stopped by
 the client's own hook timeout or a signal; how the client treats that is
 outside this hook and must be tested with the actual client.
 
