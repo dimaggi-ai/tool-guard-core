@@ -196,6 +196,8 @@ func TestHookSupervisorHelperProcess(t *testing.T) {
 		fmt.Fprint(os.Stdout, `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"defer"}}`)
 	case "extra-field":
 		fmt.Fprint(os.Stdout, `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"},"continue":true}`)
+	case "empty-decision":
+		fmt.Fprint(os.Stdout, `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":""}}`)
 	case "null-decision":
 		fmt.Fprint(os.Stdout, `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":null}}`)
 	case "number-decision":
@@ -253,6 +255,7 @@ func TestHookSupervisor_TrustsOnlyWellFormedChildOutput(t *testing.T) {
 		{"unknown-decision", "deny"},
 		{"extra-field", "deny"},
 		{"wrong-event", "deny"},
+		{"empty-decision", "deny"},
 		{"null-decision", "deny"},
 		{"number-decision", "deny"},
 		{"duplicate-decision", "deny"},

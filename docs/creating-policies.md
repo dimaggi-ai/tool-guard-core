@@ -356,14 +356,15 @@ outranks allow, so such a rule still asks for every verified read.
 
 `-dispatch` requires `-mode enforcement`. It makes every internal error deny for
 every tool, including malformed input, a missing policy and a policy load error.
-With `-audit-log`, the record is written before the decision is
-output, and a failed write denies. The record keeps the engine result with the
-dispatch reason; an ask is recorded as escalated. The hook then evaluates in a
-child process of the same binary. The parent denies when stdin stays open
-longer than 10 seconds, or when the child crashes, exits non-zero, runs longer
-than 10 seconds, or writes anything other than one well-formed PreToolUse
-object: string values only, no duplicate or unknown keys. An object without a
-decision writes nothing. The parent itself can still be stopped by
+With `-audit-log`, the evaluating process writes the record before it outputs
+the decision, and a failed write denies. The record keeps the engine result
+with the dispatch reason; an ask is recorded as escalated. The hook evaluates
+in a child process of the same binary. The parent denies unless stdin closes
+and the child finishes within 10 seconds in total, exits 0 and writes exactly
+one well-formed PreToolUse object: string values only, no duplicate or unknown
+keys. An object without a decision writes nothing. Denials by the parent
+itself, and denials before the tool call is parsed (flag, configuration or
+input errors), are not written to the audit log. The parent itself can still be stopped by
 the client's own hook timeout or a signal; how the client treats that is
 outside this hook and must be tested with the actual client.
 

@@ -42,6 +42,7 @@ import (
 // deny that tg-proxy applies, BEFORE policy evaluation. A policy cannot turn
 // it off (the point: the agent can edit the policy, but not these flags).
 func cmdHook(args []string) int {
+	// hookChildArg is internal: only the supervisor passes it.
 	if len(args) > 0 && args[0] == hookChildArg {
 		return runHook(args[1:], os.Stdin, os.Stdout)
 	}
@@ -76,6 +77,16 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 
 	failTools := csvSet(*failClosedTools)
 	dispatching := *dispatch != "" || hookDispatchRequested(args)
+	if dispatching {
+		// A panic outside evalHook (dispatch, audit) must still deny. If the
+		// supervisor is skipped, nothing else would turn it into a decision.
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Fprintf(os.Stderr, "tg hook: panic under -dispatch; denying: %v\n", r)
+				emitHookDecisionTo(stdout, "deny", "Tool Guard hook failed internally; failing closed (-dispatch)")
+			}
+		}()
+	}
 	// failDecide picks the on-error decision for a KNOWN tool name.
 	failDecide := func(tool string) (string, string) {
 		if dispatching {

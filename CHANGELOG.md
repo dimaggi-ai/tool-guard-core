@@ -27,9 +27,9 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   gh read allows, a validated literal `pwd` or `ls` returns no permission
   decision so the client's permission rules apply, and everything else asks.
   With `-dispatch`, every internal error denies for every tool, an audit
-  write that fails denies, and a supervising parent denies when stdin stays
-  open or the evaluating child crashes, exits non-zero, times out after 10
-  seconds or writes malformed output. See
+  write that fails denies, and a supervising parent denies when stdin and the
+  evaluating child do not finish within 10 seconds in total, or the child
+  crashes, exits non-zero or writes malformed output. See
   [Hook dispatch](docs/creating-policies.md#hook-dispatch-tg-hook--dispatch-gh_read).
   Without `-dispatch`, `tg hook` output is unchanged.
 - Go API: `domain.CommandClassify` and `domain.Condition.CommandClassify`.
