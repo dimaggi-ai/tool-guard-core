@@ -342,7 +342,7 @@ the hook classifies the complete command into one of three outcomes:
 
 | Outcome | Commands | Hook output |
 |---|---|---|
-| Verified read | Every segment is a supported gh read or the `jq .title` helper, or a proven unrelated segment, and at least one is a read or helper | `allow` |
+| Verified read | Every segment is a supported gh read, the `jq .title` helper or a proven unrelated segment, and at least one is a read or the helper. A command with only the helper, such as `jq .title`, is a verified read. | `allow` |
 | Proven unrelated | Every segment is the bare program `pwd` (no arguments, `-L` or `-P`) or `ls` with literal words only | No permission decision, so the client's own permission rules apply |
 | Unverified | Everything else, including a missing command | `ask` |
 
@@ -356,10 +356,14 @@ outranks allow, so such a rule still asks for every verified read.
 
 `-dispatch` requires `-mode enforcement`. It makes every internal error deny for
 every tool, including malformed input, a missing policy and a policy load error.
-The hook then evaluates in a child process of the same binary. The parent
-denies when the child crashes, exits non-zero, runs longer than 10 seconds, or
-writes anything other than one well-formed PreToolUse object. An object
-without a decision writes nothing. The parent itself can still be stopped by
+With `-audit-log`, the record is written before the decision is
+output, and a failed write denies. The record keeps the engine result with the
+dispatch reason; an ask is recorded as escalated. The hook then evaluates in a
+child process of the same binary. The parent denies when stdin stays open
+longer than 10 seconds, or when the child crashes, exits non-zero, runs longer
+than 10 seconds, or writes anything other than one well-formed PreToolUse
+object: string values only, no duplicate or unknown keys. An object without a
+decision writes nothing. The parent itself can still be stopped by
 the client's own hook timeout or a signal; how the client treats that is
 outside this hook and must be tested with the actual client.
 

@@ -5,12 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/dimaggi-ai/tool-guard-core/pkg/audit"
+	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 )
 
 // hookBashStdin builds a PreToolUse payload for a Bash command.
@@ -126,13 +130,15 @@ func TestHookDispatch_FailuresDeny(t *testing.T) {
 		stdin string
 		args  []string
 	}{
-		"malformed JSON":     {"{not json", []string{"-policy", pol, "-dispatch", "gh_read"}},
-		"no policy":          {ls, []string{"-dispatch", "gh_read"}},
-		"policy load error":  {ls, []string{"-policy", bad, "-dispatch", "gh_read"}},
-		"unknown profile":    {ls, []string{"-policy", pol, "-dispatch", "all"}},
-		"shadow mode":        {ls, []string{"-policy", pol, "-dispatch", "gh_read", "-mode", "shadow"}},
-		"flag error first":   {ls, []string{"-bogus", "-policy", pol, "-dispatch", "gh_read"}},
-		"read tool, no load": {`{"tool_name":"Read","tool_input":{}}`, []string{"-dispatch", "gh_read"}},
+		"malformed JSON":       {"{not json", []string{"-policy", pol, "-dispatch", "gh_read"}},
+		"no policy":            {ls, []string{"-dispatch", "gh_read"}},
+		"policy load error":    {ls, []string{"-policy", bad, "-dispatch", "gh_read"}},
+		"unknown profile":      {ls, []string{"-policy", pol, "-dispatch", "all"}},
+		"shadow mode":          {ls, []string{"-policy", pol, "-dispatch", "gh_read", "-mode", "shadow"}},
+		"flag error first":     {ls, []string{"-bogus", "-policy", pol, "-dispatch", "gh_read"}},
+		"help after dispatch":  {ls, []string{"-policy", pol, "-dispatch", "gh_read", "-h"}},
+		"help before dispatch": {ls, []string{"-h", "-policy", pol, "-dispatch", "gh_read"}},
+		"read tool, no load":   {`{"tool_name":"Read","tool_input":{}}`, []string{"-dispatch", "gh_read"}},
 	} {
 		out, code := runHookStr(t, tc.stdin, tc.args...)
 		if code != 0 {
@@ -190,6 +196,16 @@ func TestHookSupervisorHelperProcess(t *testing.T) {
 		fmt.Fprint(os.Stdout, `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"defer"}}`)
 	case "extra-field":
 		fmt.Fprint(os.Stdout, `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"},"continue":true}`)
+	case "null-decision":
+		fmt.Fprint(os.Stdout, `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":null}}`)
+	case "number-decision":
+		fmt.Fprint(os.Stdout, `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":1}}`)
+	case "duplicate-decision":
+		fmt.Fprint(os.Stdout, `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecision":"allow"}}`)
+	case "duplicate-event":
+		fmt.Fprint(os.Stdout, `{"hookSpecificOutput":{"hookEventName":"PostToolUse","hookEventName":"PreToolUse","permissionDecision":"allow"}}`)
+	case "inner-extra-field":
+		fmt.Fprint(os.Stdout, `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","updatedInput":{}}}`)
 	case "wrong-event":
 		fmt.Fprint(os.Stdout, `{"hookSpecificOutput":{"hookEventName":"PostToolUse","permissionDecision":"allow"}}`)
 	case "huge":
@@ -237,6 +253,11 @@ func TestHookSupervisor_TrustsOnlyWellFormedChildOutput(t *testing.T) {
 		{"unknown-decision", "deny"},
 		{"extra-field", "deny"},
 		{"wrong-event", "deny"},
+		{"null-decision", "deny"},
+		{"number-decision", "deny"},
+		{"duplicate-decision", "deny"},
+		{"duplicate-event", "deny"},
+		{"inner-extra-field", "deny"},
 		{"huge", "deny"},
 		{"exit1", "deny"},
 		{"panic", "deny"},
@@ -289,6 +310,90 @@ func TestHookSupervisor_RealChildDispatch(t *testing.T) {
 		out := superviseStr(t, hookBashStdin(t, tc.command), 30*time.Second, helperChild(t, "real", args...))
 		if got := hookMaybeDecision(t, out); got != tc.want {
 			t.Errorf("%q: decision %q, want %q; output=%s", tc.command, got, tc.want, out)
+		}
+	}
+}
+
+// A stdin pipe that is never closed must not hold the supervisor past its
+// deadline.
+func TestHookSupervisor_StalledStdinDenies(t *testing.T) {
+	r, w := io.Pipe()
+	defer w.Close()
+	start := time.Now()
+	var out, errOut bytes.Buffer
+	if code := superviseHook(r, &out, &errOut, 300*time.Millisecond, helperChild(t, "allow")); code != 0 {
+		t.Fatalf("supervisor exit %d", code)
+	}
+	if d := hookDecision(t, out.String()); d != "deny" {
+		t.Errorf("stalled stdin: want deny, got %q", d)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("supervisor took %s after a 300ms timeout", elapsed)
+	}
+}
+
+// The child marker is an argument the supervisor passes, never an
+// environment variable a parent process could set.
+func TestHookChildCommandUsesArgvMarker(t *testing.T) {
+	c := hookChildCommand([]string{"-dispatch", "gh_read"})(context.Background())
+	if c == nil {
+		t.Fatal("no child command")
+	}
+	if len(c.Args) < 3 || c.Args[1] != "hook" || c.Args[2] != hookChildArg {
+		t.Fatalf("child args = %q, want hook %s ...", c.Args, hookChildArg)
+	}
+	if c.Env != nil {
+		t.Errorf("child env must be inherited unchanged, got %d overrides", len(c.Env))
+	}
+}
+
+// Under -dispatch the audit record is written before the decision, and a
+// failed write denies.
+func TestHookDispatch_AuditFailureDenies(t *testing.T) {
+	pol := writeHookPolicy(t, hookDenyPolicy)
+	auditPath := t.TempDir() // a directory: the append fails
+	out, code := runHookStr(t, hookBashStdin(t, "gh pr list"), "-policy", pol, "-dispatch", "gh_read", "-audit-log", auditPath)
+	if code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if d := hookDecision(t, out); d != "deny" {
+		t.Errorf("audit failure: want deny, got %q; output=%s", d, out)
+	}
+}
+
+// The audit record shows the dispatcher's outcome, not only the engine allow.
+func TestHookDispatch_AuditRecordsDispatchOutcome(t *testing.T) {
+	pol := writeHookPolicy(t, hookDenyPolicy)
+	for _, tc := range []struct {
+		command, want string
+		decision      domain.Decision
+		action        domain.ActionTaken
+	}{
+		{"gh pr list", "allow", domain.DecisionAllowed, domain.ActionAllowed},
+		{"pwd", "", domain.DecisionAllowed, domain.ActionAllowed},
+		{"git push", "ask", domain.DecisionEscalated, domain.ActionEscalated},
+	} {
+		auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
+		out, _ := runHookStr(t, hookBashStdin(t, tc.command), "-policy", pol, "-dispatch", "gh_read", "-audit-log", auditPath)
+		if got := hookMaybeDecision(t, out); got != tc.want {
+			t.Fatalf("%q: decision %q, want %q", tc.command, got, tc.want)
+		}
+		raw, err := os.ReadFile(auditPath)
+		if err != nil {
+			t.Fatalf("%q: read audit: %v", tc.command, err)
+		}
+		var trace domain.DecisionTrace
+		if err := json.Unmarshal(bytes.TrimSpace(raw), &trace); err != nil {
+			t.Fatalf("%q: decode audit: %v", tc.command, err)
+		}
+		if trace.Decision != tc.decision || trace.ActionTaken != tc.action {
+			t.Errorf("%q: audit decision %q action %q, want %q/%q", tc.command, trace.Decision, trace.ActionTaken, tc.decision, tc.action)
+		}
+		if !strings.HasPrefix(trace.DecisionReason, "Tool Guard dispatch: ") {
+			t.Errorf("%q: audit reason %q lacks the dispatch reason", tc.command, trace.DecisionReason)
+		}
+		if ok, err := audit.VerifyCanonicalTraceHash(&trace); err != nil || !ok {
+			t.Errorf("%q: audit hash invalid: ok=%v err=%v", tc.command, ok, err)
 		}
 	}
 }

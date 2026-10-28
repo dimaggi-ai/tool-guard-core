@@ -505,6 +505,9 @@ func TestClassifyCommandDispatchClasses(t *testing.T) {
 		{"gh issue view 75", CommandVerifiedRead},
 		{"gh pr view 12 --json title | jq .title", CommandVerifiedRead},
 		{"pwd && gh pr list", CommandVerifiedRead},
+		// The helper alone reads stdin only; it is documented as a verified read.
+		{"jq .title", CommandVerifiedRead},
+		{"pwd | jq .title", CommandVerifiedRead},
 		{"ls docs; gh issue view 5", CommandVerifiedRead},
 		{"pwd", CommandProvenUnrelated},
 		{"pwd -P", CommandProvenUnrelated},

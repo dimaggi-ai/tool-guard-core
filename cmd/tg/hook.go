@@ -42,7 +42,10 @@ import (
 // deny that tg-proxy applies, BEFORE policy evaluation. A policy cannot turn
 // it off (the point: the agent can edit the policy, but not these flags).
 func cmdHook(args []string) int {
-	if hookDispatchRequested(args) && os.Getenv(hookChildEnv) != "1" {
+	if len(args) > 0 && args[0] == hookChildArg {
+		return runHook(args[1:], os.Stdin, os.Stdout)
+	}
+	if hookDispatchRequested(args) {
 		return superviseHook(os.Stdin, os.Stdout, os.Stderr, hookSuperviseTimeout, hookChildCommand(args))
 	}
 	return runHook(args, os.Stdin, os.Stdout)
@@ -105,7 +108,7 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	if parseErr != nil {
 		// A flag misconfiguration (or -h) can't be evaluated. -h prints a
 		// short usage; anything else is an unattributable error.
-		if errors.Is(parseErr, flag.ErrHelp) {
+		if errors.Is(parseErr, flag.ErrHelp) && !dispatching {
 			fmt.Fprint(os.Stderr, hookUsage)
 			return 0
 		}
@@ -158,6 +161,17 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	// to the hash chain (best-effort — an audit failure never changes the
 	// decision). Used for every decision that has a real envelope.
 	emitAudited := func(dec, reason string, result *domain.EvaluationResult) {
+		// Under -dispatch the record is written first, and a failed write
+		// denies: a decision must not reach the client without its record.
+		if dispatching && *auditLog != "" {
+			if err := appendHookAudit(*auditLog, env, result, dec, reason, auditPolicyHash); err != nil {
+				fmt.Fprintf(os.Stderr, "tg hook: audit append failed under -dispatch; denying: %v\n", err)
+				emitHookDecisionTo(stdout, "deny", "Tool Guard hook could not write its audit record; failing closed (-dispatch)")
+				return
+			}
+			emitHookDecisionTo(stdout, dec, reason)
+			return
+		}
 		emitHookDecisionTo(stdout, dec, reason)
 		if *auditLog != "" {
 			appendHookAuditBestEffort(os.Stderr, *auditLog, env, result, dec, reason, auditPolicyHash)
@@ -191,6 +205,7 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	dec, reason, result, auditPolicyHash := evalHook(*policyDir, *policyFile, env, mode, failDecide, *unknownToolsDeny)
 	if dispatching && tool == "bash" && dec == "allow" {
 		dec, reason = dispatchBash(env)
+		result = dispatchedResult(result, dec, reason)
 	}
 	emitAudited(dec, reason, result)
 	return 0
@@ -198,8 +213,23 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 
 // hookNoDecision is the decision value for a proven unrelated command. The
 // hook writes no permissionDecision, so the client's own permission rules
-// apply. The audit record keeps the engine result and this reason.
+// apply. The audit record keeps the engine result with this reason.
 const hookNoDecision = ""
+
+// dispatchedResult returns a copy of the engine result that records the
+// dispatcher's outcome: an ask is recorded as escalated, and every outcome
+// carries the dispatch reason. Rule results and citations are unchanged.
+func dispatchedResult(result *domain.EvaluationResult, dec, reason string) *domain.EvaluationResult {
+	if result == nil {
+		return nil
+	}
+	r := *result
+	if dec == "ask" {
+		r.Decision, r.ActionTaken = domain.DecisionEscalated, domain.ActionEscalated
+	}
+	r.DecisionReason = reason
+	return &r
+}
 
 // dispatchBash runs only after protected paths and every loaded enforcing
 // rule allowed the call. Verified reads allow, proven unrelated commands get
