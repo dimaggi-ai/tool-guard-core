@@ -34,6 +34,7 @@ func TestCommandClassifyReads(t *testing.T) {
 		"gh pr list -R dimaggi-ai/tool-guard-core", "gh repo view dimaggi-ai/tool-guard-core",
 		"gh issue view '#5' --repo=Org-1/repo_name.x", "gh pr view 12 --json title,state",
 		"gh release view v1.2.3 -R o/r",
+		"gh pr view 12 -cRo/r", "gh pr view 12 -cR o/r", "gh pr view 12 -cR=o/r",
 		"gh repo list dimaggi-ai", "gh repo ls Org_1", "gh pr list -R 'o/r'", `gh pr list -R "o/r"`,
 		"gh pr list -R o/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 	} {
@@ -120,6 +121,8 @@ func TestCommandClassifyRejectsUnverifiedCommands(t *testing.T) {
 		"gh pr checks https://attacker.example/o/r/pull/1", "gh issue view https://attacker.example/o/r/issues/1",
 		"gh pr view branch-name", "gh pr view attacker.example/o/r", "gh issue view 1x", "gh issue view '#'",
 		"gh pr view 12345678901", "gh release view https://attacker.example/o/r",
+		"gh pr view 12 -cRattacker.example/o/r", "gh pr view 12 -cR attacker.example/o/r",
+		"gh pr view 12 -cR=attacker.example/o/r",
 		"gh repo list o/r", "gh repo list attacker.example/o", "gh repo list https://attacker.example/o",
 		"gh repo list .", "gh repo list o.x",
 		"gh pr list -R=attacker.example/o/r", "gh pr list -R 'attacker.example/o/r'",

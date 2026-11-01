@@ -303,8 +303,9 @@ other than `diff`; `--comments`/`-c` on issue/PR views;
 including field/input flags, custom headers, browser launch and template options.
 `--jq`/`-q` matches in every form: gh 2.57.0 evaluates the filter with gojq's
 environment loader, so `env` and `$ENV` can read the process environment
-(verified in the gh 2.57.0 source, `pkg/cmdutil/json_flags.go`; later versions
-were not checked).
+(verified in the gh 2.57.0 source: `pkg/cmdutil/json_flags.go` passes the filter
+to go-gh v2.10.0 `pkg/jq/jq.go`, which compiles it with that loader; later
+versions were not checked).
 
 Flag and alias meanings were checked against the
 gh 2.102.0 (2026-09-30) manual pages for `gh-pr`, `gh-issue`, `gh-repo`,
