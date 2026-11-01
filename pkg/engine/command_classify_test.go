@@ -31,6 +31,9 @@ func TestCommandClassifyReads(t *testing.T) {
 		"gh pr status", "gh issue status", "gh release view v1",
 		"gh repo view o/r",
 		"gh release list -R o/r",
+		"gh pr list -R dimaggi-ai/tool-guard-core", "gh repo view dimaggi-ai/tool-guard-core",
+		"gh issue view '#5' --repo=Org-1/repo_name.x", "gh pr view 12 --json title,state",
+		"gh release view v1.2.3 -R o/r",
 	} {
 		t.Run(command, func(t *testing.T) {
 			if got, reason := EvalConditionWithDetail(commandReadCondition(), map[string]interface{}{"parameters.command": command}); got {
@@ -101,6 +104,25 @@ func TestCommandClassifyRejectsUnverifiedCommands(t *testing.T) {
 		"gh api graphql", "gh api /graphql", "gh api https://example.test/repos/o/r/pulls",
 		"gh api repos/o/r/issues --method=get", "gh api repos/o/r/issues --include=true",
 		"gh pr view 12 > output.txt",
+		// Host-bearing repository selectors and operands (review G1).
+		"gh pr list -R attacker.example/o/r", "gh pr list --repo attacker.example/o/r",
+		"gh pr list --repo=attacker.example/o/r", "gh pr list -Rattacker.example/o/r",
+		"gh -R attacker.example/o/r pr list", "gh --repo=attacker.example/o/r issue view 5",
+		"gh pr --repo attacker.example/o/r view 12", "gh release list -R attacker.example/o/r",
+		"gh pr list -R https://attacker.example/o/r", "gh pr list -R git@attacker.example:o/r",
+		"gh pr list -R o", "gh pr list -R o/r/", "gh pr list -R /o/r", "gh pr list -R o//r",
+		"gh pr list -R o:r", "gh pr list -R o.x/r", "gh pr list -R ./r", "gh pr list -R o/..",
+		"gh repo view attacker.example/o/r", "gh repo view https://attacker.example/o/r",
+		"gh repo view git@attacker.example:o/r", "gh repo view o", "gh repo view o/r/x",
+		"gh pr view https://attacker.example/o/r/pull/1", "gh pr diff https://attacker.example/o/r/pull/1",
+		"gh pr checks https://attacker.example/o/r/pull/1", "gh issue view https://attacker.example/o/r/issues/1",
+		"gh pr view branch-name", "gh pr view attacker.example/o/r", "gh issue view 1x", "gh issue view '#'",
+		"gh pr view 12345678901", "gh release view https://attacker.example/o/r",
+		// gh evaluates --jq with access to the process environment (review Q1).
+		"gh pr view 12 --json title --jq .title", "gh pr view 12 --json title -q .title",
+		"gh pr view 12 --json title --jq=.title", "gh pr view 12 --json title -q.title",
+		"gh pr list --json title --jq env", "gh issue view 5 --json title -q '$ENV'",
+		"gh pr view 12 --json title -cq .title",
 	}
 	for _, op := range []string{";", "&&", "||", "|", "|&", "&", "\n", "\r\n"} {
 		commands = append(commands, "gh pr view 12 "+op+" gh pr create", "gh pr create "+op+" gh pr view 12")
@@ -483,10 +505,12 @@ func TestCommandClassifyShellExpansionLiterals(t *testing.T) {
 	}
 	for _, command := range []string{
 		`gh pr view '#1'`, `gh pr view \#1`, `gh pr view "#1"`,
-		`gh pr view '^1'`, `gh pr view "^1"`, `gh pr view \^1`,
+		// PR operands must be numbers, so quoted expansion characters are
+		// exercised in a free-text label value.
+		`gh issue list --label='^1'`, `gh issue list --label="^1"`, `gh issue list --label=\^1`,
 		"gh issue list --label='=ls'", `gh issue list --label="=ls"`, `gh issue list --label=\=ls`,
 		"gh issue list --label=cache:ls", "gh issue list --label=a=b",
-		"gh pr view '1!'", `gh pr view \!1`, `gh pr view "\!1"`,
+		"gh issue list --label='1!'", `gh issue list --label=\!1`, `gh issue list --label="\!1"`,
 	} {
 		t.Run(command, func(t *testing.T) {
 			if got, reason := EvalConditionWithDetail(commandReadCondition(), map[string]interface{}{"parameters.command": command}); got || reason != "" {

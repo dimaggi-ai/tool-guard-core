@@ -343,11 +343,10 @@ func ghFlag(name, group, verb string) (takesValue, known bool) {
 	if !ghReadVerb(group, verb) {
 		return false, false
 	}
-	if verb != "diff" {
-		switch name {
-		case "--json", "--jq", "-q":
-			return true, true
-		}
+	// --jq/-q is omitted on purpose: gh evaluates the filter with gojq's
+	// environment loader, so `env` and `$ENV` expose the process environment.
+	if verb != "diff" && name == "--json" {
+		return true, true
 	}
 	if (group == "pr" || group == "issue") && verb == "view" {
 		switch name {
@@ -442,6 +441,10 @@ func classifyGH(args []string) (bool, string) {
 					if value == "" || strings.HasPrefix(value, "-") {
 						return true, "invalid gh option value"
 					}
+					// gh also accepts HOST/OWNER/REPO and URLs here, which select another host.
+					if (name == "--repo" || name == "-R") && !ghRepoName(value) {
+						return true, "unsupported gh repository selector"
+					}
 				} else if attached {
 					return true, "unsupported boolean option value"
 				}
@@ -491,5 +494,60 @@ func classifyGH(args []string) (bool, string) {
 	if len(operands) > maxOperands || (group == "issue" && verb == "view" && len(operands) != 1) {
 		return true, "unsupported gh operands"
 	}
+	// PR and issue operands may also be URLs or branch names; repo operands may
+	// name a host. Only numbers and bare OWNER/REPO are supported.
+	for _, operand := range operands {
+		switch group {
+		case "pr", "issue":
+			if !ghNumber(operand) {
+				return true, "unsupported gh operands"
+			}
+		case "repo":
+			if !ghRepoName(operand) {
+				return true, "unsupported gh operands"
+			}
+		case "release":
+			if strings.Contains(operand, ":") {
+				return true, "unsupported gh operands"
+			}
+		}
+	}
 	return false, "verified gh " + group + " " + verb
+}
+
+// ghNumber accepts a PR or issue number, optionally prefixed with `#`.
+func ghNumber(s string) bool {
+	s = strings.TrimPrefix(s, "#")
+	if s == "" || len(s) > 10 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// ghRepoName accepts only a bare OWNER/REPO selector. Anything gh could read as
+// HOST/OWNER/REPO, a URL or an SSH remote is refused.
+func ghRepoName(s string) bool {
+	owner, repo, ok := strings.Cut(s, "/")
+	return ok && ghNameSegment(owner, false) && ghNameSegment(repo, true)
+}
+
+func ghNameSegment(s string, repo bool) bool {
+	if s == "" || len(s) > 100 || s == "." || s == ".." {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-':
+		case c == '_', repo && c == '.':
+		default:
+			return false
+		}
+	}
+	return true
 }

@@ -281,18 +281,26 @@ configuration.
 `ls` normalizes to `list` in these groups; `pr new` and `issue new` normalize
 to `create` and match. Unknown commands, aliases and options in a `gh` invocation
 match. Selectors may precede the command group: `--repo`/`-R` is supported
-only for `pr`, `issue` and `release`. Every `--hostname` option matches,
-including top-level and attached forms.
+only for `pr`, `issue` and `release`, and only with a bare `OWNER/REPO` value.
+`HOST/OWNER/REPO`, URL and SSH forms match because gh then selects that host.
+Every `--hostname` option matches, including top-level and attached forms.
+PR and issue operands must be numbers, optionally written `#N`; URL and branch
+operands match. A `repo view` operand must be a bare `OWNER/REPO`. A
+`release view` tag containing `:` matches. Without a host-bearing selector, gh
+still uses its default host, `GH_HOST` and its configuration, which
+classification cannot observe; this is not network isolation.
 `--help` is consumed wherever it appears;
 help does not make a mutation a verified read. Short options that take a value accept
 attached values and clusters, such as `-Ro/r`.
 
-The accepted command-option subset is deliberately limited: `--json` and
-`--jq`/`-q` on reads other than `diff`; `--comments`/`-c` on issue/PR views;
+The accepted command-option subset is deliberately limited: `--json` on reads
+other than `diff`; `--comments`/`-c` on issue/PR views;
 `--limit`/`-L` on lists; `--state`/`-s`, `--assignee`/`-a`, `--author`/`-A`,
 `--label`/`-l`, `--search`/`-S` on issue/PR lists; `--color`, `--patch`,
 `--name-only` on PR diffs; and `--required` on PR checks. Other flags match,
 including field/input flags, custom headers, browser launch and template options.
+`--jq`/`-q` matches in every form: gh 2.57.0 evaluates the filter with gojq's
+environment loader, so `env` and `$ENV` can read the process environment.
 
 Flag and alias meanings were checked against the
 gh 2.102.0 (2026-09-30) manual pages for `gh-pr`, `gh-issue`, `gh-repo`,
