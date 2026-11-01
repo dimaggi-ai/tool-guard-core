@@ -285,10 +285,12 @@ only for `pr`, `issue` and `release`, and only with a bare `OWNER/REPO` value.
 `HOST/OWNER/REPO`, URL and SSH forms match because gh then selects that host.
 Every `--hostname` option matches, including top-level and attached forms.
 PR and issue operands must be numbers, optionally written `#N`; URL and branch
-operands match. A `repo view` operand must be a bare `OWNER/REPO`. A
+operands match. A `repo view` operand must be a bare `OWNER/REPO` and a
+`repo list` operand a bare `OWNER`. A
 `release view` tag containing `:` matches. Without a host-bearing selector, gh
-still uses its default host, `GH_HOST` and its configuration, which
-classification cannot observe; this is not network isolation.
+still uses its default host, `GH_REPO`, `GH_HOST`, its configuration and the
+current repository's git remotes, which classification cannot observe; this is
+not network isolation.
 `--help` is consumed wherever it appears;
 help does not make a mutation a verified read. Short options that take a value accept
 attached values and clusters, such as `-Ro/r`.
@@ -300,7 +302,9 @@ other than `diff`; `--comments`/`-c` on issue/PR views;
 `--name-only` on PR diffs; and `--required` on PR checks. Other flags match,
 including field/input flags, custom headers, browser launch and template options.
 `--jq`/`-q` matches in every form: gh 2.57.0 evaluates the filter with gojq's
-environment loader, so `env` and `$ENV` can read the process environment.
+environment loader, so `env` and `$ENV` can read the process environment
+(verified in the gh 2.57.0 source, `pkg/cmdutil/json_flags.go`; later versions
+were not checked).
 
 Flag and alias meanings were checked against the
 gh 2.102.0 (2026-09-30) manual pages for `gh-pr`, `gh-issue`, `gh-repo`,

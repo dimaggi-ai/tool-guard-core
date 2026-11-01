@@ -20,7 +20,8 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   Every `gh api` command and every `--hostname` option matches.
   `--repo`/`-R` is supported only with a bare `OWNER/REPO` value; `HOST/OWNER/REPO`,
   URL and SSH forms match. PR and issue operands must be numbers (optionally `#N`),
-  a `repo view` operand must be a bare `OWNER/REPO`, and URL or branch operands match.
+  a `repo view` operand must be a bare `OWNER/REPO`, a `repo list` operand a bare `OWNER`,
+  and URL or branch operands match.
   `--jq`/`-q` matches because gh evaluates the filter with access to the process environment.
   `gh_read` matches unless every segment uses a supported gh read operation or an explicitly supported helper command form. Initially, the only supported helper has the bare executable name `jq` and exactly one literal filter operand whose resolved value is `.title`, with no options or file operands, reading stdin only. Helper segments remain subject to gh-mention and unresolved-word checks. Unsupported programs and argument forms match even when they are harmless and contain no gh mention. With an enforced `escalate` rule, these commands require escalation. All shell redirections match, including in otherwise supported reads. Every backslash immediately followed by a newline matches, including inside quoted text. Ordinary newline-separated supported reads remain supported. A no-match does not itself grant permission; other policy rules still apply. If no rule matches, the default decision is allow.
   Nested command strings, scripts, callbacks, and commands supplied through stdin or files are not recursively verified. Programs and builtins that execute them are excluded from the supported command forms and therefore match regardless of any gh mention. Findings involving constructed or nested gh commands are not accepted no-match exceptions.

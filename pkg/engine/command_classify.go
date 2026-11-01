@@ -495,7 +495,8 @@ func classifyGH(args []string) (bool, string) {
 		return true, "unsupported gh operands"
 	}
 	// PR and issue operands may also be URLs or branch names; repo operands may
-	// name a host. Only numbers and bare OWNER/REPO are supported.
+	// name a host. Only numbers, a bare OWNER for repo list and a bare
+	// OWNER/REPO for repo view are supported.
 	for _, operand := range operands {
 		switch group {
 		case "pr", "issue":
@@ -503,10 +504,14 @@ func classifyGH(args []string) (bool, string) {
 				return true, "unsupported gh operands"
 			}
 		case "repo":
-			if !ghRepoName(operand) {
+			if verb == "list" && !ghNameSegment(operand, false) {
+				return true, "unsupported gh operands"
+			}
+			if verb == "view" && !ghRepoName(operand) {
 				return true, "unsupported gh operands"
 			}
 		case "release":
+			// Conservative: refuse URL- and scheme-like tags.
 			if strings.Contains(operand, ":") {
 				return true, "unsupported gh operands"
 			}

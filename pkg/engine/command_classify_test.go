@@ -34,6 +34,8 @@ func TestCommandClassifyReads(t *testing.T) {
 		"gh pr list -R dimaggi-ai/tool-guard-core", "gh repo view dimaggi-ai/tool-guard-core",
 		"gh issue view '#5' --repo=Org-1/repo_name.x", "gh pr view 12 --json title,state",
 		"gh release view v1.2.3 -R o/r",
+		"gh repo list dimaggi-ai", "gh repo ls Org_1", "gh pr list -R 'o/r'", `gh pr list -R "o/r"`,
+		"gh pr list -R o/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 	} {
 		t.Run(command, func(t *testing.T) {
 			if got, reason := EvalConditionWithDetail(commandReadCondition(), map[string]interface{}{"parameters.command": command}); got {
@@ -118,6 +120,12 @@ func TestCommandClassifyRejectsUnverifiedCommands(t *testing.T) {
 		"gh pr checks https://attacker.example/o/r/pull/1", "gh issue view https://attacker.example/o/r/issues/1",
 		"gh pr view branch-name", "gh pr view attacker.example/o/r", "gh issue view 1x", "gh issue view '#'",
 		"gh pr view 12345678901", "gh release view https://attacker.example/o/r",
+		"gh repo list o/r", "gh repo list attacker.example/o", "gh repo list https://attacker.example/o",
+		"gh repo list .", "gh repo list o.x",
+		"gh pr list -R=attacker.example/o/r", "gh pr list -R 'attacker.example/o/r'",
+		`gh pr list -R "attacker.example/o/r"`, `gh pr list -R attacker.example\/o/r`,
+		"GH_REPO=attacker.example/o/r gh pr list", "GH_HOST=attacker.example gh pr list",
+		"gh pr list -R \u043e/r", "gh pr list -R o\uff0fr", "gh pr list -R o/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		// gh evaluates --jq with access to the process environment (review Q1).
 		"gh pr view 12 --json title --jq .title", "gh pr view 12 --json title -q .title",
 		"gh pr view 12 --json title --jq=.title", "gh pr view 12 --json title -q.title",
