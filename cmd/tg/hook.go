@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -10,10 +11,12 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/engine"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/policyload"
+	"sort"
 )
 
 // cmdHook is a first-class PreToolUse guard for coding agents (Claude Code,
@@ -58,6 +61,10 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	agentID := fs.String("agent-id", "coding-agent", "agent_id recorded on the synthesized envelope")
 	failClosed := fs.Bool("fail-closed", false, "on internal error, emit deny instead of allow")
 	failClosedTools := fs.String("fail-closed-tools", "", "comma list of tool names to fail CLOSED for on internal error (others fail open); overrides -fail-closed's global behavior")
+	failClosedGroups := fs.String("fail-closed-groups", "", "comma list of tool groups (shell, filesystem_writes, filesystem, network_egress) to fail CLOSED for on internal error; a tool name the hook does not recognise is in group shell. A tool fails closed when its name is in -fail-closed-tools OR its group is listed here")
+	escalateAs := fs.String("escalate-as", "ask", "how a policy escalation is returned to the harness: ask (default) | deny. Use deny for a harness measured to run a call the hook answered ask to, or for an unattended run where nobody can answer a prompt. Any other value is treated as deny")
+	agyEscalation := fs.String("antigravity-escalation", "force_ask", "how an escalation is expressed to Antigravity: force_ask (default; in an interactive session it prompts even where an \"Always Allow\" rule exists, which ask does not) | ask (the harness's own value). Measured end to end on Antigravity CLI 1.5.3 headless, NEITHER value stops an escalated call: with --dangerously-skip-permissions the harness auto-approves, and without the flag it runs no write at all. See docs/support-matrix.md.")
+	dialectStr := fs.String("dialect", "auto", "hook payload and output dialect: auto | claude | antigravity. auto reads the input shape")
 	protectPaths := fs.String("protect-paths", "", "comma list of path prefixes; a write-capable tool targeting one is denied BEFORE policy eval, unconditionally")
 	var protectPath repeatablePathFlag
 	fs.Var(&protectPath, "protect-path", "path prefix denied before policy eval; repeat for multiple paths")
@@ -66,13 +73,22 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	unknownToolsDeny := fs.Bool("unknown-tools-deny", false, "deny any tool_name not declared in scope.tool_names of some loaded ENFORCEMENT policy (closes the tool-name-spoofing/new-tool-goes-ungoverned class); mirrors tg-proxy's -unknown-tools-deny")
 
 	parseErr := fs.Parse(args)
+	// The output dialect is needed even on the error paths, so resolve it
+	// before anything is emitted. Until the input is decoded, auto can only
+	// mean the Claude/Codex contract.
+	dialect := resolveHookDialect(*dialectStr, false)
 
 	failTools := csvSet(*failClosedTools)
+	failGroups := csvSet(*failClosedGroups)
 	// failDecide picks the on-error decision for a KNOWN tool name.
 	failDecide := func(tool string) (string, string) {
-		if len(failTools) > 0 {
-			if failTools[strings.ToLower(tool)] {
+		if len(failTools) > 0 || len(failGroups) > 0 {
+			lt := strings.ToLower(tool)
+			if failTools[lt] {
 				return "deny", fmt.Sprintf("Tool Guard hook could not evaluate; failing closed for tool %q (-fail-closed-tools)", tool)
+			}
+			if group := hookToolGroup(lt); failGroups[group] {
+				return "deny", fmt.Sprintf("Tool Guard hook could not evaluate; failing closed for tool %q in group %q (-fail-closed-groups)", tool, group)
 			}
 			return "allow", ""
 		}
@@ -88,7 +104,7 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	// asked for destructive calls to fail closed. Pure default (no fail-closed
 	// flags) still fails open so a transient glitch never wedges the agent.
 	failUnattributable := func(why string) (string, string) {
-		if *failClosed || len(failTools) > 0 {
+		if *failClosed || len(failTools) > 0 || len(failGroups) > 0 {
 			return "deny", fmt.Sprintf("Tool Guard hook could not read/parse the tool call (%s); failing closed (fail-closed engaged)", why)
 		}
 		return "allow", ""
@@ -101,8 +117,18 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 			fmt.Fprint(os.Stderr, hookUsage)
 			return 0
 		}
+		// On a parse error the parsed flags cannot be trusted: Go's flag
+		// package stops at the FIRST unrecognised flag, so a fail-closed flag
+		// written after one was never parsed, and the hook would fail open on
+		// the very error path the operator asked it to fail closed on. Scan
+		// the raw argument list instead: a mistyped flag must not be able to
+		// disarm fail-closed.
+		if argsRequestFailClosed(args) {
+			emitHookDecisionDialect(stdout, dialect, *agyEscalation, "deny", "Tool Guard hook could not parse its command-line flags (flag parse error); a -fail-closed flag appears in the argument list, so failing closed")
+			return 0
+		}
 		d, reason := failUnattributable("flag parse error")
-		emitHookDecisionTo(stdout, d, reason)
+		emitHookDecisionDialect(stdout, dialect, *agyEscalation, d, reason)
 		return 0
 	}
 
@@ -113,12 +139,12 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	raw, rerr := io.ReadAll(io.LimitReader(stdin, maxHookStdin+1))
 	if rerr != nil {
 		d, reason := failUnattributable("stdin read error")
-		emitHookDecisionTo(stdout, d, reason)
+		emitHookDecisionDialect(stdout, dialect, *agyEscalation, d, reason)
 		return 0
 	}
 	if len(raw) > maxHookStdin {
 		d, reason := failUnattributable("oversized stdin")
-		emitHookDecisionTo(stdout, d, reason)
+		emitHookDecisionDialect(stdout, dialect, *agyEscalation, d, reason)
 		return 0
 	}
 
@@ -128,23 +154,50 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 		// fail-closed mode is engaged (can't prove it's non-destructive),
 		// else fail open.
 		d, reason := failUnattributable("malformed JSON")
-		emitHookDecisionTo(stdout, d, reason)
+		emitHookDecisionDialect(stdout, dialect, *agyEscalation, d, reason)
 		return 0
 	}
 
+	// Antigravity dialect: a toolCall object instead of tool_name/tool_input.
+	// Decoded here so every downstream stage (tool group, protected paths,
+	// policy conditions, audit) sees one canonical envelope.
+	if strings.TrimSpace(in.ToolName) == "" && in.ToolCall != nil {
+		in.ToolName = in.ToolCall.Name
+		in.ToolInput = in.ToolCall.Args
+	}
+
+	dialect = resolveHookDialect(*dialectStr, in.ToolCall != nil)
+
 	tool := strings.ToLower(strings.TrimSpace(in.ToolName))
 	if tool == "" {
-		tool = "bash"
+		// No usable tool_name. The payload is not in the PreToolUse shape this
+		// hook understands — another harness's hook contract, or an empty
+		// object. Defaulting it to "bash" invented an identity for a call we
+		// cannot see and let it be evaluated as a shell command, so it goes
+		// down the same unattributable path as malformed input.
+		d, reason := failUnattributable("no tool_name field; payload format not recognised")
+		emitHookDecisionDialect(stdout, dialect, *agyEscalation, d, reason)
+		return 0
 	}
 
 	env := hookEnvelope(tool, in, *agentID)
+	// Alias families (Path/path/file_path, Content/text/content,
+	// CommandLine/script/command) can carry more than one distinct value in a
+	// single call, and which one a harness will act on is not knowable from the
+	// payload. Canonicalising one value and parking the rest on keys no policy
+	// reads produced allow decisions for a protected path and for a credential,
+	// measured 2026-11-09. So every candidate is evaluated, and the strictest
+	// decision wins: the guard does not have to know which spelling the harness
+	// honours, because all of them are checked.
+	variants, truncatedVariants := hookParamVariants(hookParams(in))
+	envs := hookVariantEnvelopes(env, variants)
 	auditPolicyHash, _ := policyload.PolicySetHash(nil)
 
 	// emitAudited emits the decision and, when -audit-log is set, appends it
 	// to the hash chain (best-effort — an audit failure never changes the
 	// decision). Used for every decision that has a real envelope.
 	emitAudited := func(dec, reason string, result *domain.EvaluationResult) {
-		emitHookDecisionTo(stdout, dec, reason)
+		emitHookDecisionDialect(stdout, dialect, *agyEscalation, dec, reason)
 		if *auditLog != "" {
 			appendHookAuditBestEffort(os.Stderr, *auditLog, env, result, dec, reason, auditPolicyHash)
 		}
@@ -155,9 +208,11 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	if *protectSelf {
 		protectList = append(selfProtectPaths(*policyDir, *policyFile), protectList...)
 	}
-	if violated, reason := engine.ViolatesProtectedPaths(env, protectList); violated {
-		emitAudited("deny", reason, nil)
-		return 0
+	for _, e := range envs {
+		if violated, reason := engine.ViolatesProtectedPaths(e, protectList); violated {
+			emitAudited("deny", reason, nil)
+			return 0
+		}
 	}
 
 	// A policy source is required to evaluate. Missing one is an operator
@@ -174,7 +229,18 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 		mode = domain.PolicyModeShadow
 	}
 
-	dec, reason, result, auditPolicyHash := evalHook(*policyDir, *policyFile, env, mode, failDecide, *unknownToolsDeny)
+	dec, reason, result, auditPolicyHash := evalHook(*policyDir, *policyFile, envs, truncatedVariants, mode, failDecide, *unknownToolsDeny)
+	if truncatedVariants {
+		// Say so in the answer the operator and the model see: a decision that
+		// sampled only part of the candidate set must not read as complete.
+		reason = strings.TrimRight(reason, "\n") + fmt.Sprintf(
+			"\n(parameter-spelling limit: %d distinct alias values exceeded the reviewable limit of %d, so not every spelling could be evaluated)",
+			len(envs), maxHookParamVariants)
+	}
+	if *escalateAs != "ask" && *escalateAs != "deny" {
+		fmt.Fprintf(os.Stderr, "tg hook: -escalate-as %q is not ask or deny; treating it as deny\n", *escalateAs)
+	}
+	dec, reason = applyEscalateAs(*escalateAs, dec, reason)
 	emitAudited(dec, reason, result)
 	return 0
 }
@@ -182,7 +248,12 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 // evalHook loads the policy set and evaluates env, recovering from any panic
 // so the hook can never crash the agent. On load failure or panic it returns
 // the fail-open/closed decision for env.ToolName.
-func evalHook(policyDir, policyFile string, env *domain.ActionEnvelope, mode domain.PolicyMode, failDecide func(string) (string, string), unknownToolsDeny bool) (dec string, reason string, result *domain.EvaluationResult, policySetHash string) {
+// evalHook decides one tool call. envs carries the base envelope first and one
+// copy per alias candidate; the strictest decision across all of them wins, and
+// aliasLimitTruncated says the candidate list was cut off by the reviewable
+// limit, which must escalate rather than allow.
+func evalHook(policyDir, policyFile string, envs []*domain.ActionEnvelope, aliasLimitTruncated bool, mode domain.PolicyMode, failDecide func(string) (string, string), unknownToolsDeny bool) (dec string, reason string, result *domain.EvaluationResult, policySetHash string) {
+	env := envs[0]
 	policySetHash, _ = policyload.PolicySetHash(nil)
 	defer func() {
 		if r := recover(); r != nil {
@@ -227,7 +298,20 @@ func evalHook(policyDir, policyFile string, env *domain.ActionEnvelope, mode dom
 		return "deny", fmt.Sprintf("tool_name %q is not declared in scope.tool_names of any loaded ENFORCEMENT policy (-unknown-tools-deny)", env.ToolName), nil, policySetHash
 	}
 
-	result = engine.NewEvaluator().Evaluate(env, policies, mode)
+	result = evaluateHookEnvelopes(envs, policies, mode)
+	if aliasLimitTruncated {
+		// More distinct parameter spellings than the reviewable limit: the
+		// strictest decision found so far is permissive, and an unexamined
+		// spelling could be the harmful one. Hold it for a human instead of
+		// pretending the sampled set was the whole truth.
+		if rankHookAction(result.ActionTaken) < rankHookAction(domain.ActionEscalated) {
+			// The candidate set was cut off and the strictest decision found is
+			// still permissive: an unexamined spelling could be the harmful one,
+			// so hold it for a human rather than report allow.
+			result.ActionTaken = domain.ActionEscalated
+			result.Decision = domain.DecisionEscalated
+		}
+	}
 	// Branches on ActionTaken (what actually happened), NOT Decision (what
 	// would have happened). In shadow mode the engine reports
 	// Decision=denied/escalated alongside ActionTaken=allowed_shadow — the
@@ -248,6 +332,19 @@ func evalHook(policyDir, policyFile string, env *domain.ActionEnvelope, mode dom
 	}
 }
 
+// applyEscalateAs returns an escalation as a denial when the operator asked
+// for that with -escalate-as deny. Only the decision "ask" is converted, so an
+// allow and a real deny pass through unchanged. Every value other than the
+// literal "ask" converts: a mistyped value must not leave an escalation as a
+// prompt that a harness may ignore. Measured 2026-11-09: Codex CLI 0.166.0 ran
+// a call the hook answered ask to.
+func applyEscalateAs(flagVal, dec, reason string) (string, string) {
+	if dec != "ask" || flagVal == "ask" {
+		return dec, reason
+	}
+	return "deny", "Escalation returned as a denial (-escalate-as deny): " + reason
+}
+
 // hookReason explains the applied action, not a stricter shadow-only raw
 // decision. In a mixed set, AppliedPrimaryCitation names the rule that really
 // blocked or escalated the call; PrimaryCitation may belong to telemetry.
@@ -263,6 +360,26 @@ func hookReason(r *domain.EvaluationResult) string {
 	return r.DecisionReason
 }
 
+// argsRequestFailClosed reports whether any fail-closed flag appears in the
+// raw argument list, with a single or double dash and with or without "=".
+// It exists for the flag-parse-error path only, where the parsed values
+// cannot be trusted because Go stops parsing at the first unknown flag.
+func argsRequestFailClosed(args []string) bool {
+	for _, a := range args {
+		name := strings.TrimPrefix(strings.TrimPrefix(a, "--"), "-")
+		if name == "" {
+			continue
+		}
+		if i := strings.IndexByte(name, '='); i >= 0 {
+			name = name[:i]
+		}
+		if name == "fail-closed" || name == "fail-closed-tools" || name == "fail-closed-groups" {
+			return true
+		}
+	}
+	return false
+}
+
 // hookInput is the PreToolUse stdin object. tool_input is kept raw so the
 // FULL parameter set (command, file_path, path, and any arrays / nested edit
 // objects) flows into the envelope — cherry-picking three fields would let an
@@ -270,20 +387,147 @@ func hookReason(r *domain.EvaluationResult) string {
 type hookInput struct {
 	ToolName  string          `json:"tool_name"`
 	ToolInput json.RawMessage `json:"tool_input"`
+
+	// Antigravity CLI 1.5.3 sends a different shape entirely, captured from a
+	// real install on 2026-11-09:
+	//   {"toolCall":{"name":"write_file","args":{"Path":"...","Content":"..."}}}
+	// Arg names are PascalCase (protojson). The web documentation names these
+	// tools write_to_file / TargetFile; the shipped CLI emits write_file /
+	// Path, which is why this comes from a capture and not from the docs.
+	ToolCall *struct {
+		Name string          `json:"name"`
+		Args json.RawMessage `json:"args"`
+	} `json:"toolCall"`
+}
+
+// pathAliasNames and contentAliasNames are the parameter names harnesses use
+// for the same two things a policy matches on: the file being written, and
+// its new content. Matching is on the normalised name (case-folded, with
+// '_', '-', ' ' and '.' removed), so TargetFile, target_file and filePath all
+// normalise to "targetfile". This list is deliberately generic rather than a
+// per-harness whitelist: it encodes naming style, not knowledge of any one
+// vendor's schema, so it keeps working for a harness nobody has captured yet.
+var pathAliasNames = map[string]bool{
+	"path": true, "filepath": true, "file": true, "filename": true, "targetfile": true,
+	"targetpath": true, "abspath": true, "absolutepath": true, "filetopatch": true,
+}
+
+// commandAliasNames covers shell tools that name the command string something
+// other than "command". Antigravity CLI 1.5.3 emits "CommandLine" (captured
+// 2026-11-09). Without this the shell classifier and the protected-path scan
+// never see the command, so every such call escalates and no redirection is
+// checked.
+var commandAliasNames = map[string]bool{
+	"commandline": true, "cmdline": true, "cmd": true, "script": true,
+	"shellcommand": true, "commandstring": true, "terminalcommand": true,
+}
+
+var contentAliasNames = map[string]bool{
+	"contents": true, "text": true, "filecontent": true, "newcontent": true,
+	"newstring": true, "content": true,
+}
+
+// normalizeHookParams adds the canonical parameter names policies match on
+// (file_path, content) when the caller used a different name for the same
+// thing, and only when the canonical name is absent. A payload that already
+// carries file_path is returned untouched.
+//
+// Without this, a policy that matches parameters.file_path is inert against
+// every harness that names the field differently, which is exactly the
+// silently-uncovered-write CTO review D3 requires to be closed.
+// When one alias family carries several DIFFERENT values, for example
+// {"Path":"AGENTS.md","Filename":"plain.txt"}, every distinct value is exposed
+// under a distinct canonical key rather than one of them being chosen. Random
+// choice is not acceptable: measured 2026-11-09 the previous map-iteration
+// version turned the same 500 identical calls into two different results
+// (file_path = AGENTS.md 402 times, plain.txt 98 times), so identical bytes
+// could be denied and allowed. Choosing by priority is unsafe in the other
+// direction: if the policy-relevant value loses, a write to a protected file
+// rides in under an innocuous alias. Keys are visited in sorted order, and
+// candidates land on `file_path` then `path` then `target_file` (only keys not
+// already present), all of which the shipped policies already match.
+func normalizeHookParams(raw json.RawMessage) json.RawMessage {
+	var m map[string]json.RawMessage
+	if len(raw) == 0 || json.Unmarshal(raw, &m) != nil || len(m) == 0 {
+		return raw
+	}
+	norm := func(k string) string {
+		var b strings.Builder
+		for _, r := range k {
+			switch r {
+			case '_', '-', ' ', '.':
+			default:
+				b.WriteRune(unicode.ToLower(r))
+			}
+		}
+		return b.String()
+	}
+	// Sorted by literal key name, so both the candidate order and the
+	// ambiguity report never depend on Go map iteration order.
+	var keys []string
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	// Free canonical keys a policy already matches, in the order candidates
+	// take them. Never overwrites a key the caller sent.
+	freeKeys := map[string][]string{
+		"file_path": {"file_path", "path", "target_file", "file_path_2", "file_path_3"},
+		"content":   {"content", "text", "file_content", "content_2", "content_3"},
+		"command":   {"command", "cmd", "command_line", "command_2", "command_3"},
+	}
+	addAlias := func(target string, aliases map[string]bool) {
+		// The literal key, not the normalised one: a policy matches
+		// parameters.content, so a payload carrying "Content" still needs the
+		// canonical spelling added.
+		if _, ok := m[target]; ok {
+			return
+		}
+		// Candidate keys in sorted order, deduplicated by value so two aliases
+		// naming the same file contribute one entry.
+		type cand struct {
+			key string
+			val json.RawMessage
+		}
+		var cands []cand
+		seenVal := map[string]bool{}
+		for _, k := range keys {
+			if !aliases[norm(k)] {
+				continue
+			}
+			if seenVal[string(m[k])] {
+				continue
+			}
+			seenVal[string(m[k])] = true
+			cands = append(cands, cand{k, m[k]})
+		}
+		placed := 0
+		for _, free := range freeKeys[target] {
+			if placed >= len(cands) {
+				break
+			}
+			if _, taken := m[free]; taken {
+				continue
+			}
+			m[free] = cands[placed].val
+			placed++
+		}
+	}
+	addAlias("file_path", pathAliasNames)
+	addAlias("content", contentAliasNames)
+	addAlias("command", commandAliasNames)
+	out, err := json.Marshal(m)
+	if err != nil {
+		return raw
+	}
+	return out
 }
 
 // hookEnvelope maps a PreToolUse object onto an ActionEnvelope, forwarding the
 // entire tool_input as parameters. Falls back to an empty object when
 // tool_input is absent or not a JSON object.
 func hookEnvelope(tool string, in hookInput, agentID string) *domain.ActionEnvelope {
-	params := json.RawMessage(`{}`)
-	if len(in.ToolInput) > 0 {
-		var probe map[string]interface{}
-		if json.Unmarshal(in.ToolInput, &probe) == nil {
-			params = in.ToolInput
-		}
-	}
-
 	return &domain.ActionEnvelope{
 		EnvelopeID: fmt.Sprintf("hook-%d", time.Now().UnixNano()),
 		Timestamp:  time.Now().UTC(),
@@ -292,8 +536,26 @@ func hookEnvelope(tool string, in hookInput, agentID string) *domain.ActionEnvel
 		OrgID:      "local",
 		ToolName:   tool,
 		ToolGroup:  hookToolGroup(tool),
-		Parameters: params,
+		Parameters: hookParams(in),
 	}
+}
+
+// hookParams returns the parameter object the engine evaluates: the harness's
+// tool input with alias families canonicalised. It is exported through
+// hookEnvelope and used directly by the caller that builds alias variants, so
+// variants start from the SAME object the base decision was made on. Starting
+// them from the raw payload instead dropped the other family's canonical key and
+// made the engine look at a call shape the harness never sends, which produced
+// denials no real call would get.
+func hookParams(in hookInput) json.RawMessage {
+	params := json.RawMessage(`{}`)
+	if len(in.ToolInput) > 0 {
+		var probe map[string]interface{}
+		if json.Unmarshal(in.ToolInput, &probe) == nil {
+			params = normalizeHookParams(in.ToolInput)
+		}
+	}
+	return params
 }
 
 // hookToolGroup is a small heuristic so tool_groups-scoped policies match.
@@ -304,9 +566,16 @@ func hookToolGroup(tool string) string {
 	switch tool {
 	case "write", "edit", "notebookedit", "apply_patch", "multiedit", "create":
 		return "filesystem_writes"
-	case "read":
+	// Write-capable tool names from the harness contract sources recorded in
+	// CTO/Research/review-2026-11-08/opus-2026-11-09-claims-and-harness-plan.md
+	// (S-GM Gemini CLI tools, S-AG-web Antigravity tools). Without these the
+	// default bucket is "shell", so a tool-group-scoped policy such as
+	// coding-agent-context-files never sees the write at all.
+	case "write_file", "write_to_file", "replace", "replace_file_content", "multi_replace_file_content":
+		return "filesystem_writes"
+	case "read", "read_file", "view_file":
 		return "filesystem"
-	case "http", "fetch", "webfetch":
+	case "http", "fetch", "webfetch", "web_fetch", "read_url_content":
 		return "network_egress"
 	default:
 		return "shell"
@@ -342,6 +611,68 @@ type hookOutput struct {
 
 // emitHookDecisionTo writes the hook JSON to w. It never returns an error
 // to the caller — a hook must always exit 0.
+// Hook dialects. The input shape and the output contract differ per harness,
+// and emitting the wrong output contract is not a cosmetic bug: the Gemini
+// CLI documentation states malformed hook stdout defaults to Allow, so a
+// Claude-shaped answer handed to a harness that expects a top-level "decision"
+// is a silent fail-open.
+const (
+	dialectClaude      = "claude"
+	dialectAntigravity = "antigravity"
+)
+
+// resolveHookDialect picks the output contract. An explicit -dialect wins;
+// otherwise the input shape decides.
+func resolveHookDialect(flagVal string, hasToolCall bool) string {
+	switch flagVal {
+	case dialectClaude, dialectAntigravity:
+		return flagVal
+	}
+	if hasToolCall {
+		return dialectAntigravity
+	}
+	return dialectClaude
+}
+
+// emitHookDecisionDialect writes the decision in the named dialect.
+// Antigravity CLI 1.5.3 reads a top-level {"decision","reason"} object, with
+// decision one of allow | deny | ask | force_ask, per the hooks.md shipped
+// with that CLI. Claude Code and Codex read hookSpecificOutput.permissionDecision.
+// resolveAntigravityEscalation maps our "ask" onto the Antigravity decision
+// that was MEASURED to stop a tool call. Measured 2026-11-09 against
+// Antigravity CLI 1.5.3 in headless print mode:
+//
+//	Tool Guard emits "ask"        -> the tool call RAN (a write to AGENTS.md
+//	                                 landed even without
+//	                                 --dangerously-skip-permissions)
+//	Tool Guard emits "force_ask"  -> the call was refused, because headless
+//	                                 mode cannot prompt
+//
+// So "ask" is advisory on that harness and force_ask is not. Default to the
+// one that actually stops the call; -antigravity-escalation ask restores the
+// documented-but-ineffective value for an interactive operator who wants the
+// "Always Allow" cache respected.
+func resolveAntigravityEscalation(flagVal, decision string) string {
+	if decision != "ask" {
+		return decision
+	}
+	if flagVal == "ask" {
+		return "ask"
+	}
+	return "force_ask"
+}
+
+func emitHookDecisionDialect(w io.Writer, dialect, escalationDecision, decision, reason string) {
+	if dialect == dialectAntigravity {
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"decision": resolveAntigravityEscalation(escalationDecision, decision),
+			"reason":   reason,
+		})
+		return
+	}
+	emitHookDecisionTo(w, decision, reason)
+}
+
 func emitHookDecisionTo(w io.Writer, decision, reason string) {
 	var out hookOutput
 	out.HookSpecificOutput.HookEventName = "PreToolUse"
@@ -397,13 +728,29 @@ const hookUsage = `tg hook — PreToolUse guard for coding agents
 
 Usage:
   tg hook (-policy-dir DIR | -policy FILE) [-mode shadow|enforcement]
-          [-agent-id NAME] [-fail-closed] [-fail-closed-tools bash,write,edit]
+          [-agent-id NAME] [-dialect auto|claude|antigravity]
+          [-escalate-as ask|deny] [-antigravity-escalation force_ask|ask]
+          [-fail-closed] [-fail-closed-tools bash,write,edit]
+          [-fail-closed-groups shell,filesystem_writes,network_egress]
           [-protect-path PATH ...] [-protect-paths P1,P2]
-          [-protect-self] [-unknown-tools-deny]
+          [-protect-self] [-unknown-tools-deny] [-audit-log FILE]
 
-Reads ONE PreToolUse JSON object on stdin, evaluates it, and writes a
-hookSpecificOutput permissionDecision (deny|ask|allow) to stdout. Always
-exits 0.
+Reads ONE PreToolUse JSON object on stdin, evaluates it, and writes one
+decision to stdout. Always exits 0.
+
+  -dialect claude       hookSpecificOutput.permissionDecision: deny|ask|allow
+                        (Claude Code, Codex CLI)
+  -dialect antigravity  top-level {"decision","reason"}: deny|force_ask|ask|allow
+                        (Antigravity CLI)
+  -dialect auto         default: antigravity when stdin carries a toolCall
+                        object, claude otherwise
+
+  -escalate-as deny     return a policy escalation as deny. Use it for a
+                        harness that runs a call answered ask (see
+                        docs/support-matrix.md) and for unattended runs.
+  -antigravity-escalation ask
+                        emit ask instead of force_ask in the antigravity
+                        dialect (measured NOT to stop a headless call).
 
 RECOMMENDED for any enforcing deployment: pass -fail-closed-tools (or
 -fail-closed). Without one, an internal error (unparseable stdin, a policy
@@ -412,3 +759,119 @@ tooling glitch never wedges the agent, but that also means the error is
 never denied either. That default suits local dev; it is not what you want
 once this hook is actually enforcing policy.
 `
+
+// maxHookParamVariants bounds how many alias candidates one call can raise.
+// Bounded so a hostile payload cannot make the hook evaluate an unbounded
+// number of envelopes; beyond the limit the decision escalates rather than
+// claiming the sampled subset was complete.
+const maxHookParamVariants = 16
+
+// hookParamVariants returns one parameters object per distinct value in each
+// alias family, with that value placed on the canonical key the policies read.
+// The base object is NOT included (the caller already evaluates it). The second
+// return is true when candidates exceeded the limit and were truncated.
+func hookParamVariants(raw json.RawMessage) ([]json.RawMessage, bool) {
+	var m map[string]json.RawMessage
+	if len(raw) == 0 || json.Unmarshal(raw, &m) != nil || len(m) == 0 {
+		return nil, false
+	}
+	norm := func(k string) string {
+		var b strings.Builder
+		for _, r := range k {
+			switch r {
+			case '_', '-', ' ', '.':
+			default:
+				b.WriteRune(unicode.ToLower(r))
+			}
+		}
+		return b.String()
+	}
+	families := []struct {
+		canonical string
+		aliases   map[string]bool
+	}{
+		{"file_path", pathAliasNames},
+		{"content", contentAliasNames},
+		{"command", commandAliasNames},
+	}
+	var keys []string
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var out []json.RawMessage
+	seen := map[string]bool{}
+	total := 0
+	for _, fam := range families {
+		base := m[fam.canonical]
+		for _, k := range keys {
+			if !fam.aliases[norm(k)] {
+				continue
+			}
+			v := m[k]
+			if bytes.Equal(bytes.TrimSpace(v), bytes.TrimSpace(base)) {
+				continue
+			}
+			total++
+			if len(out) >= maxHookParamVariants {
+				continue
+			}
+			mm := make(map[string]json.RawMessage, len(m)+1)
+			for kk, vv := range m {
+				mm[kk] = vv
+			}
+			mm[fam.canonical] = v
+			b, err := json.Marshal(mm)
+			if err != nil || seen[string(b)] {
+				continue
+			}
+			seen[string(b)] = true
+			out = append(out, b)
+		}
+	}
+	return out, total > maxHookParamVariants
+}
+
+// hookVariantEnvelopes copies the base envelope once per candidate parameter
+// set. Tool name, group, agent and session stay identical: only the parameters
+// differ, which is exactly the ambiguity being resolved.
+func hookVariantEnvelopes(base *domain.ActionEnvelope, variants []json.RawMessage) []*domain.ActionEnvelope {
+	out := []*domain.ActionEnvelope{base}
+	for i, v := range variants {
+		e := *base
+		e.Parameters = v
+		e.EnvelopeID = fmt.Sprintf("%s-alias-%d", base.EnvelopeID, i+1)
+		out = append(out, &e)
+	}
+	return out
+}
+
+// rankHookAction orders engine outcomes by how protective they are, so the
+// strictest of several alias evaluations wins. Shadow-mode actions rank as the
+// least protective because they do not stop anything.
+func rankHookAction(a domain.ActionTaken) int {
+	switch a {
+	case domain.ActionDenied:
+		return 3
+	case domain.ActionEscalated:
+		return 2
+	default:
+		return 0
+	}
+}
+
+// evaluateHookEnvelopes evaluates every alias variant and returns the strictest
+// result. One candidate denied is enough: the guard cannot know which spelling
+// the harness will act on.
+func evaluateHookEnvelopes(envs []*domain.ActionEnvelope, policies []domain.Policy, mode domain.PolicyMode) *domain.EvaluationResult {
+	ev := engine.NewEvaluator()
+	best := ev.Evaluate(envs[0], policies, mode)
+	for _, e := range envs[1:] {
+		r := ev.Evaluate(e, policies, mode)
+		if rankHookAction(r.ActionTaken) > rankHookAction(best.ActionTaken) {
+			best = r
+		}
+	}
+	return best
+}

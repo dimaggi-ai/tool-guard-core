@@ -1,12 +1,12 @@
 {
-  "_comment": "Install at ~/.gemini/config/hooks.json (user) or .agents/hooks.json (workspace). Replace __HOOK_DIR__ with the absolute path to examples/coding-agent-guard/hooks. `install.sh antigravity` does this for you. Antigravity's shell tool is named run_command and it reads the decision from stdout, so it uses antigravity-hook.sh.",
+  "_comment": "Install at ~/.gemini/config/hooks.json (user) or .agents/hooks.json (workspace). Replace __HOOK_DIR__ with the absolute path to examples/coding-agent-guard/hooks. `install.sh antigravity` does this for you. Antigravity CLI sends a toolCall envelope and reads a top-level {\"decision\",\"reason\"} object from stdout. The wrapper selects that output form with -dialect antigravity and returns an escalation as force_ask. What was measured, and on which version, is recorded in the harness matrix under docs/.",
   "toolguard-coding-agent-guard": {
     "PreToolUse": [
       {
-        "matcher": "run_command",
+        "matcher": "*",
         "hooks": [
           {
-            "command": "__HOOK_DIR__/antigravity-hook.sh"
+            "command": "__HOOK_DIR__/antigravity-cli-hook.sh"
           }
         ]
       }

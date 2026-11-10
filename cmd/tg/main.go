@@ -39,7 +39,8 @@ Usage:
   tg evaluate  (-policy-dir DIR | -policy POLICY.yaml) -call CALL.json [-mode shadow|enforcement]
   tg simulate  (-policy-dir DIR | -policy POLICY.yaml) -calls CALLS.jsonl
   tg coverage  (-policy-dir DIR | -policy POLICY.yaml) -calls CALLS.jsonl
-  tg hook      (-policy-dir DIR | -policy POLICY.yaml) [-protect-self] [-fail-closed-tools ...]
+  tg hook      (-policy-dir DIR | -policy POLICY.yaml) [-dialect ...] [-escalate-as ask|deny]
+               [-protect-self] [-fail-closed-tools ...] [-fail-closed-groups ...]
   tg protect   claude [-apply] [-config PATH] [-policy PATH] [-tg PATH]
   tg status    [claude] [-config PATH]
   tg unprotect claude [-apply] [-config PATH]

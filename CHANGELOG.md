@@ -20,6 +20,59 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   is additive; code that builds `StreamReport` with positional struct literals must switch to keyed
   fields. A trusted external checkpoint pin establishes checkpoint identity
   only; it does not authenticate deleted records.
+- Two new policies, `policies/coding_agent_secret_egress.yaml` and
+  `policies/coding_agent_context_files.yaml`. Loading the whole `policies/`
+  directory now activates them; a deployment that names policy files
+  individually does not change until it adds them. `coding_agent_secret_egress`
+  denies a call carrying a value in a known API-key or token format unless the
+  target is one of the exact hosts listed in its carve-out regexes, and denies
+  a shell network client that uploads, inlines or pipes a dotenv file. It
+  matches the listed vendor formats only: it is not a secret scanner and does
+  not detect exfiltration of data that has no known shape. The host list is
+  short and must be edited for private endpoints. `coding_agent_context_files`
+  escalates a write to an agent instruction or permission file and denies a
+  write whose content carries a known key format. It is scoped by tool group,
+  so it fires for write tools the classifier names and for a path parameter
+  the hook can canonicalise. `tg hook` now recognises the Gemini CLI and
+  Antigravity write tool names and adds canonical `file_path` / `content`
+  aliases when a caller used another spelling, so a write to `AGENTS.md` no
+  longer slips through under a harness tool name. A write tool or path
+  parameter that is neither known nor canonicalisable is still not covered;
+  `-unknown-tools-deny` is the blunt control. Neither policy is default
+  protection against exfiltration. See the limits in each file's description.
+  "Opt-in" here means at the policy-directory level, not per rule: a
+  deployment that loads the shipped `policies/` directory starts enforcing
+  both the moment it upgrades. Conformance cases cover both, including the
+  host-carve-out pair, the pre-signed S3 case and the host-boundary escapes
+  listed under Fixed.
+
+- `examples/coding-agent-guard` now installs the path that was actually
+  measured. `hooks/guard-hook.sh` calls `tg hook -policy-dir ... -mode
+  enforcement` with the fail-closed tool list, `-protect-path` values from
+  `TG_PROTECT_PATHS`, dialect handling and an audit log. The older
+  `hooks/anthropic-hook.sh` and `hooks/antigravity-hook.sh` adapters, which
+  shelled out to `tg evaluate` against a single `policy.yaml`, moved to
+  `hooks/legacy/` and are no longer installed by `install.sh`: they were
+  reference material for a scope (`tool_groups: [shell]`) that cannot see
+  write tools, and the shipped configs pointing at them made the README claim
+  about real-install verification misleading. `install.sh` gained `--protect
+  PATH` (repeatable) and refuses paths containing `,` or `"` because they
+  cannot be represented safely in the generated config.
+- `examples/coding-agent-guard/verify-harnesses.sh` writes durable evidence
+  under `var/verify/<UTC stamp>/`: `provenance.json` (Tool Guard commit,
+  working-tree state, `-trimpath` detection, sha256 of the `tg` binary, the
+  policy tree, the verify script and the generated hook, plus detected harness
+  versions), `records/NNNN.json` for every captured payload with the exact
+  decision returned, and `stdout/` for each harness run. Evidence stays out of
+  git. Harness scratch state and any seeded sign-in copies live in a separate
+  `mktemp -d` directory that is shredded and removed on exit.
+- Claim-integrity tests. `cmd/tg/support_claims_test.go` now checks the
+  support matrix in both directions: every `verified` row must be backed by a
+  real-install capture at each version the row names, and every capture must
+  appear in a row. It scans `README.md`, `CHANGELOG.md`, `docs/*.md`, example
+  READMEs and the installer's own output for harness claims, and it pins each
+  measured caveat so deleting it fails the suite. `TestHookHonoursExplicitDialect
+  Flags` covers `-dialect` override, which was previously untested.
 
 ### Changed
 
@@ -39,6 +92,155 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   releases also check the actual upload archives against those digests.
   See [the rebuild procedure](docs/reproducible-builds.md) to compare an
   independent rebuild with published checksums.
+
+### Added
+
+- `tg hook` speaks more than one harness dialect. `-dialect auto|claude|antigravity`
+  selects the input shape and the output contract; `auto` reads the input.
+  Antigravity CLI 1.5.3 sends a `toolCall` envelope with PascalCase argument
+  names and reads a top-level `{"decision","reason"}` object, so a
+  Claude-shaped answer to it is rejected with a protojson error. Tool names
+  and parameter names come from payloads captured from real installs on
+  2026-11-09, not from documentation.
+- A hook-level conformance corpus, `testdata/hookconformance/`, replayed by
+  `TestHookConformance` through the real hook path: stdin parsing, dialect
+  decoding, tool grouping, parameter canonicalisation, protected paths,
+  policy evaluation and decision serialisation. Cases record their harness,
+  version and capture provenance, and
+  `TestHookConformanceRealCaptureProvenance` rejects a case that claims
+  real-install provenance without naming them.
+- `docs/support-matrix.md` is the single source for a harness support claim.
+  `TestSupportMatrixMatchesCorpus` fails if it disagrees with the corpus, and
+  `TestDocsHarnessClaimsAreVerified` fails if `README.md` or `docs/*.md`
+  describes a harness as gated or supported without a verified row.
+- `examples/coding-agent-guard/verify-harnesses.sh` proves end to end, against
+  real installed harnesses, that a Tool Guard denial stops the tool call. It
+  asserts on the absence of the file, not on the model's wording. Measured
+  2026-11-09: Claude Code 2.1.316, Codex CLI 0.166.0 and Antigravity CLI 1.5.3
+  all blocked a write to a `-protect-path` target.
+
+### Fixed
+
+- `coding_agent_secret_egress` could be escaped by abusing the host boundary.
+  `https://api.openai.com:443@evil.example/?k=<key>`, and the same URL without
+  the port, satisfied the carve-out because its terminator accepted a colon, so
+  the key left the machine while a denial was expected;
+  `https://api.openai.com.evil.example/` slipped through the command-field
+  word boundary. The carve-out now requires the listed name to be the whole
+  authority, optionally followed by `:port` and then `/`, `?`, `#`, whitespace
+  or end. Three conformance cases pin the variants, and one pins the
+  legitimate `curl https://api.openai.com -H "Authorization: Bearer <key>"`
+  call so the fix cannot break the case the carve-out exists for.
+- `coding_agent_secret_egress` denied local handling of a key.
+  `export OPENAI_API_KEY=<key>` and `grep -r <key> .` were both reported as
+  "Egress blocked" although nothing reached the network. A
+  `parameters.command` match now requires a network client in the same command;
+  denial of local secret handling made the rule look broken and pushed operators
+  to disable it.
+- The shipped example wired an unverified path. `config/claude-code.settings
+  .json`, `config/codex.hooks.json`, `config/antigravity.hooks.json` and
+  `install.sh` pointed at the legacy `tg evaluate` adapters, so following the
+  README produced a guard whose behaviour had never been measured end to end,
+  while the README claimed real-install verification. The configs now install
+  `hooks/guard-hook.sh`, and `cmd/tg/example_wiring_test.go` decides real
+  payloads through the shipped configs and scripts rather than grepping their
+  text, so a wiring change that breaks enforcement fails the suite.
+- `verify-harnesses.sh` could report success without protecting anything. It
+  counted no failures when a probe never reached the reporter, exited 0
+  regardless of failures, left probes labelled "expected" whatever happened, and
+  copied live Claude and Codex sign-in files into the run directory where they
+  persisted after the run. Probes now feed the reporter, the script exits
+  non-zero on any FAIL, and credential material is shredded on exit. Two early
+  PASSes were false: the scratch config had no sign-in, so Claude Code and
+  Codex never dispatched the hook at all; the script now fails when no hook call
+  was recorded. For Antigravity the no-flag configuration is reported as
+  inconclusive: measured on 1.5.3 it runs no write at all, guard-allowed writes
+  included, so nothing observed there is attributable to a guard decision.
+- Documentation about Antigravity escalation was wrong in both directions, and
+  the correction is recorded here rather than quietly rewritten. An earlier entry
+  claimed an escalated call is refused without `--dangerously-skip-permissions`
+  with no evidence; a single re-measurement then withdrew the claim entirely,
+  because that run's allowed control was broken. Four runs against the checked-in
+  probe policy (`examples/coding-agent-guard/probe/escalate-probe.yaml`) give the
+  defensible version: with the flag the call ran in 4 of 4 runs, so escalation is
+  not enforceable there; without the flag the escalated call did not run in 4 of
+  4 runs, and the guard-allowed control wrote its file in 3 of those 4, so the
+  enforcement is attributable in three runs and one run told us nothing because
+  the harness performed no write at all. `docs/support-matrix.md` now carries the
+  counts, and `TestDocsStateMeasuredHarnessCaveats` pins them.
+- `tg hook` gave different answers for identical input when one parameter was
+  named two ways. Writing `AGENTS.md` through an envelope that carried both
+  `Path=plain.txt` and `Filename=AGENTS.md` produced two different
+  canonicalisations across 500 identical calls (402 / 98), because the alias
+  scan ranged over a Go map. A guard that answers differently for the same
+  bytes is not testable, and choosing by priority would have let a protected
+  path ride in under an unexamined alias. Every distinct value is now placed on
+  a canonical key in sorted key order, and the hook evaluates the call once
+  more for each distinct path, content and command value and returns the most
+  restrictive decision. Placing the values was not enough on its own: the
+  rules read `command` and `content` only, so a second command or content
+  value returned `allow` in 20 of 20 sends before the per-value evaluation.
+  The hook evaluates at most 16 extra values. A call with more is escalated,
+  and `-escalate-as deny` turns that escalation into a denial.
+  `hook_alias_determinism_test.go`, `hook_alias_variants_test.go` and the
+  corpus case `agy_write_two_alias_paths`.
+- Antigravity CLI ignored an escalation. Measured against Antigravity CLI 1.5.3
+  in headless print mode, four runs, because one run alone is misleading:
+  answering `ask` never stopped the call, with or without
+  `--dangerously-skip-permissions` — a write to `AGENTS.md` landed while the
+  hook record read `decision: ask`. Answering `force_ask` refused the same call
+  without the flag ("a tool required the `write_file` permission that headless
+  mode cannot prompt for, so it was auto-denied") and did **not** refuse it with
+  the flag, because that flag auto-approves permission requests. `tg hook` now
+  maps an escalation to `force_ask` in the Antigravity dialect;
+  `-antigravity-escalation ask` restores the documented value, and the case
+  `agy_write_context_file_ask_override` pins what that emits. An operator who
+  runs Antigravity with `--dangerously-skip-permissions` gets deny protection
+  and no escalation protection. `verify-harnesses.sh` runs both configurations
+  so this cannot drift silently.
+- `examples/coding-agent-guard/install.sh codex` wrote a top-level
+  `PreToolUse` key into `~/.codex/hooks.json`. Codex CLI 0.166.0 reads
+  `{"hooks":{"PreToolUse":[…]}}`, so the hook it installed never ran. The
+  example config and the installer now write the shape the CLI reads, and the
+  trust requirement is documented: an untrusted Codex hook does not run at
+  all, silently.
+- `tg hook` no longer defaults a payload with no usable `tool_name` to a Bash
+  call. Such a payload is now unattributable, the same as malformed input: it
+  fails closed when any fail-closed mode is engaged and fails open otherwise.
+  Previously a payload in another harness's hook shape was evaluated as if it
+  were a shell command, which invented an identity for a call the hook could
+  not see. `TestHookUnattributablePayloadFailsClosed`.
+- A command-line flag parse error can no longer disarm fail-closed. Go stops
+  parsing at the first unrecognised flag, so `-nope -fail-closed-tools bash`
+  left the hook failing open on an unparseable tool call while
+  `-fail-closed-tools bash` alone denied it. On a parse error the raw argument
+  list is now scanned for a fail-closed flag. `TestHookFlagParseErrorHonoursLaterFailClosedFlag`.
+- `-protect-path` now applies to `PowerShell` and `pwsh` tool calls. `echo x >
+  <protected path>` was denied as a Bash tool call and allowed as a PowerShell
+  tool call. PowerShell cmdlets (`Set-Content`, `Out-File`, `Remove-Item`) are
+  still not parsed as writes: those calls escalate rather than deny, and
+  PowerShell path protection must not be described as complete.
+  `TestHookPowerShellProtectedPath`.
+- `tg hook` classifies the Gemini CLI and Antigravity write and read tool
+  names into the right tool groups instead of the `shell` default, and adds
+  canonical `file_path` / `content` parameters when the caller named them
+  differently (`TargetFile`, `target_file`, `filePath`). A tool-group-scoped
+  policy such as `coding-agent-context-files` previously never saw those
+  writes at all. `TestHookHarnessWriteToolNamesReachContextFilePolicy`,
+  `TestHookHarnessPathParameterAliasesReachContextFilePolicy`.
+- `tg protect` now includes `powershell` in the generated
+  `-fail-closed-tools` list, matching the documented claim that consequential
+  tools fail closed.
+
+- `http_classify` no longer copies the raw URL into rule details when it
+  fails closed on an unparseable or scheme-less URL. It reports the URL's
+  length instead (`pkg/engine/http_classify.go`). Rule details are written
+  to the audit log, and a URL can carry a credential in its query string.
+  Upgrading needs no configuration change. Records written by earlier
+  versions keep the URL in `rule_results[].details` and
+  `applied_rule_results[].details`; review those logs if an agent may have
+  sent a credential in a URL. A script that read the URL from this detail
+  text no longer finds it there.
 
 ## [0.8.1] — 2026-10-17
 

@@ -1,0 +1,23 @@
+# Contract fixture for TestNestedParameterHeaderFieldResolvesInConditions (T9).
+# A condition addresses one nested request header by its dotted path.
+schema_version: 1
+policy_id: leakgap-header-authorization-token
+name: leakgap-header-authorization-token
+version: 1
+status: approved
+mode: enforcement
+scope:
+  tool_names: [http, fetch, webfetch]
+  tool_groups: [network_egress]
+rules:
+  - rule_id: rule-github-token-in-authorization-header
+    name: GitHub token in the Authorization header
+    rule_type: regex
+    conditions:
+      field: parameters.headers.Authorization
+      operator: contains
+      value: "ghp_"
+    effect: deny
+    citation:
+      document_id: LEAKGAP-T9
+      excerpt: "A GitHub personal access token may not leave in an Authorization header."

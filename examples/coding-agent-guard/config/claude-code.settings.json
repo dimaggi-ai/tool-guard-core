@@ -1,13 +1,13 @@
 {
-  "_comment": "Merge this PreToolUse block into ~/.claude/settings.json (or .claude/settings.json in a project). Replace __HOOK_DIR__ with the absolute path to examples/coding-agent-guard/hooks. `install.sh claude` does this for you.",
+  "_comment": "Merge this PreToolUse block into ~/.claude/settings.json (or .claude/settings.json in a project). Replace __HOOK_DIR__ with the absolute path to examples/coding-agent-guard/hooks. `install.sh claude` does this for you. The matcher is empty on purpose: it must match every tool, not only Bash, or the write tools the context-file policy guards never reach the hook.",
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "",
         "hooks": [
           {
             "type": "command",
-            "command": "__HOOK_DIR__/anthropic-hook.sh"
+            "command": "__HOOK_DIR__/claude-code-hook.sh"
           }
         ]
       }

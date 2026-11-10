@@ -1,0 +1,42 @@
+{
+  "name": "claude2_1_321_write_tool_to_protected_path",
+  "description": "Claude Code 2.1.321 native Write tool call, captured end-to-end: the payload reached the guard and the protected file was never created on disk.",
+  "harness": "claude-code",
+  "harness_version": "2.1.321",
+  "capture": {
+    "captured_from": "real install",
+    "captured_on": "2026-11-09",
+    "sanitisation": "session/prompt/tool-use ids replaced with cap-* markers; only the containing directory collapsed to /cap, basenames, parameter names and casing preserved exactly as emitted"
+  },
+  "payload": {
+    "session_id": "cap-session_id",
+    "transcript_path": "/cap/transcript.jsonl",
+    "cwd": "/cap",
+    "prompt_id": "cap-prompt_id",
+    "permission_mode": "default",
+    "effort": {
+      "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Write",
+    "tool_input": {
+      "file_path": "/cap/protected.txt",
+      "content": "written-by-write-tool"
+    },
+    "tool_use_id": "cap-tool_use_id"
+  },
+  "hook_args": [
+    "-policy-dir",
+    "POLICIES",
+    "-mode",
+    "enforcement",
+    "-fail-closed-tools",
+    "bash,powershell,write,edit,notebookedit,run_command",
+    "-protect-path",
+    "/cap/protected.txt"
+  ],
+  "expect": {
+    "decision": "deny",
+    "cites": "protected path"
+  }
+}

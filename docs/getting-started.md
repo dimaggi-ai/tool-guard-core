@@ -223,7 +223,7 @@ Add it to your Claude Code `~/.claude/settings.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "bin/tg hook -policy-dir /path/to/policies -protect-self -fail-closed-tools bash,write,edit,notebookedit"
+            "command": "bin/tg hook -policy-dir /path/to/policies -protect-self -fail-closed-tools bash,powershell,write,edit,notebookedit"
           }
         ]
       }
@@ -242,7 +242,7 @@ Key flags:
 | `-protect-path PATH` | Protect one exact prefix; repeat for multiple paths (preserves commas in names) |
 | `-protect-paths P1,P2` | Additional prefixes to protect (comma-separated) |
 | `-fail-closed` | Deny on any internal error (tooling glitch, bad policy load) |
-| `-fail-closed-tools bash,write,edit,notebookedit` | Deny only these tools on error; others fail open |
+| `-fail-closed-tools bash,powershell,write,edit,notebookedit` | Deny only these tools on error; others fail open |
 | `-unknown-tools-deny` | Deny any tool_name not declared in `scope.tool_names` of a loaded enforcement policy — closes the gap where a new tool the agent starts calling matches no policy and is silently ungoverned |
 | `-mode shadow\|enforcement` | Call-site default (default: enforcement). Enforcement-mode policies still block under `-mode shadow`; observe-only staging requires `mode: shadow` in policy YAML. |
 

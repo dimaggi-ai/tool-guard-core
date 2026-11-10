@@ -29,6 +29,8 @@ authoring policies for, and operating Tool Guard Core.
   Anthropic / OpenAI tool-use loops.
 - [**Escalation flow**](escalation.md) - the human-in-the-loop
   approval path, token configuration, audit semantics.
+- [**Harness support matrix**](support-matrix.md) - which coding harnesses are
+  actually verified, against which version, and what each one does not honour
 - [**Coding-agent protection**](protect.md) - managed Claude Code hooks,
   dry-run/apply behavior, rollback, and compatibility boundaries.
 - [**Performance**](performance.md) - benchmark method, latency results,

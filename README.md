@@ -48,8 +48,11 @@ changes are preserved by targeted removal. See [the protection guide](docs/prote
 
 The starter policy matches the *shape* of a destructive command (an `rm` plus
 recursive/force flags and a root/home target), rather than one brittle string.
-The lower-level hook and reference adapters for Codex and Antigravity remain in
-[`examples/coding-agent-guard/`](examples/coding-agent-guard/README.md). Want a
+`tg hook` covers more harnesses than `tg protect`: it decodes the payload
+dialect for Claude Code and Antigravity CLI, maps harness tool names onto policy
+tool groups, and answers in the shape each harness parses.
+[`examples/coding-agent-guard/`](examples/coding-agent-guard/README.md) installs
+that hook for the harnesses it measures. Want a
 different policy? Pass `-policy /absolute/path/policy.yaml`, or browse the
 [example bundles](#examples-included) for ready-made guards (money, database,
 customer-data export, content safety).
@@ -266,8 +269,13 @@ the audit chain offline, demonstrating it is tamper-evident.
   prompts. 16 deterministic assertions against real Gemma 4 e4b
   (~600 ms per call). Requires Ollama with `gemma4:e4b` pulled.
 - [`examples/coding-agent-guard/`](examples/coding-agent-guard/README.md) —
-  one policy gating Claude Code, OpenAI Codex, and Google Antigravity at the
-  hook layer. No LLM, no Docker — see [Guard a coding agent in 60
+  the shipped policy set gating Claude Code, Codex CLI and Antigravity CLI at
+  the hook layer, verified end to end against real installs of those three
+  versions: a denial means the operation never happened. Support is
+  capability-by-capability and harness-by-harness, including one harness that
+  ignores escalation — read
+  [the harness support matrix](docs/support-matrix.md) before claiming coverage.
+  No LLM, no Docker — see [Guard a coding agent in 60
   seconds](#guard-a-coding-agent-in-60-seconds) above for the one-liner.
 
 Requires Go 1.26.0 or later. The default binary is pure Go — no cgo, no
@@ -555,11 +563,17 @@ examples/mcp-server/      MCP (Model Context Protocol) bridge — a
                           Desktop, Continue.dev, MCP-rs). Every
                           tools/call goes through tg-proxy /evaluate.
 
-examples/coding-agent-guard/  PreToolUse hooks that gate shell commands
-                          for Claude Code, OpenAI Codex, and Google
-                          Antigravity from one policy.yaml. `./run.sh`
-                          shows all three offline; `./install.sh` wires
-                          the hooks into the agents you have installed.
+examples/coding-agent-guard/  PreToolUse hooks that gate tool calls for
+                          Claude Code, Codex CLI and Antigravity CLI from
+                          the policies/ directory in one decision path.
+                          `./run.sh` shows the decisions offline;
+                          `./install.sh` wires the hook into the agents you
+                          have installed; `./verify-harnesses.sh` proves
+                          against real installs that a denial stops the
+                          call and retains the payloads, decisions and
+                          provenance that claim is made of. Verified
+                          versions and what each harness does NOT honour:
+                          docs/support-matrix.md.
 ```
 
 The engine package has zero I/O and zero external dependencies beyond

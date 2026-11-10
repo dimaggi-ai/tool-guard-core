@@ -1,0 +1,16 @@
+{
+  "name": "context_files_deny_key_in_content",
+  "description": "An edit that writes an AWS access-key ID into a source file must deny. The key is the public AWS documentation example, not a real credential.",
+  "policy_file": "../../policies/coding_agent_context_files.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "edit",
+    "tool_group": "filesystem_writes",
+    "parameters": {"file_path": "/home/user/project/config.py", "old_string": "KEY = None", "new_string": "KEY = \"AKIAIOSFODNN7EXAMPLE\""}
+  },
+  "expect": {
+    "decision": "denied",
+    "action_taken": "denied",
+    "matched_rule_ids": ["rule-secret-in-write"]
+  }
+}

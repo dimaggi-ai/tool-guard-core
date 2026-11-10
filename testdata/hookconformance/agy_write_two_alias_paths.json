@@ -1,0 +1,33 @@
+{
+  "name": "agy_write_two_alias_paths",
+  "description": "One write naming two different files under alias keys. The canonicaliser must not choose one: measured 2026-11-09, the map-iteration version produced two different results from 500 identical calls (402 / 98), so identical bytes could be denied and allowed. Every distinct value is placed on a canonical key the policies already match, so the context-files rule sees the AGENTS.md candidate. The escalation is emitted as force_ask for this dialect.",
+  "harness": "antigravity-cli",
+  "harness_version": "1.5.3",
+  "capture": {
+    "captured_from": "real install",
+    "captured_on": "2026-11-09",
+    "sanitisation": "session ids, transcript paths, model names and tool_use ids replaced with cap-* placeholders; tool names and parameter names and their casing are exactly as emitted",
+    "note": "synthetic values in a real Antigravity envelope shape; no capture contains two path aliases, so this case pins the handler, not an observed harness behaviour"
+  },
+  "payload": {
+    "toolCall": {
+      "name": "write_file",
+      "args": {
+        "Path": "plain.txt",
+        "Filename": "AGENTS.md",
+        "Content": "package main"
+      }
+    }
+  },
+  "hook_args": [
+    "-policy-dir",
+    "POLICIES",
+    "-mode",
+    "enforcement"
+  ],
+  "expect": {
+    "decision": "force_ask",
+    "cites": "instruct or configure an agent"
+  },
+  "output_dialect": "antigravity"
+}
