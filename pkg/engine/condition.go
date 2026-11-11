@@ -68,6 +68,10 @@ func EvalConditionWithDetail(cond domain.Condition, fields map[string]interface{
 		return evalPathClassify(cond.PathClassify, fields), ""
 	}
 
+	if cond.CommandClassify != nil {
+		return evalCommandClassify(cond.CommandClassify, fields)
+	}
+
 	if cond.ShellClassify != nil {
 		return evalShellClassify(cond.ShellClassify, fields), ""
 	}
