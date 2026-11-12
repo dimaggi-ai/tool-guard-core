@@ -269,11 +269,9 @@ the audit chain offline, demonstrating it is tamper-evident.
   prompts. 16 deterministic assertions against real Gemma 4 e4b
   (~600 ms per call). Requires Ollama with `gemma4:e4b` pulled.
 - [`examples/coding-agent-guard/`](examples/coding-agent-guard/README.md) —
-  the shipped policy set gating Claude Code, Codex CLI and Antigravity CLI at
-  the hook layer, verified end to end against real installs of those three
-  versions: a denial means the operation never happened. Support is
-  capability-by-capability and harness-by-harness, including one harness that
-  ignores escalation — read
+  one `tg hook` wrapper per harness and five policies for Claude Code, Codex
+  CLI and Antigravity CLI. What each harness did with each decision is
+  measured stage by stage. Read
   [the harness support matrix](docs/support-matrix.md) before claiming coverage.
   No LLM, no Docker — see [Guard a coding agent in 60
   seconds](#guard-a-coding-agent-in-60-seconds) above for the one-liner.
@@ -563,16 +561,13 @@ examples/mcp-server/      MCP (Model Context Protocol) bridge — a
                           Desktop, Continue.dev, MCP-rs). Every
                           tools/call goes through tg-proxy /evaluate.
 
-examples/coding-agent-guard/  PreToolUse hooks that gate tool calls for
-                          Claude Code, Codex CLI and Antigravity CLI from
-                          the policies/ directory in one decision path.
-                          `./run.sh` shows the decisions offline;
-                          `./install.sh` wires the hook into the agents you
-                          have installed; `./verify-harnesses.sh` proves
-                          against real installs that a denial stops the
-                          call and retains the payloads, decisions and
-                          provenance that claim is made of. Verified
-                          versions and what each harness does NOT honour:
+examples/coding-agent-guard/  One PreToolUse hook (`tg hook`) and five
+                          policies for Claude Code, Codex CLI and
+                          Antigravity CLI. `./install.sh` wires it into the
+                          agents you have installed. `./run.sh` prints the
+                          hook's decisions offline. `./verify-harnesses.sh`
+                          runs it against real installs (paid model calls).
+                          What each harness did with each decision:
                           docs/support-matrix.md.
 ```
 

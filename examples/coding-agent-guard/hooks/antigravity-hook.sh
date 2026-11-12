@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Upgrade shim. install.sh up to 0.8.x wrote this file's absolute path into
-# harness config files. It keeps those installs working with the policy and the
-# blocking behaviour they had: one policy file (TG_POLICY, default policy.yaml)
-# and an escalation returned as force_ask.
+# harness config files. For such a config it uses the one policy file of that
+# version (TG_POLICY, default policy.yaml) and returns an escalation as
+# force_ask. The 0.8.x adapter returned ask.
 # Re-run install.sh to move to the current wiring.
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export TG_BIN="${TG_BIN:-$here/../../../bin/tg}"

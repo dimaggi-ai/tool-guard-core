@@ -5,7 +5,8 @@ Start it through verify-harnesses.sh. A stage sends one prompt to one harness.
 There are 23 stages and each is sent TG_VERIFY_REPEAT times, so a full run
 makes about 23 paid model calls with the default of 1.
 
-What is under test: the files install.sh installs. The harness config comes
+What is under test: the shipped wrappers, config templates and policies.
+The harness config comes
 from config/*.json, the hook is hooks/<harness>-hook.sh, and the policies are
 the policies/ directory next to this file. A small recorder sits between the
 harness and the wrapper. It passes the wrapper's answer through unchanged.

@@ -193,8 +193,7 @@ func TestHookProtectedPathReadsEveryAliasValue(t *testing.T) {
 
 // TestHookAliasLimitIsNeverAllowed sends one more distinct path value than
 // twice the limit hookParamVariants evaluates. The hook escalates such a call.
-// Codex CLI was measured to run a call the hook answered ask to, so the Codex
-// wrapper of the example passes -escalate-as deny: with that flag the same
+// The Codex wrapper of the example passes -escalate-as deny: with that flag the same
 // call must be denied in both dialects.
 func TestHookAliasLimitIsNeverAllowed(t *testing.T) {
 	pol := writeHookPolicy(t, aliasVariantPolicy)

@@ -410,7 +410,7 @@ func TestInstallerWritesBareWrapperPathsAndProtectFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, ".claude", "settings.json"), []byte(old), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "TG_BIN=" + exampleHooksTg(t)}
+	env := installerEnv(t, home)
 	for i := 0; i < 2; i++ { // twice: the installer must be idempotent
 		cmd := exec.Command("bash", filepath.Join(dir, "install.sh"), "claude", "codex", "antigravity",
 			"--protect", "/a/one", "--protect", "/a two/dir")

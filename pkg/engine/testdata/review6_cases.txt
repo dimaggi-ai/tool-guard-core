@@ -1,0 +1,646 @@
+deny
+rm ~/.claude/settings.json
+---
+deny
+env -S 'rm -f ~/.claude/settings.json'
+---
+deny
+env -vS'rm -f ~/.claude/settings.json'
+---
+deny
+env -C ~/.claude rm settings.json
+---
+pass
+env --chdir=.claude rm settings.json
+---
+deny
+cd ~ && env -C .claude rm settings.json
+---
+deny
+timeout --signal KILL 5 rm ~/.claude/settings.json
+---
+deny
+stdbuf --output L rm ~/.claude/settings.json
+---
+deny
+env --unset FOO rm ~/.claude/settings.json
+---
+deny
+{rm,~/.claude/settings.json}
+---
+deny
+{env,rm,~/.claude/settings.json}
+---
+deny
+{bash,-c,'rm ~/.claude/settings.json'}
+---
+deny
+function f { rm ~/.claude/settings.json; }; f
+---
+deny
+coproc rm ~/.claude/settings.json
+---
+deny
+trap 'rm ~/.claude/settings.json' EXIT
+---
+deny
+builtin cd ~/.claude && rm settings.json
+---
+deny
+CDPATH=~ cd .claude && rm settings.json
+---
+deny
+cd /tmp; cd /tmp; cd /tmp; cd /tmp; cd /tmp; cd /tmp; cd /tmp; cd /tmp; cd ~/.claude; rm settings.json
+---
+deny
+cd ~ && cp @WORK@/src/settings.json -t.claude
+---
+deny
+cd ~/.cl*; echo '{}' > settings.json
+---
+deny
+echo '{}' > ~/.claude/settings.js?n
+---
+deny
+cp @WORK@/src/settings.json ~/.c*/
+---
+deny
+cp @WORK@/src/d/* ~/.claude/
+---
+pass
+cp @WORK@/src/d/settings.js? ~/.claude/
+---
+deny
+cp --parents .claude/settings.json ~
+---
+deny
+rm ~/.claude/[!x]ettings.json
+---
+deny
+bash -O extglob -c 'rm ~/.claude/@(settings).json'
+---
+deny
+bash -O globstar -O dotglob -c 'rm @WORK@/**/.claude/settings.json'
+---
+deny
+echo $(case x in x) rm ~/.claude/settings.json;; esac)
+---
+deny
+true # it's
+rm ~/.claude/settings.json
+---
+deny
+cat <<EOF >/dev/null
+it's
+EOF
+rm ~/.claude/settings.json
+---
+deny
+unlink ~/.claude/settings.json
+---
+deny
+sed --in 's/orig/evil/' ~/.claude/settings.json
+---
+deny
+ln ~/.claude/settings.json ~/h && echo '{}' > ~/h
+---
+deny
+$'rm' ~/.claude/settings.json
+---
+deny
+$'\x72m' ~/.claude/settings.json
+---
+deny
+fish -c 'rm ~/.claude/settings.json'
+---
+deny
+flock @WORK@/lk -c 'rm ~/.claude/settings.json'
+---
+deny
+script -qc 'rm ~/.claude/settings.json' /dev/null
+---
+deny
+cp @WORK@/src/d/settings.js?? ~/.claude/
+---
+deny
+env -S 'rm -f @HOME@/.claude/settings.json'
+---
+deny
+env -S 'rm -f ${HOME}/.claude/settings.json'
+---
+deny
+bash -O globstar -O dotglob -c 'rm @ROOT@/**/.claude/settings.json'
+---
+deny
+link ~/.claude/settings.json ~/hl && echo '{}' > ~/hl
+---
+deny
+printf 'rm %s/.claude/settings.json\n' ~ | bash
+---
+deny
+echo rm ~/.claude/settings.jso{n,} | bash
+---
+deny
+echo rm ~/.claude/settings.js?? | bash
+---
+deny
+echo rm -rf ~/.claude | bash
+---
+deny
+echo -e 'rm ~/.claude/settings\x2ejson' | bash
+---
+deny
+cd ~/.claude && echo rm settings.json | bash
+---
+deny
+echo cd ~/.claude\; rm settings.json | bash
+---
+deny
+bash /dev/stdin <<< 'rm ~/.claude/settings.json'
+---
+deny
+bash <(printf 'rm %s/.claude/settings.json' ~)
+---
+deny
+cd ~ && echo rm .claude/settings.json | bash
+---
+deny
+echo 'rm ~/.claude/settings.json' | fish
+---
+deny
+cd ~ && rm -- .claude/settings.json
+---
+deny
+cd ~/.claude || exit; rm settings.json
+---
+deny
+( cd ~/.claude; rm settings.json )
+---
+deny
+cd -P ~/.claude && rm settings.json
+---
+deny
+pushd ~/.claude >/dev/null && rm settings.json
+---
+deny
+cd ~; cd .claude; rm settings.json
+---
+deny
+cd ~/.claude/../.claude && rm settings.json
+---
+deny
+cd ~/.claude && rm *
+---
+deny
+cd ~/.claude && truncate -s0 settings.json
+---
+deny
+cd ~/.claude && dd if=/dev/null of=settings.json
+---
+deny
+cd ~/.claude && sed -i s/orig/x/ settings.json
+---
+deny
+cd ~ && mv .claude .x
+---
+deny
+cd ~ && chmod 000 .claude
+---
+deny
+cd ~/.claude && cp @WORK@/src/settings.json .
+---
+deny
+cd ~/.claude && cp @WORK@/src/settings.json --target-directory=.
+---
+deny
+cd ~/.claude && ln -sf /dev/null settings.json
+---
+deny
+cd ~/.claude && tee settings.json </dev/null
+---
+deny
+cd ~/.claude && install -m 600 /dev/null settings.json
+---
+deny
+cd ~/.claude; exec 3>settings.json
+---
+deny
+cd ~/.claude; : >| settings.json
+---
+deny
+cd ~/.claude; echo >& settings.json
+---
+deny
+cd ~/.claude && bash -c 'rm settings.json'
+---
+deny
+cd ~/.claude && echo $(rm settings.json)
+---
+deny
+x=~/.claude; rm $x/settings.json
+---
+deny
+cd ~ && cd ./.claude && rm settings.json
+---
+deny
+cd && cd .claude && rm settings.json
+---
+deny
+cd ~ && pushd .claude && popd && pushd .claude && rm settings.json
+---
+deny
+echo mv ~/.claude ~/x | bash
+---
+deny
+echo chmod 000 ~/.claude | bash
+---
+deny
+cp -r @WORK@/src/.claude ~/
+---
+deny
+cp -r @WORK@/src/. ~/
+---
+deny
+cp -rT @WORK@/src ~
+---
+deny
+cp -r @WORK@/src/.c* ~/
+---
+deny
+cp -r @WORK@/src/.[c]laude ~/
+---
+deny
+{cd,~/.claude} && rm settings.json
+---
+deny
+true # foo \
+rm ~/.claude/settings.json
+---
+deny
+true # $(
+rm ~/.claude/settings.json
+---
+deny
+true # "
+rm ~/.claude/settings.json
+---
+deny
+HOME=@WORK@; rm ~/h/.claude/settings.json
+---
+deny
+HOME=~/.claude; cd; rm settings.json
+---
+deny
+case x in x) rm ~/.claude/settings.json;; esac
+---
+deny
+select x in a; do rm ~/.claude/settings.json; break; done <<< 1
+---
+deny
+time -p rm ~/.claude/settings.json
+---
+deny
+! rm ~/.claude/settings.json
+---
+deny
+if rm ~/.claude/settings.json; then :; fi
+---
+deny
+A=1 B=2 rm ~/.claude/settings.json
+---
+deny
+command -- rm ~/.claude/settings.json
+---
+deny
+nice -n5 rm ~/.claude/settings.json
+---
+deny
+nice -5 rm ~/.claude/settings.json
+---
+deny
+ionice -c3 rm ~/.claude/settings.json
+---
+deny
+timeout -k 1 2 rm ~/.claude/settings.json
+---
+deny
+env -i PATH=/usr/bin rm ~/.claude/settings.json
+---
+deny
+exec -c rm ~/.claude/settings.json
+---
+deny
+exec -a x rm ~/.claude/settings.json
+---
+deny
+xargs -a /dev/null rm ~/.claude/settings.json
+---
+deny
+sudo -u root -- rm ~/.claude/settings.json
+---
+deny
+rm ~/.claude//settings.json
+---
+deny
+rm ~//.claude/./settings.json
+---
+deny
+rm ~/.claude/../.claude/settings.json
+---
+deny
+r\
+m ~/.claude/settings.json
+---
+deny
+rm ~/.claude/settings.js\
+on
+---
+deny
+rm ~/.claude/{x,{settings,y}.json}
+---
+deny
+rm ~/.claude/settings.json{,}
+---
+deny
+rm ~/.c{l,x}*/settings.json
+---
+deny
+rm ~/.claude/{'settings.json',x}
+---
+deny
+echo '{}' > >(cat > ~/.claude/settings.json)
+---
+deny
+mv ~/.claude/settings.json{,.bak}
+---
+deny
+rm -rf ~/.claude
+---
+deny
+chmod 000 ~/.claude/
+---
+deny
+chmod 000 ~/.claude/.
+---
+deny
+ln -sfn /tmp ~/.claude
+---
+deny
+chmod -R 000 ~
+---
+deny
+'r'm ~/.claude/settings.json
+---
+deny
+"rm" ~/.claude/settings.json
+---
+deny
+bash -c -- 'rm ~/.claude/settings.json'
+---
+deny
+bash -c -e 'rm ~/.claude/settings.json'
+---
+deny
+bash -o errexit -c 'rm ~/.claude/settings.json'
+---
+deny
+bash -co errexit 'rm ~/.claude/settings.json'
+---
+deny
+bash --norc -c 'rm ~/.claude/settings.json'
+---
+deny
+bash --rcfile /dev/null -c 'rm ~/.claude/settings.json'
+---
+deny
+bash -c 'X=rm; $X ~/.claude/settings.json'
+---
+deny
+sh -c "bash -c 'rm ~/.claude/settings.json'"
+---
+deny
+/bin/bash -c 'rm ~/.claude/settings.json'
+---
+deny
+bash -c 'cd ~/.claude && rm settings.json'
+---
+deny
+bash -c "cd ~/.claude; echo rm settings.json | sh"
+---
+deny
+echo 'rm ~/.claude/settings.json' | bash -s
+---
+deny
+bash -s <<< 'rm ~/.claude/settings.json'
+---
+deny
+bash -x <<< 'rm ~/.claude/settings.json'
+---
+deny
+bash -O extglob <<< 'rm ~/.claude/settings.json'
+---
+deny
+rm ~/.claude/settings.jso[n]
+---
+deny
+rm ~/.claude/settings.jso[^x]
+---
+deny
+rm ~/.claude/[[:alpha:]]ettings.json
+---
+deny
+rm ~/.claude/settings.json\
+---
+deny
+echo 'rm ~/.claude/settings.json' | bash -c bash
+---
+deny
+echo 'rm ~/.claude/settings.json' | sh -c 'exec bash'
+---
+deny
+X=rm; $X ~/.claude/settings.json
+---
+deny
+"$(echo rm)" ~/.claude/settings.json
+---
+deny
+echo $(( $(rm ~/.claude/settings.json; echo 1) ))
+---
+deny
+echo ${x:-$(rm ~/.claude/settings.json)}
+---
+deny
+bash -c {'rm ~/.claude/settings.json',}
+---
+deny
+cd ~/.cl* && dd if=/dev/null of=settings.json
+---
+deny
+dd if=/dev/null of=~/.claude/settings.js??
+---
+deny
+cp -t ~/.cla* @WORK@/src/settings.json
+---
+deny
+mv @WORK@/src/d/* ~/.claude/
+---
+deny
+env --chdir ~/.claude rm settings.json
+---
+deny
+echo '{}' | tee ~/.claude/settings.js??
+---
+deny
+sed -i s/orig/x/ ~/.claude/settings.js??
+---
+deny
+rm ~/.claude/settings.js??
+---
+deny
+cd ~/.claude && sed -n 'w settings.json' /dev/null
+---
+deny
+sed -n 'w @HOME@/.claude/settings.json' /dev/null
+---
+deny
+cd ~/.claude && cp @WORK@/src/settings.json -t .
+---
+deny
+ln -s ~/.claude/settings.json ~/l && echo '{}' > ~/l
+---
+deny
+echo '{}' > ~/.claude/settings.json.tmp && mv ~/.claude/settings.json.tmp ~/.claude/settings.json
+---
+deny
+cat /dev/null > ~/".claude"/settings.json
+---
+deny
+: > ~/.claude/settings.json
+---
+deny
+printf 'rm ~/.claude/settings\056json' | sh
+---
+pass
+cat ~/.claude/settings.json
+---
+pass
+cd ~/.claude && git status
+---
+pass
+cp CLAUDE.md ~/.claude/
+---
+pass
+mkdir -p out/{1..3}
+---
+pass
+touch ~/.claude/settings.{1..2}
+---
+pass
+git status && git add -A && git commit -m "x"
+---
+pass
+npm install && npm run build
+---
+pass
+go build ./... && go test ./...
+---
+pass
+make clean all
+---
+pass
+docker build -t x . && docker run --rm x
+---
+pass
+cd proj && rm -rf build
+---
+pass
+cd proj && rm -f build/out.o
+---
+pass
+cp src/a.txt dist/
+---
+pass
+cp -r src/. dist/
+---
+pass
+cp -r assets/. .
+---
+pass
+mv old.txt new.txt
+---
+pass
+find . -name '*.go' | xargs grep foo
+---
+deny
+for f in *.txt; do cp "$f" backup/; done
+---
+deny
+mkdir -p "$OUT_DIR"
+---
+deny
+rm -f "$TMPFILE"
+---
+pass
+touch test{1..5}.txt
+---
+pass
+mkdir -p src/{a,b}/c
+---
+pass
+cp file{,.bak}
+---
+pass
+rm 'notes[draft'.txt
+---
+pass
+echo hi > out.log 2>&1
+---
+pass
+tar czf a.tgz dir
+---
+pass
+cat <<'EOF' > config.yaml
+key: value
+EOF
+---
+pass
+sed -i 's/a/b/' main.go
+---
+pass
+echo 'it'\''s fine' | bash
+---
+pass
+ln -s ../lib lib
+---
+pass
+cd build && cmake .. && make -j8
+---
+pass
+chmod +x scripts/*.sh
+---
+pass
+cp -r @WORK@/src/d .
+---
+deny
+mkdir -p "$(dirname out/x/y)"
+---
+pass
+sh -c 'echo ok'
+---
+pass
+python3 -m venv .venv && . .venv/bin/activate
+---
+pass
+git log --oneline | head
+---
+pass
+cp @WORK@/src/d/settings.json notes.txt
+---
+pass
+cp /etc/hostname .
+---
+pass
+mv Downloads/a.pdf .
+---
+pass
+chmod 644 *

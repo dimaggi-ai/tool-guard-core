@@ -793,9 +793,7 @@ func TestHookUnattributablePayloadFailsClosed(t *testing.T) {
 // matches parameters.file_path / parameters.path. hookToolGroup's default
 // bucket is "shell", so a harness write tool whose name is not in the table
 // never reaches the policy at all. Tool names below are taken from the
-// harness contract sources recorded in
-// CTO/Research/review-2026-11-08/opus-2026-11-09-claims-and-harness-plan.md
-// (S-GM Gemini CLI, S-AG-web Antigravity); they are not invented here.
+// Gemini CLI and Antigravity tool contracts; they are not invented here.
 // Parameter names other than file_path/path are NOT sourced and are covered
 // only where a normalizer exists — see TestHookHarnessPathParameterAliases.
 

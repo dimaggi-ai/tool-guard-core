@@ -4,9 +4,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	stdpath "path"
 	"path/filepath"
+	"regexp"
+	"runtime"
+	"sort"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
+	"unicode"
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 )
@@ -31,9 +39,11 @@ import (
 // Canonicalization (hardened after adversarial review): both the candidate
 // path and every protected prefix are made absolute (relative paths resolve
 // against the process CWD) and symlink-resolved on their longest existing
-// ancestor, then matched in every combination. This closes the relative-path
+// ancestor, then matched in every combination. A path with a ".." part is
+// also walked one part at a time (physicalPath), because the kernel follows
+// a link before "..". This closes the relative-path
 // (`file_path: "policy.yaml"`) and symlink-traversal (`/tmp/link/x` where
-// /tmp/link -> /protected) bypasses.
+// /tmp/link -> /protected, `/var/run/../protected/x`) bypasses.
 //
 // TRUST MODEL: the read-only tool exclusion (read/grep/…) trusts that
 // env.ToolName is set by the agent RUNTIME / tool adapter, not chosen by the
@@ -43,12 +53,132 @@ import (
 // model-controlled in your deployment, do not rely on the exclusion; scope
 // writers explicitly instead.
 //
-// OUT OF SCOPE: case-insensitive / Unicode-normalizing filesystems (matching
-// is byte-exact; Linux is case-sensitive) and percent-encoded path forms.
+// LETTER CASE: where the file system of a protected path ignores letter
+// case (macOS, Windows, or a directory found to do so), paths are also
+// compared in lower case (matchProtected).
+//
+// OUT OF SCOPE: Unicode-normalizing filesystems and percent-encoded path
+// forms.
 func ViolatesProtectedPaths(env *domain.ActionEnvelope, prefixes []string) (bool, string) {
 	if env == nil || len(prefixes) == 0 {
 		return false, ""
 	}
+	// The check reads the file system and can be made slow by a long
+	// command. A check that does not end in protectBudget, or that panics,
+	// is a deny: the caller has a time limit of its own, and past it the
+	// call would run unchecked.
+	type verdict struct {
+		hit    bool
+		reason string
+	}
+	done := make(chan verdict, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				done <- verdict{true, "protected path: the check failed, so the call is denied by -protect-paths"}
+			}
+		}()
+		hit, reason := violatesProtectedPaths(env, prefixes)
+		done <- verdict{hit, reason}
+	}()
+	select {
+	case v := <-done:
+		return v.hit, v.reason
+	case <-time.After(protectBudget):
+		return true, fmt.Sprintf("protected path: the check did not end in %s, so the call is denied by -protect-paths", protectBudget)
+	}
+}
+
+// protectBudget is the time one call of ViolatesProtectedPaths may take. A
+// test replaces it.
+var protectBudget = 10 * time.Second
+
+// maxResolvePathLen is the longest path whose symbolic links are followed.
+// One system call takes at most 4096 bytes; the room above that is for a
+// relative path joined to a directory.
+const maxResolvePathLen = 4 * 4096
+
+// workDirParamNames are the parameter names, in lower case and without
+// "_", "-", "." and blanks, that hold the directory a tool call runs in.
+// `tg hook` adds the directory the harness reports as "cwd".
+var workDirParamNames = map[string]bool{
+	"cwd": true, "workdir": true, "workingdir": true, "workingdirectory": true,
+}
+
+// paramWorkDirs returns the directories the call says it runs in, other than
+// the directory of this process. A relative value is also read under each
+// absolute one.
+func paramWorkDirs(params map[string]interface{}) []string {
+	var raw []string
+	for k, v := range params {
+		var b strings.Builder
+		for _, r := range k {
+			if !strings.ContainsRune("_-. ", r) {
+				b.WriteRune(unicode.ToLower(r))
+			}
+		}
+		if !workDirParamNames[b.String()] {
+			continue
+		}
+		if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+			raw = append(raw, strings.TrimSpace(s))
+		}
+	}
+	sort.Strings(raw)
+	var out []string
+	for _, d := range raw {
+		if !containsString(out, d) {
+			out = append(out, d)
+		}
+		if !strings.HasPrefix(d, "/") {
+			for _, abs := range raw {
+				if joined := strings.TrimRight(abs, "/") + "/" + d; strings.HasPrefix(abs, "/") && !containsString(out, joined) {
+					out = append(out, joined)
+				}
+			}
+		}
+	}
+	// The directory of this process is read in every case.
+	if wd, err := os.Getwd(); err == nil {
+		kept := out[:0]
+		for _, d := range out {
+			if stdpath.Clean(d) != filepath.ToSlash(wd) {
+				kept = append(kept, d)
+			}
+		}
+		out = kept
+	}
+	return out
+}
+
+// selfCwdRest returns what follows "/proc/self/cwd" or
+// "/proc/thread-self/cwd" at the start of a path.
+func selfCwdRest(p string) (string, bool) {
+	for _, head := range []string{"/proc/self/cwd", "/proc/thread-self/cwd"} {
+		if p == head || strings.HasPrefix(p, head+"/") {
+			return p[len(head):], true
+		}
+	}
+	return "", false
+}
+
+// pathReadings returns the path of a write tool as written, and under each
+// directory the call says it runs in: a relative path, and a path through
+// the working directory of the process that will open it.
+func pathReadings(p string, dirs []string) []string {
+	out := []string{p}
+	for _, d := range dirs {
+		d = strings.TrimRight(d, "/")
+		if rest, ok := selfCwdRest(p); ok {
+			out = append(out, d+rest)
+		} else if !strings.HasPrefix(p, "/") && !filepath.IsAbs(p) {
+			out = append(out, d+"/"+p)
+		}
+	}
+	return out
+}
+
+func violatesProtectedPaths(env *domain.ActionEnvelope, prefixes []string) (bool, string) {
 	clean := expandPrefixes(prefixes)
 	if len(clean) == 0 {
 		return false, ""
@@ -56,6 +186,7 @@ func ViolatesProtectedPaths(env *domain.ActionEnvelope, prefixes []string) (bool
 
 	params := parseParams(env.Parameters)
 	tool := strings.ToLower(strings.TrimSpace(env.ToolName))
+	dirs := paramWorkDirs(params)
 
 	// File-target tools: write / edit / notebookedit and any tool whose
 	// params carry a file_path / path (including arrays and one level of
@@ -64,10 +195,12 @@ func ViolatesProtectedPaths(env *domain.ActionEnvelope, prefixes []string) (bool
 	// legitimate read of the policy dir.
 	if isFileWriteTool(tool) {
 		for _, fp := range collectFilePaths(params) {
-			for _, cand := range canonicalCandidates(fp) {
-				for _, prefix := range clean {
-					if matchPathPrefix(cand, prefix) {
-						return true, fmt.Sprintf("protected path: write to %s denied by -protect-paths", cand)
+			for _, reading := range pathReadings(fp, dirs) {
+				for _, cand := range canonicalCandidates(reading) {
+					for _, prefix := range clean {
+						if matchProtected(cand, prefix) {
+							return true, fmt.Sprintf("protected path: write to %s denied by -protect-paths", cand)
+						}
 					}
 				}
 			}
@@ -82,9 +215,21 @@ func ViolatesProtectedPaths(env *domain.ActionEnvelope, prefixes []string) (bool
 	// scope it OUT of the write-capable policy, or use shell_classify with an
 	// argv allowlist. See shellTouchesProtected for the exact shapes and the
 	// documented residual limits.
-	if isShellTool(tool) {
+	//
+	// A tool that is only in the group "shell" has a name `tg hook` does not
+	// know. It can be a shell, and its command can be text in another
+	// language (SQL, JavaScript), where ">" and "$" are not shell syntax. So
+	// a hit counts only when the text names a protected path. A tool with a
+	// read-only name is not checked.
+	shellTool := isShellTool(tool)
+	groupShell := !shellTool && strings.EqualFold(strings.TrimSpace(env.ToolGroup), "shell") && isFileWriteTool(tool)
+	if shellTool || groupShell {
 		if cmd := firstString(params, "command", "cmd"); cmd != "" {
-			if hit, target := shellTouchesProtected(cmd, clean); hit {
+			hit, target := shellTouchesProtectedRec(cmd, clean, 0, nil, dirs)
+			if hit && groupShell && !commandTextNamesProtected(cmd, clean, dirs) {
+				hit = false
+			}
+			if hit {
 				return true, fmt.Sprintf("protected path: shell command targets %s denied by -protect-paths", target)
 			}
 		}
@@ -121,6 +266,86 @@ func expandPrefixes(prefixes []string) []string {
 // so a symlink can neither add a match (traversal) nor remove one (the
 // textual form is always tested, so resolution failure never fails open).
 func canonicalCandidates(p string) []string {
+	out := canonicalCandidatesLexical(p)
+	// path.Clean drops "LINK/.." as text. The kernel follows LINK first,
+	// so "/var/run/../x" can be a file that the cleaned path does not name.
+	if phys := physicalPath(p); phys != "" {
+		for _, c := range append([]string{phys}, resolveSymlinksBestEffort(phys)) {
+			if c != "" && !containsString(out, c) {
+				out = append(out, c)
+			}
+		}
+	}
+	return out
+}
+
+func containsString(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+// physicalPath walks a path that has a ".." part one part at a time and
+// follows symbolic links before each "..". It returns "" for a path with no
+// ".." part, because resolveSymlinksBestEffort covers that case. A part that
+// does not exist is kept as text.
+func physicalPath(p string) string {
+	hasDotDot := false
+	for _, part := range strings.Split(p, "/") {
+		if part == ".." {
+			hasDotDot = true
+		}
+	}
+	if !hasDotDot || len(p) > maxResolvePathLen {
+		return ""
+	}
+	if !strings.HasPrefix(p, "/") {
+		if filepath.IsAbs(p) {
+			return "" // a Windows drive path: Clean is right there
+		}
+		wd, err := os.Getwd()
+		if err != nil {
+			return ""
+		}
+		p = filepath.ToSlash(wd) + "/" + p
+	}
+	root := "/"
+	if vol := filepath.VolumeName(p); vol != "" {
+		root = vol + "/"
+		p = p[len(vol):]
+	}
+	// The parts are kept in a slice: a join per part is quadratic in the
+	// length of the path.
+	var parts []string
+	for _, part := range strings.Split(p, "/") {
+		switch part {
+		case "", ".":
+		case "..":
+			cur := root + strings.Join(parts, "/")
+			if r, err := filepath.EvalSymlinks(cur); err == nil {
+				cur = filepath.ToSlash(r)
+				cur = cur[len(filepath.VolumeName(cur)):]
+				parts = parts[:0]
+				for _, rp := range strings.Split(cur, "/") {
+					if rp != "" {
+						parts = append(parts, rp)
+					}
+				}
+			}
+			if len(parts) > 0 {
+				parts = parts[:len(parts)-1]
+			}
+		default:
+			parts = append(parts, part)
+		}
+	}
+	return root + strings.Join(parts, "/")
+}
+
+func canonicalCandidatesLexical(p string) []string {
 	abs := p
 	// This function processes POSIX shell-command text (see
 	// shell_tokenize.go/protect.go's callers) - always "/"-separated,
@@ -168,6 +393,9 @@ func canonicalCandidates(p string) []string {
 // still catches `/tmp/link/newfile` where /tmp/link is a symlink. Returns ""
 // when nothing resolves (caller keeps the textual form).
 func resolveSymlinksBestEffort(p string) string {
+	if len(p) > maxResolvePathLen {
+		return "" // no system call takes a path this long
+	}
 	if r, err := filepath.EvalSymlinks(p); err == nil {
 		return filepath.Clean(r)
 	}
@@ -281,11 +509,14 @@ func isFileWriteTool(tool string) bool {
 // call was denied. Measured 2026-11-09. This does NOT mean PowerShell
 // cmdlets are understood — Set-Content, Out-File and Remove-Item are still
 // not parsed as writes, and such commands escalate rather than deny.
-// `run_shell_command` is the Gemini CLI shell tool name (source S-GM in
-// CTO/Research/review-2026-11-08/opus-2026-11-09-claims-and-harness-plan.md).
+// `run_shell_command` is the Gemini CLI shell tool name.
+// ViolatesProtectedPaths also runs the shell check for a tool whose group is
+// "shell", which is the group `tg hook` gives a tool name it does not know.
 func isShellTool(tool string) bool {
 	switch tool {
 	case "bash", "shell", "sh", "run_command", "run_shell_command", "run", "exec", "command", "terminal":
+		return true
+	case "exec_command", "shell_command", "local_shell", "unified_exec", "container.exec":
 		return true
 	case "powershell", "pwsh":
 		return true
@@ -296,7 +527,9 @@ func isShellTool(tool string) bool {
 // shellTouchesProtected reports whether a raw bash command string writes to a
 // path under any protected prefix, using the real quote-aware tokenizer in
 // shell_tokenize.go (which replaced the previous best-effort byte scanner).
-// It fires on two shapes:
+// It fires on the shapes below, and also on the command a shell runs with -c
+// (shellDashCArgs) and on a directory operand above a protected path
+// (directoryOperandTouchesProtected):
 //
 //  1. an output redirection whose target is under a protected prefix
 //     (`echo pwned > /etc/policy.yaml`, plus `>>`, `>|`, `<>`, `&>`, `>&file`).
@@ -320,28 +553,810 @@ func isShellTool(tool string) bool {
 // Neither removal can create a bypass — a command that performs no write to a
 // protected path has nothing to detect.
 //
-// The robust control for the residual limits (an unresolved argv[0], heredoc
-// bodies; see shell_tokenize.go) remains operator-side: keep bash out of the
-// write-capable policy scope entirely.
+// After these passes the name rule of protect_mention.go runs: a command
+// whose text names a protected path is denied unless every program in it is
+// read-only. The limits that remain are in the section "Protected paths" of
+// examples/coding-agent-guard/README.md. The robust control for them is
+// operator-side: keep bash out of the write-capable policy scope entirely.
 func shellTouchesProtected(cmd string, prefixes []string) (bool, string) {
-	return shellTouchesProtectedRec(cmd, prefixes, 0)
+	return shellTouchesProtectedRec(cmd, prefixes, 0, nil, nil)
 }
 
-// maxShellSubstDepth bounds recursion into nested command substitutions so an
-// adversarially deep `$( $( $( … ) ) )` can't exhaust the stack. Each level's
-// input is a proper substring of its parent, so real commands terminate far
-// below this cap; it exists only as a guard against pathological nesting.
+// maxShellSubstDepth bounds recursion into nested command substitutions and
+// nested sh -c commands so an adversarially deep `$( $( $( … ) ) )` can't
+// exhaust the stack. Each level's input is a proper substring of its parent,
+// so real commands terminate far below this cap. A command that still holds a
+// substitution or a sh -c command at the cap is not read further and fails
+// closed.
 const maxShellSubstDepth = 8
 
-func shellTouchesProtectedRec(cmd string, prefixes []string, depth int) (bool, string) {
+// shellTouchesProtectedRec is the check of one command text. inherited are
+// the directories found in the command around it. work are the directories
+// the tool call says it runs in.
+func shellTouchesProtectedRec(cmd string, prefixes []string, depth int, inherited, work []string) (bool, string) {
 	toks := tokenizeShell(cmd)
+	frags, homeAlts, over := shellFragments(cmd)
+	if over {
+		return true, "a command with more words than the check reads"
+	}
+	// Directories a relative path is also read under (protectedBases). The
+	// order of the commands is not followed, so this can add a deny and
+	// cannot remove one.
+	bases, over := protectedBases(toks, frags, homeAlts, append(append([]string{}, inherited...), work...), prefixes)
+	if over {
+		return true, "a command with more directories than the check reads"
+	}
+	if hit, target := shellTokensTouchProtected(toks, prefixes, depth, "", bases); hit {
+		return true, target
+	}
+	for _, base := range bases {
+		if hit, target := shellTokensTouchProtected(toks, prefixes, depth, base, bases); hit {
+			return true, target
+		}
+	}
 
+	// A link that `ln` makes in this command to a protected path: the link
+	// is not there yet, so a word that goes through it cannot be followed.
+	// The command is denied when it does more than make the link and read.
+	links, over := linkToProtected(toks, bases, homeAlts, prefixes)
+	if over {
+		return true, "a command with more links than the check reads"
+	}
+	if len(links) > 0 && linkIsUsed(cmd, toks, links) {
+		return true, "a link to a protected path that the same command can use"
+	}
+	// The same for an `ln` that stands in a text the command runs: the
+	// argument of `SHELL -c`, the words of `eval`, a command substitution.
+	if depth == 0 {
+		found, over := nestedLinkToProtected(cmd, 0, bases, homeAlts, prefixes)
+		if over {
+			return true, "a command with more links than the check reads"
+		}
+		if found && !onlyReadsOrLinks(cmd, 0) {
+			return true, "a link to a protected path that the same command can use"
+		}
+		// A link to another directory, and `..` after its name: the word
+		// names the directory above the target of the link.
+		if found, lnWrites := linkBeforeDotDot(cmd); lnWrites || (found && !onlyReadsOrLinks(cmd, 0)) {
+			return true, "a link that the same command makes, with .. after it"
+		}
+	}
+
+	// A shell named anywhere in a command that has a pipe or an input
+	// redirection may read its commands from there (echo 'rm f' | bash,
+	// echo 'rm f' | sh -c 'exec bash'), so the words of the whole command
+	// are checked as that input.
+	if depth == 0 && strings.ContainsAny(cmd, "|<") && namesShell(frags) {
+		if hit, target := stdinShellTouchesProtected(toks, prefixes, depth, bases); hit {
+			return true, target
+		}
+	}
+
+	// (3) A command substitution EXECUTES its inner command for side effects no
+	// matter where the captured output goes, so a write hidden inside one —
+	// `echo $(rm /protected/f)`, `x=$(rm /protected/f)`, backticks — must be
+	// caught even though the output is never used as a path. Recurse into each
+	// inner command (depth-bounded). Precise by construction: it fires only when
+	// the inner command itself writes to a protected path, so benign
+	// `echo $(date)` / `x=$(cat f)` do not fire.
+	for _, sub := range extractCommandSubsts(cmd) {
+		if depth >= maxShellSubstDepth {
+			return true, shortRaw(sub)
+		}
+		if hit, target := shellTouchesProtectedRec(sub, prefixes, depth+1, bases, nil); hit {
+			return true, target
+		}
+	}
+
+	// The name rule (protect_mention.go): the text names a protected path
+	// and the command is not made of read-only programs alone.
+	name := commandNamesProtected(toks, frags, bases, work, homeAlts, prefixes)
+	unknownDir := false
+	if name == "" {
+		name = shortRaw(unknownDirWord(cmd, bases))
+		unknownDir = name != ""
+	}
+	if name == "" {
+		name = shortRaw(unreadWord(cmd, toks, bases, prefixes))
+	}
+	if name != "" && !shellOnlyReads(cmd, 0) {
+		return true, name
+	}
+	// A word under a directory the check does not know, in a command that
+	// writes with a redirection: the target can be that word under another
+	// spelling.
+	if unknownDir && strings.ContainsRune(harmlessRedirRe.ReplaceAllString(cmd, ""), '>') {
+		return true, name
+	}
+
+	return false, ""
+}
+
+// commandTextNamesProtected reports whether the command text names a
+// protected path, or a word under a directory the check does not know.
+func commandTextNamesProtected(cmd string, prefixes, work []string) bool {
+	toks := tokenizeShell(cmd)
+	frags, homeAlts, over := shellFragments(cmd)
+	if over {
+		return true
+	}
+	bases, over := protectedBases(toks, frags, homeAlts, work, prefixes)
+	if over {
+		return true
+	}
+	if commandNamesProtected(toks, frags, bases, work, homeAlts, prefixes) != "" || unknownDirWord(cmd, bases) != "" || unreadWord(cmd, toks, bases, prefixes) != "" {
+		return true
+	}
+	links, over := linkToProtected(toks, bases, homeAlts, prefixes)
+	return over || len(links) > 0
+}
+
+// harmlessRedirRe matches a redirection that writes no file: a copy of a
+// file descriptor (2>&1) and a redirection to /dev/null.
+var harmlessRedirRe = regexp.MustCompile(`[0-9]*[<>]&[0-9-]+|[0-9&]*>>?[ \t]*/dev/null([ \t;|&)]|$)`)
+
+// maxLinkWords bounds the operands of the ln commands that linkToProtected
+// reads.
+const maxLinkWords = 64
+
+// multiCallPrograms run the program that their first operand names.
+var multiCallPrograms = map[string]bool{"busybox": true, "toybox": true}
+
+// linkToProtected returns the segments of the command in which `ln` makes a
+// link to a protected path, to something inside one or to a directory above
+// one. The link does not exist when the check runs, so a later word that
+// goes through it cannot be followed. A relative target of a symbolic link
+// is read under the directory of the link, and also as written.
+func linkToProtected(toks []shellToken, bases, homeAlts, prefixes []string) (segs map[int]bool, over bool) {
+	read := 0
+	for n, seg := range splitShellSegments(toks) {
+		all := commandWords(seg)
+		words := expandBraceWords(stripCommandPrefix(all))
+		if len(words) > 1 && !words[0].unresolved && multiCallPrograms[filepath.Base(words[0].value)] {
+			words = words[1:] // busybox ln
+		}
+		// A word before the ln can name the directory it runs in
+		// (env -C DIR ln ...).
+		var dirs []string
+		for _, w := range all {
+			if !w.unresolved && filepath.Base(w.value) == "ln" {
+				break
+			}
+			d := stripPathOption(w.value)
+			if eq := strings.IndexByte(d, '='); eq >= 0 && strings.HasPrefix(d, "-") {
+				d = d[eq+1:] // --chdir=DIR
+			}
+			if !w.unresolved && d != "" && d[0] != '-' {
+				dirs = append(dirs, d)
+			}
+		}
+		// A program that is not read-only can run the words after it as a
+		// command: `flock FILE ln ...`, a shell function, "$@".
+		if len(words) > 1 && (words[0].unresolved || filepath.Base(words[0].value) != "ln") && !segmentOnlyReads(seg, 0) {
+			for i := 0; i < len(words); i++ {
+				if !words[i].unresolved && endsInLn(words[i].value) {
+					words = words[i:]
+					break
+				}
+			}
+		}
+		if len(words) == 0 || (words[0].unresolved && !hasSymbolicFlag(words[1:])) || (!words[0].unresolved && !endsInLn(words[0].value)) {
+			continue
+		}
+		// xargs gives ln operands that are not in the text, so the link
+		// can be one to a protected path.
+		for _, w := range all {
+			if !w.unresolved && filepath.Base(w.value) == "xargs" {
+				if segs == nil {
+					segs = map[int]bool{}
+				}
+				segs[n] = true
+			}
+		}
+		// A word of the ln that comes from a variable or from a command
+		// substitution is not in the text either: ln -s $HOME l.
+		for _, w := range words[1:] {
+			if w.unresolved {
+				if segs == nil {
+					segs = map[int]bool{}
+				}
+				segs[n] = true
+			}
+		}
+		if len(words) < 3 {
+			continue
+		}
+		var ops []string
+		afterDashDash := false
+		for _, w := range words[1:] {
+			v := w.value
+			if !afterDashDash && v == "--" {
+				afterDashDash = true
+				continue
+			}
+			if !afterDashDash && strings.HasPrefix(v, "-") && stripPathOption(v) == v {
+				continue
+			}
+			op := stripPathOption(v)
+			if trimmed := strings.TrimRight(op, "/"); trimmed != "" {
+				op = trimmed
+			} else if op != "" {
+				op = "/" // the root directory is above each path
+			}
+			ops = append(ops, op)
+		}
+		if read += len(ops); read > maxLinkWords {
+			return nil, true
+		}
+		for _, target := range ops {
+			if target == "" {
+				continue
+			}
+			// Under /dev/fd and /proc a name can stand for a directory
+			// that the command opened or works in.
+			if clean := stdpath.Clean(target); clean == "/dev" || clean == "/proc" || strings.HasPrefix(clean, "/dev/fd") || strings.HasPrefix(clean, "/proc/") {
+				if segs == nil {
+					segs = map[int]bool{}
+				}
+				segs[n] = true
+			}
+			readings := []string{target}
+			if target[0] != '/' && target[0] != '~' {
+				// Each other operand can be the link or its directory.
+				for _, dest := range ops {
+					if dest != "" && dest != target {
+						readings = append(readings, stdpath.Dir(dest)+"/"+target, dest+"/"+target)
+					}
+				}
+				for _, dir := range dirs {
+					readings = append(readings, dir+"/"+target)
+				}
+			}
+			for _, r := range readings {
+				for _, form := range fragmentForms(r, bases, homeAlts) {
+					if hit, _ := namesProtected(form, prefixes); hit || isAboveProtected(form, prefixes) {
+						if segs == nil {
+							segs = map[int]bool{}
+						}
+						segs[n] = true
+					}
+				}
+			}
+		}
+	}
+	return segs, false
+}
+
+// endsInLn reports whether the word is `ln`, a path to it, or a word that
+// ends in `!ln` or `=ln` (a git alias: `alias.k=!ln`).
+func endsInLn(word string) bool {
+	base := filepath.Base(word)
+	if cut := strings.LastIndexAny(base, "!="); cut >= 0 {
+		base = base[cut+1:]
+	}
+	return base == "ln"
+}
+
+// symbolicFlagRe matches the option of `ln` that asks for a symbolic link.
+var symbolicFlagRe = regexp.MustCompile(`^(-[A-Za-z]*s[A-Za-z]*|--symbolic)$`)
+
+// hasSymbolicFlag reports whether a word is the option -s of `ln`. A
+// program that is not resolved and has this option is read as `ln`
+// (c=ln; $c -s TARGET LINK).
+func hasSymbolicFlag(words []shellToken) bool {
+	for _, w := range words {
+		if !w.unresolved && symbolicFlagRe.MatchString(w.value) {
+			return true
+		}
+	}
+	return false
+}
+
+// linkIsUsed reports whether the command does more than make the links in
+// segs and read: another segment runs a program that is not read-only, a
+// redirection writes a file, or a command substitution is not read-only.
+func linkIsUsed(cmd string, toks []shellToken, segs map[int]bool) bool {
+	if strings.ContainsRune(harmlessRedirRe.ReplaceAllString(cmd, ""), '>') {
+		return true
+	}
+	if shellAnomalyRe.MatchString(homeVarRe.ReplaceAllString(cmd, "~")) || strings.ContainsRune(cmd, '\r') {
+		return true
+	}
+	for n, seg := range splitShellSegments(toks) {
+		if !segs[n] && !segmentOnlyReads(seg, 0) {
+			return true
+		}
+	}
+	for _, sub := range extractCommandSubsts(cmd) {
+		if !shellOnlyReads(sub, 1) {
+			return true
+		}
+	}
+	return false
+}
+
+// nestedTexts returns the texts that the command runs as commands of their
+// own: each command substitution, each argument of `SHELL -c`, and the
+// words of `eval`. ok is false when a word of `eval` is not resolved.
+func nestedTexts(cmd string) (texts []string, ok bool) {
+	ok = true
+	texts = append(texts, extractCommandSubsts(cmd)...)
+	for _, seg := range splitShellSegments(tokenizeShell(cmd)) {
+		words := stripCommandPrefix(commandWords(seg))
+		if len(words) < 2 || words[0].unresolved {
+			continue
+		}
+		switch prog := filepath.Base(words[0].value); {
+		case shellInterpreters[prog]:
+			for _, arg := range shellDashCArgs(words[1:]) {
+				texts = append(texts, arg.marked)
+			}
+		case prog == "eval":
+			parts := make([]string, 0, len(words)-1)
+			for _, w := range words[1:] {
+				if w.unresolved {
+					ok = false
+				}
+				parts = append(parts, w.value)
+			}
+			texts = append(texts, strings.Join(parts, " "))
+		}
+	}
+	return texts, ok
+}
+
+// assignmentStartRe matches the name and the equals sign of an assignment.
+var assignmentStartRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*\+?=`)
+
+// possibleTexts returns the texts in the command that a later step can run
+// as a command: each word that holds white space (a quoted text, also the
+// value of an assignment and a $'...' word), and the words after `echo` or
+// `printf`. The check cannot know that a text is run (`eval "$c"`,
+// `echo TEXT | bash`), so it reads each one.
+func possibleTexts(cmd string, skipData bool) []string {
+	var texts []string
+	// The command with each escape of a $'...' word as its character.
+	if strings.Contains(cmd, "$'") {
+		texts = append(texts, decodeAnsiEscapes(strings.ReplaceAll(cmd, "$'", "'")))
+	}
+	toks := tokenizeShell(cmd)
+	for _, seg := range splitShellSegments(toks) {
+		if skipData && dataSegment(seg) {
+			continue
+		}
+		for _, t := range seg {
+			if t.kind != tokWord {
+				continue
+			}
+			text := unquoteWord(strings.ReplaceAll(t.raw, "$'", "'"))
+			if strings.ContainsAny(text, " \t\n") {
+				texts = append(texts, assignmentStartRe.ReplaceAllString(text, ""))
+			}
+		}
+	}
+	for _, seg := range splitShellSegments(toks) {
+		words := stripCommandPrefix(commandWords(seg))
+		if len(words) < 2 || words[0].unresolved || skipData {
+			continue
+		}
+		if prog := filepath.Base(words[0].value); prog == "echo" || prog == "printf" {
+			// An option or a format can stand before the `ln`: the first
+			// word of the text is then not a read-only program, and
+			// linkToProtected reads the words from the `ln` on.
+			parts := make([]string, 0, len(words)-1)
+			for _, w := range words[1:] {
+				parts = append(parts, w.value)
+			}
+			texts = append(texts, strings.Join(parts, " "), decodeAnsiEscapes(strings.Join(parts, " ")))
+		}
+	}
+	return texts
+}
+
+// ansiLetterRe matches an escape that stands for a white space character.
+var ansiLetterRe = regexp.MustCompile(`\\[tnrvf]`)
+
+// decodeAnsiEscapes replaces each \xHH, \uHHHH and octal escape with its
+// character, and each \t, \n, \r, \v and \f with a space.
+func decodeAnsiEscapes(s string) string {
+	return ansiLetterRe.ReplaceAllString(decodeShellEscapes(s), " ")
+}
+
+// dataSegment reports whether the command of the segment only prints or
+// stores its words: `echo`, `printf`, `git commit` and `git tag`.
+func dataSegment(seg []shellToken) bool {
+	words := stripCommandPrefix(commandWords(seg))
+	if len(words) == 0 || words[0].unresolved {
+		return false
+	}
+	switch filepath.Base(words[0].value) {
+	case "echo", "printf":
+		return true
+	case "git":
+		return len(words) > 1 && !words[1].unresolved && (words[1].value == "commit" || words[1].value == "tag")
+	}
+	return false
+}
+
+// textCannotRun reports whether no step of the command can run a text that
+// a data segment holds: the command has no pipe, no input redirection, no
+// expansion, and names no shell and no `eval`, `source` or `.`.
+func textCannotRun(cmd string) bool {
+	if strings.ContainsAny(cmd, "|<$`") {
+		return false
+	}
+	for _, seg := range splitShellSegments(tokenizeShell(cmd)) {
+		for _, w := range commandWords(seg) {
+			if w.unresolved {
+				return false
+			}
+			switch base := filepath.Base(w.value); {
+			case shellInterpreters[base], base == "eval", base == "source", base == ".":
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// pathWordRe matches a part of a word that can be a path.
+var pathWordRe = regexp.MustCompile(`[^\s'"()=,:;<>|&]+`)
+
+// linkBeforeDotDot reports whether the command makes a link with `ln`,
+// another word holds the name of the link, and a word that is not an
+// operand of `ln` holds `..` (LINK/../x, and also cd LINK/sub with ../../x
+// in a later word). An operand of `ln` that holds `..` after the name of a
+// link counts too. The link is not there when the check runs, so the check
+// cannot know the directory that `..` names after it.
+//
+// lnWrites reports that a second `ln` can write through the link: the
+// command runs `ln` two times or more, and the place that an `ln` writes
+// to can be above the target of the link. Such a command writes with no
+// program other than `ln`. A loop and a function are not read-only, so the
+// caller denies a command that runs one `ln` in them.
+func linkBeforeDotDot(cmd string) (found, lnWrites bool) {
+	names := map[string]bool{}
+	var words, operands []string
+	scan := &lnScan{keys: map[string]bool{}}
+	all := linkNamesAndWords(cmd, 0, textCannotRun(cmd), names, &words, &operands, scan)
+	if len(names) == 0 {
+		return false, false
+	}
+	many := len(scan.keys) > 1 || scan.fromInput
+	if !all {
+		return true, many // a link, and more words than the check reads
+	}
+	isName := func(part string) bool {
+		if part == "" || part == "." || part == ".." {
+			return false
+		}
+		if names[part] || names["*"] {
+			return true
+		}
+		if strings.ContainsAny(part, "*?[") {
+			for name := range names {
+				if ok, _ := stdpath.Match(part, name); ok {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	// read reports whether the path holds `..` after the name of a link.
+	// It also records a `..` and a name in the path.
+	// exact records a name that an operand of ln gives, and not "*".
+	dotDot, named, exact := false, false, false
+	read := func(p string) (through bool) {
+		after := false
+		for _, part := range strings.Split(p, "/") {
+			switch {
+			case part == "..":
+				if after {
+					through = true
+				}
+				dotDot = true
+			case isName(part):
+				after = true
+				named = true
+				if !names["*"] || names[part] {
+					exact = true
+				}
+			}
+		}
+		return through
+	}
+	for _, word := range words {
+		// The word as one path (a name can hold a space), and each part
+		// of it that can be a path.
+		for _, p := range append(pathWordRe.FindAllString(word, -1), word) {
+			read(p)
+		}
+	}
+	found = dotDot && named
+	// A word names the link: with its name, or with an expansion when
+	// the name of the link is not known.
+	wordNamed := exact || (named && scan.unresolvedWord)
+	// An operand of ln that goes through another link: ln -s l/.. m.
+	for _, op := range operands {
+		if read(op) {
+			found = true
+		}
+	}
+	// The place that an ln writes to holds `..`.
+	destDotDot := false
+	for _, dest := range scan.dests {
+		if strings.Contains(dest, "..") {
+			destDotDot = true
+		}
+	}
+	lnWrites = many && (found || (destDotDot && wordNamed))
+	return found, lnWrites
+}
+
+// lnScan holds what linkNamesAndWords finds about the runs of `ln`.
+type lnScan struct {
+	// keys has one entry for each `ln` with different words.
+	keys map[string]bool
+	// dests are the words that name the place an `ln` writes to: the last
+	// operand, each operand of an `ln` with -t, and an option with `..`.
+	dests []string
+	// unresolvedWord is true when a word that is not an operand of `ln`
+	// is not resolved.
+	unresolvedWord bool
+	// fromInput is true when an `ln` has no operand in the command.
+	fromInput bool
+}
+
+// lnTargetDirRe matches the option of `ln` that names the directory of
+// the link (-t, --target-directory).
+var lnTargetDirRe = regexp.MustCompile(`^(-[A-Za-su-z]*t|--target-directory)`)
+
+// linkNamesAndWords adds the last part of each operand of each `ln` in the
+// command to names, and each other word to words. It reads the texts that
+// the command runs or can run in the same way. An operand that is not
+// resolved gives the name "*". With skipData, the words of a data segment
+// (dataSegment) are not read. all is false when the command holds more
+// words than maxLinkNameWords: the names are then complete, and the words
+// are not.
+func linkNamesAndWords(cmd string, depth int, skipData bool, names map[string]bool, words, operands *[]string, scan *lnScan) (all bool) {
+	if depth > maxShellSubstDepth {
+		return true // the caller denies a text this deep
+	}
+	all = true
+	for _, seg := range splitShellSegments(tokenizeShell(cmd)) {
+		cw := expandBraceWords(stripCommandPrefix(commandWords(seg)))
+		at := -1
+		for i, w := range cw {
+			if !w.unresolved && endsInLn(w.value) && (i == 0 || !segmentOnlyReads(seg, 0)) {
+				at = i
+				break
+			}
+		}
+		if at < 0 && len(cw) > 0 && cw[0].unresolved && hasSymbolicFlag(cw[1:]) {
+			at = 0 // c=ln; $c -s TARGET LINK
+		}
+		if at >= 0 {
+			// The words of this ln, and the place it writes to.
+			key := ""
+			targetDir := false
+			var ops []int
+			for i := at + 1; i < len(cw); i++ {
+				key += "\x00" + cw[i].value
+				switch {
+				case !strings.HasPrefix(cw[i].value, "-"):
+					ops = append(ops, i)
+				case lnTargetDirRe.MatchString(cw[i].value):
+					targetDir = true
+					fallthrough
+				default:
+					if strings.Contains(cw[i].value, "..") {
+						scan.dests = append(scan.dests, cw[i].value)
+					}
+				}
+			}
+			if len(scan.keys) < maxLinkNameWords {
+				scan.keys[key] = true
+			}
+			nOps := len(ops)
+			if !targetDir && len(ops) > 1 {
+				ops = ops[len(ops)-1:]
+			} else if !targetDir {
+				ops = nil // ln TARGET writes to the working directory
+			}
+			for _, i := range ops {
+				if len(scan.dests) < maxLinkNameWords {
+					scan.dests = append(scan.dests, cw[i].value)
+				} else {
+					all = false
+				}
+			}
+			if nOps == 0 && !targetDir {
+				// xargs ln: the operands come from its input, and the
+				// ln can run more than one time.
+				names["*"] = true
+				scan.unresolvedWord = true
+				scan.fromInput = true
+			}
+		}
+		operand := map[string]bool{}
+		for i, w := range cw {
+			if at < 0 || i <= at || strings.HasPrefix(w.value, "-") {
+				continue
+			}
+			operand[w.value] = true
+			if len(*operands) < maxLinkNameWords {
+				*operands = append(*operands, w.value)
+			} else {
+				all = false
+			}
+			if w.unresolved {
+				names["*"] = true
+				continue
+			}
+			if base := stdpath.Base(strings.TrimRight(stripPathOption(w.value), "/")); base != "." && base != "/" && base != ".." {
+				names[base] = true
+			}
+		}
+		// Each other word, also the target of a redirection. A word with
+		// white space and the words of `echo` and `printf` are texts, and
+		// they are read below.
+		if raw := commandWords(seg); len(raw) > 0 && !raw[0].unresolved && (raw[0].value == "echo" || raw[0].value == "printf" || (skipData && dataSegment(seg))) {
+			for _, w := range raw {
+				operand[w.value] = true
+			}
+		}
+		for _, t := range append(append([]shellToken{}, seg...), cw...) {
+			if operand[t.value] || looksLikeCommand(t.value) {
+				continue
+			}
+			if t.unresolved {
+				scan.unresolvedWord = true
+			}
+			if len(*words) < maxLinkNameWords {
+				*words = append(*words, t.value)
+			} else {
+				all = false
+			}
+		}
+	}
+	texts, _ := nestedTexts(cmd)
+	for _, text := range append(texts, possibleTexts(cmd, skipData)...) {
+		if !linkNamesAndWords(text, depth+1, false, names, words, operands, scan) {
+			all = false
+		}
+	}
+	return all
+}
+
+// looksLikeCommand reports whether a word with white space holds a word
+// that is `ln`: it is then a text, and it is read as a command.
+func looksLikeCommand(word string) bool {
+	if !strings.ContainsAny(word, " \t\n") {
+		return false
+	}
+	for _, part := range strings.Fields(word) {
+		if endsInLn(part) {
+			return true
+		}
+	}
+	return false
+}
+
+// maxLinkNameWords bounds the words that linkNamesAndWords collects.
+const maxLinkNameWords = 4096
+
+// nestedLinkToProtected reports whether a text that the command runs
+// (nestedTexts, at each depth), or can run (possibleTexts), makes a link to
+// a protected path with `ln`.
+func nestedLinkToProtected(cmd string, depth int, bases, homeAlts, prefixes []string) (found, over bool) {
+	if depth >= maxShellSubstDepth {
+		return false, false // the caller denies a text this deep
+	}
+	texts, _ := nestedTexts(cmd)
+	texts = append(texts, possibleTexts(cmd, depth == 0 && textCannotRun(cmd))...)
+	for _, text := range texts {
+		links, over := linkToProtected(tokenizeShell(text), bases, homeAlts, prefixes)
+		if over {
+			return false, true
+		}
+		if len(links) > 0 {
+			return true, false
+		}
+		if found, over := nestedLinkToProtected(text, depth+1, bases, homeAlts, prefixes); found || over {
+			return found, over
+		}
+	}
+	return false, false
+}
+
+// onlyReadsOrLinks reports whether the command, and each text it runs, is
+// made of `ln` commands and read-only programs alone, and writes no file
+// with a redirection.
+func onlyReadsOrLinks(cmd string, depth int) bool {
+	if depth > maxShellSubstDepth {
+		return false
+	}
+	if strings.ContainsRune(harmlessRedirRe.ReplaceAllString(cmd, ""), '>') {
+		return false
+	}
+	if shellAnomalyRe.MatchString(homeVarRe.ReplaceAllString(cmd, "~")) || strings.ContainsRune(cmd, '\r') {
+		return false
+	}
+	for _, seg := range splitShellSegments(tokenizeShell(cmd)) {
+		words := stripCommandPrefix(commandWords(seg))
+		if len(words) == 0 {
+			continue // an assignment alone; its substitutions are read below
+		}
+		if words[0].unresolved {
+			return false
+		}
+		prog := filepath.Base(words[0].value)
+		if multiCallPrograms[prog] && len(words) > 1 && !words[1].unresolved && filepath.Base(words[1].value) == "ln" {
+			continue
+		}
+		if prog == "ln" || prog == "eval" || (shellInterpreters[prog] && len(shellDashCArgs(words[1:])) > 0) {
+			continue // ln, or a text that is read below
+		}
+		if !segmentOnlyReads(seg, 0) {
+			return false
+		}
+	}
+	texts, ok := nestedTexts(cmd)
+	if !ok {
+		return false
+	}
+	for _, text := range texts {
+		if !onlyReadsOrLinks(text, depth+1) {
+			return false
+		}
+	}
+	return true
+}
+
+// namesShell reports whether a fragment is the name of a shell.
+func namesShell(frags []string) bool {
+	for _, f := range frags {
+		if shellInterpreters[filepath.Base(f)] {
+			return true
+		}
+	}
+	return false
+}
+
+// rebaseWord returns the word as the shell reads it after `cd base`: a
+// relative path gets base in front. Absolute paths, tilde paths, options and
+// unresolved words are returned as they are. The value of a glued path
+// option (`of=REL`, `-tREL`, `--target-directory=REL`) is rebased too.
+func rebaseWord(w shellToken, base string) shellToken {
+	if base == "" || w.unresolved || w.value == "" {
+		return w
+	}
+	prefix, v := "", w.value
+	if stripped := stripPathOption(v); stripped != v {
+		prefix, v = v[:len(v)-len(stripped)], stripped
+	}
+	if v == "" || strings.ContainsRune("/~-+", rune(v[0])) {
+		return w
+	}
+	joined := prefix + strings.TrimRight(base, "/") + "/" + v
+	// raw and marked keep their relation to value, which later checks read.
+	if w.raw == w.value {
+		return shellToken{kind: w.kind, value: joined, raw: joined, marked: joined}
+	}
+	return shellToken{kind: w.kind, value: joined, raw: w.raw, marked: joined}
+}
+
+// shellTokensTouchProtected is the check of one token stream. With base set,
+// every relative path is read under that directory, and the commands a shell
+// runs (-c, standard input) are left to the pass without a base.
+func shellTokensTouchProtected(toks []shellToken, prefixes []string, depth int, base string, bases []string) (bool, string) {
 	// (1) Output-redirection targets.
 	for _, t := range redirectTargets(toks) {
 		if t.unresolved {
 			return true, shortRaw(t.raw)
 		}
-		if hit, target := matchLiteralPath(t.value, prefixes); hit {
+		value := rebaseWord(shellToken{kind: tokWord, value: t.value, raw: t.raw, marked: t.value}, base).value
+		if hit, target := namesProtected(value, prefixes); hit {
 			return true, target
 		}
 	}
@@ -350,12 +1365,54 @@ func shellTouchesProtectedRec(cmd string, prefixes []string, depth int) (bool, s
 	// pipeline / list segments so `ls /etc && echo hi` doesn't inherit a
 	// mutating verb from a sibling segment.
 	for _, seg := range splitShellSegments(toks) {
-		words := stripLeadingAssignments(commandWords(seg))
+		words := expandBraceWords(stripCommandPrefix(commandWords(seg)))
+		// A shell that reads its commands from standard input
+		// (`echo 'rm f' | bash`, `bash <<< 'rm f'`): the text it will run
+		// is elsewhere in the command, so every word is checked.
+		if base == "" && len(words) > 0 && shellInterpreters[filepath.Base(words[0].value)] && shellReadsStdin(words[1:]) {
+			if hit, target := stdinShellTouchesProtected(toks, prefixes, depth, bases); hit {
+				return true, target
+			}
+		}
 		if len(words) < 2 {
 			continue
 		}
 		vals := wordValues(words)
 		prog := filepath.Base(words[0].value)
+		// A shell started with -c runs an argument as a command, so that
+		// argument is checked like the command itself.
+		if base == "" && shellInterpreters[prog] {
+			for _, arg := range shellDashCArgs(words[1:]) {
+				if depth >= maxShellSubstDepth {
+					return true, shortRaw(arg.raw)
+				}
+				if hit, target := shellCommandArgTouchesProtected(arg, prefixes, depth+1, bases); hit {
+					return true, target
+				}
+			}
+		}
+		if base != "" {
+			rebased := make([]shellToken, len(words))
+			rebased[0] = words[0]
+			for i := 1; i < len(words); i++ {
+				rebased[i] = rebaseWord(words[i], base)
+			}
+			words = rebased
+			vals = wordValues(words)
+		}
+		if words[0].unresolved {
+			// The program is not known ($CMD ~/.claude). It may be one that
+			// changes a directory operand with what is under it.
+			for _, w := range words[1:] {
+				if !w.unresolved && w.value != "" && w.value[0] != '-' && isAboveProtected(w.value, prefixes) {
+					return true, shortRaw(w.raw)
+				}
+				// The same for a word with $HOME and no other expansion.
+				if v, ok := homeVarWord(w); ok && isAboveProtected(v, prefixes) {
+					return true, shortRaw(w.raw)
+				}
+			}
+		}
 		if !isMutatingProg(prog, vals) {
 			continue
 		}
@@ -387,30 +1444,775 @@ func shellTouchesProtectedRec(cmd string, prefixes []string, depth int) (bool, s
 					return true, target
 				}
 			}
+			if !optionToken {
+				if hit, target := globTouchesProtected(w.value, ancestorMutatingProgs[prog], prefixes); hit {
+					return true, target
+				}
+			}
 			if stripped := stripPathOption(w.value); stripped != w.value {
 				if hit, target := matchLiteralPath(stripped, prefixes); hit {
 					return true, target
 				}
 			}
 		}
+		if hit, target := directoryOperandTouchesProtected(prog, words[1:], prefixes); hit {
+			return true, target
+		}
 	}
+	return false, ""
+}
 
-	// (3) A command substitution EXECUTES its inner command for side effects no
-	// matter where the captured output goes, so a write hidden inside one —
-	// `echo $(rm /protected/f)`, `x=$(rm /protected/f)`, backticks — must be
-	// caught even though the output is never used as a path. Recurse into each
-	// inner command (depth-bounded). Precise by construction: it fires only when
-	// the inner command itself writes to a protected path, so benign
-	// `echo $(date)` / `x=$(cat f)` do not fire.
-	if depth < maxShellSubstDepth {
-		for _, sub := range extractCommandSubsts(cmd) {
-			if hit, target := shellTouchesProtectedRec(sub, prefixes, depth+1); hit {
+// shellPrefixWords are reserved words and the time keyword that may stand
+// before a command in a list: `! rm f`, `{ rm f; }`, `if true; then rm f; fi`.
+// They are grammar, not programs, so the word after them is the command.
+var shellPrefixWords = map[string]bool{
+	"!": true, "{": true, "}": true, "if": true, "then": true, "elif": true, "else": true,
+	"do": true, "while": true, "until": true, "time": true,
+}
+
+// stripCommandPrefix removes leading assignments, reserved words and command
+// wrappers (shellWrapperProgs: env, sudo, exec, command, nohup, timeout, ...)
+// until the first word is the command name. Only an unquoted word counts as a
+// reserved word.
+func stripCommandPrefix(words []shellToken) []shellToken {
+	for {
+		words = stripLeadingAssignments(words)
+		if len(words) == 0 || words[0].unresolved {
+			return words
+		}
+		first := words[0].value
+		if words[0].raw == first && shellPrefixWords[first] && first != "time" {
+			words = words[1:]
+			continue
+		}
+		rest, peeled := unwrapShellWrappers(wordValues(words))
+		if !peeled {
+			return words
+		}
+		words = words[len(words)-len(rest):]
+	}
+}
+
+// shellReadsStdin reports whether a shell started with these arguments reads
+// its commands from standard input: it has the -s option, or it has no -c
+// command and no script file.
+func shellReadsStdin(args []shellToken) bool {
+	if len(shellDashCArgs(args)) > 0 {
+		return false
+	}
+	for i := 0; i < len(args); i++ {
+		v := args[i].value
+		if args[i].unresolved || v == "" {
+			return false
+		}
+		if v[0] != '-' && v[0] != '+' {
+			return false // a script file
+		}
+		if strings.HasPrefix(v, "--") {
+			if v == "--rcfile" || v == "--init-file" {
+				i++
+			}
+			continue
+		}
+		if v[0] == '-' && strings.ContainsRune(v, 's') {
+			return true
+		}
+		i += strings.Count(v, "o") + strings.Count(v, "O")
+	}
+	return true
+}
+
+// stdinShellTouchesProtected is the check for a command that holds a shell
+// reading standard input. A word that names a protected path is a hit, and so
+// is a word that touches one when it is read as a command.
+func stdinShellTouchesProtected(toks []shellToken, prefixes []string, depth int, bases []string) (bool, string) {
+	for _, t := range toks {
+		if t.kind != tokWord {
+			continue
+		}
+		if !t.unresolved {
+			if hit, target := matchLiteralPath(t.value, prefixes); hit {
 				return true, target
 			}
 		}
+		if !strings.ContainsAny(t.value, " \t\n;") {
+			continue
+		}
+		if depth >= maxShellSubstDepth {
+			return true, shortRaw(t.raw)
+		}
+		if hit, target := shellCommandArgTouchesProtected(t, prefixes, depth+1, bases); hit {
+			return true, target
+		}
 	}
-
+	// The arguments of one command, joined, may be the text the shell reads:
+	// echo mv ~/.claude ~/x | bash
+	if depth >= maxShellSubstDepth {
+		return false, ""
+	}
+	for _, seg := range splitShellSegments(toks) {
+		words := commandWords(seg)
+		if len(words) < 3 {
+			continue
+		}
+		parts := make([]string, 0, len(words)-1)
+		for _, w := range words[1:] {
+			parts = append(parts, w.marked)
+		}
+		joined := strings.Join(parts, " ")
+		if hit, target := shellTouchesProtectedRec(joined, prefixes, depth+1, bases, nil); hit {
+			return true, strings.ReplaceAll(target, string(rune(shellUnresolvedMark)), "$…")
+		}
+	}
 	return false, ""
+}
+
+// maxBraceWords bounds the words one brace expansion may produce.
+const maxBraceWords = 64
+
+// expandBraceWords performs the comma form of bash brace expansion on the
+// arguments of a command, so `rm ~/.claude/settings.{json,x}` is checked as
+// the two paths bash passes to rm. A sequence expression (`{1..3}`) is
+// expanded too. A word that holds a quoted or escaped brace, or more
+// expansions than maxBraceWords, is marked unresolved, so a path position
+// fails closed on it.
+func expandBraceWords(words []shellToken) []shellToken {
+	needs := false
+	for _, w := range words {
+		if strings.ContainsRune(w.raw, '{') {
+			needs = true
+			break
+		}
+	}
+	if !needs {
+		return words
+	}
+	out := make([]shellToken, 0, len(words))
+	for _, w := range words {
+		if w.unresolved || !strings.ContainsRune(w.raw, '{') {
+			out = append(out, w)
+			continue
+		}
+		if w.raw != w.value {
+			// Quoting inside the word: which braces are live is not known.
+			if braceExprRe.MatchString(w.raw) {
+				w.unresolved = true
+			}
+			out = append(out, w)
+			continue
+		}
+		expanded, ok := expandBraces(w.value)
+		if !ok {
+			w.unresolved = true
+			out = append(out, w)
+			continue
+		}
+		for _, e := range expanded {
+			out = append(out, shellToken{kind: tokWord, value: e, raw: e, marked: e})
+		}
+	}
+	return out
+}
+
+// braceExprRe matches a brace group bash would expand: one with a comma or a
+// sequence expression.
+var braceExprRe = regexp.MustCompile(`\{[^{}]*(,|\.\.)[^{}]*\}`)
+
+// expandBraces expands the innermost brace groups of s until none is left.
+// ok is false when the result is too large.
+func expandBraces(s string) (out []string, ok bool) {
+	todo := []string{s}
+	for len(todo) > 0 {
+		cur := todo[0]
+		todo = todo[1:]
+		loc := braceExprRe.FindStringIndex(cur)
+		if loc == nil {
+			out = append(out, cur)
+			if len(out) > maxBraceWords {
+				return nil, false
+			}
+			continue
+		}
+		body := cur[loc[0]+1 : loc[1]-1]
+		alts := strings.Split(body, ",")
+		if !strings.Contains(body, ",") {
+			if alts = braceSequence(body); alts == nil {
+				return nil, false
+			}
+		}
+		for _, alt := range alts {
+			todo = append(todo, cur[:loc[0]]+alt+cur[loc[1]:])
+			if len(todo) > maxBraceWords {
+				return nil, false
+			}
+		}
+	}
+	return out, true
+}
+
+// braceSequence returns the words of a sequence expression: 1..3, 3..1,
+// a..e, 1..9..2. It returns nil for another body and for a sequence longer
+// than maxBraceWords.
+func braceSequence(body string) []string {
+	parts := strings.Split(body, "..")
+	if len(parts) != 2 && len(parts) != 3 {
+		return nil
+	}
+	step := 1
+	if len(parts) == 3 {
+		n, err := strconv.Atoi(parts[2])
+		if err != nil || n == 0 {
+			return nil
+		}
+		if n < 0 {
+			n = -n
+		}
+		step = n
+	}
+	from, err1 := strconv.Atoi(parts[0])
+	to, err2 := strconv.Atoi(parts[1])
+	letters := false
+	if err1 != nil || err2 != nil {
+		if len(parts[0]) != 1 || len(parts[1]) != 1 {
+			return nil
+		}
+		from, to, letters = int(parts[0][0]), int(parts[1][0]), true
+	}
+	if from > to {
+		step = -step
+	}
+	var out []string
+	for v := from; (step > 0 && v <= to) || (step < 0 && v >= to); v += step {
+		if letters {
+			out = append(out, string(rune(v)))
+		} else {
+			out = append(out, strconv.Itoa(v))
+		}
+		if len(out) > maxBraceWords {
+			return nil
+		}
+	}
+	return out
+}
+
+// shellInterpreters are programs whose -c argument is a shell command.
+var shellInterpreters = map[string]bool{
+	"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true,
+	"ash": true, "mksh": true, "rbash": true, "fish": true,
+}
+
+// shellDashCArgs returns the words a shell may run as its -c command. words
+// are the arguments after the program name. The -c flag is any single-dash
+// option cluster that holds a "c" (-c, -lc, -ce, -cx). Every later word that
+// is not an option is returned, because options and their arguments may stand
+// between -c and the command (bash -c -e 'cmd', bash -c -- 'cmd'). That also
+// returns the positional arguments after the command; checking one of them as
+// a command can add a deny and cannot remove one.
+func shellDashCArgs(words []shellToken) []shellToken {
+	isOption := func(v string) bool {
+		return len(v) > 1 && (v[0] == '-' || v[0] == '+')
+	}
+	i := 0
+	found := false
+	for ; i < len(words); i++ {
+		v := words[i].value
+		if v == "--" || !isOption(v) {
+			return nil // options ended before a -c
+		}
+		if strings.HasPrefix(v, "--") {
+			if v == "--rcfile" || v == "--init-file" {
+				i++ // the option takes one argument
+			}
+			continue
+		}
+		if v[0] == '-' && strings.ContainsRune(v[1:], 'c') {
+			found = true
+			i++
+			break
+		}
+		// -o NAME, -O NAME, +o NAME, +O NAME: each o or O in the cluster
+		// takes one following word (bash -oe pipefail -c 'cmd').
+		i += strings.Count(v, "o") + strings.Count(v, "O")
+	}
+	if !found {
+		return nil
+	}
+	var out []shellToken
+	afterDashDash := false
+	for ; i < len(words); i++ {
+		v := words[i].value
+		if !afterDashDash && v == "--" {
+			afterDashDash = true
+			continue
+		}
+		if !afterDashDash && isOption(v) && !words[i].unresolved {
+			continue
+		}
+		out = append(out, words[i])
+	}
+	return out
+}
+
+// shellCommandArgTouchesProtected checks one word that a shell runs as a
+// command. The marked text of the word is tokenized again: each expansion of
+// the outer command is a mark there, so an inner word built from one stays
+// unresolved inside inner quotes too (bash -c "rm '$HOME/x'"). When the
+// program name of an inner command is itself built from an expansion
+// (bash -c "$CMD", bash -c $'rm x', bash -c 'X=rm; $X f'), the program is
+// unknown and the check fails closed.
+func shellCommandArgTouchesProtected(arg shellToken, prefixes []string, depth int, bases []string) (bool, string) {
+	inner := arg.marked
+	for _, seg := range splitShellSegments(tokenizeShell(inner)) {
+		words := stripCommandPrefix(commandWords(seg))
+		if len(words) > 0 && words[0].unresolved {
+			return true, shortRaw(arg.raw)
+		}
+	}
+	hit, target := shellTouchesProtectedRec(inner, prefixes, depth, bases, nil)
+	// The mark is a NUL byte; show it as an expansion in the audit reason.
+	return hit, strings.ReplaceAll(target, string(rune(shellUnresolvedMark)), "$…")
+}
+
+// homeVarWord returns the word with $HOME as the home directory. ok is false
+// when the word does not hold $HOME, or holds another expansion.
+func homeVarWord(w shellToken) (value string, ok bool) {
+	if !w.unresolved || !homeVarRe.MatchString(w.raw) {
+		return "", false
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return "", false
+	}
+	value = homeVarRe.ReplaceAllLiteralString(unquoteWord(w.raw), home)
+	if value == "" || value[0] == '-' || strings.ContainsAny(value, "$`") {
+		return "", false
+	}
+	return value, true
+}
+
+// intoDirectoryProgs write a file named after a source operand when another
+// operand is a directory: cp settings.json ~/.claude/
+var intoDirectoryProgs = map[string]bool{"cp": true, "mv": true, "ln": true, "install": true}
+
+// ancestorMutatingProgs change or remove a directory operand together with
+// what is under it: mv ~/.claude ~/.claude-old, chmod 000 ~/.claude
+var ancestorMutatingProgs = map[string]bool{
+	"rm": true, "mv": true, "rmdir": true, "ln": true,
+	"chmod": true, "chown": true, "chgrp": true,
+}
+
+// maxPairedOperands is the longest operand list of cp, mv, ln and install in
+// which every operand is read as a possible destination.
+const maxPairedOperands = 24
+
+// directoryOperandTouchesProtected catches a write that names a directory
+// above a protected path in place of the path itself. For cp, mv, ln and
+// install it checks every operand joined with the base name of every other
+// operand. For the programs in ancestorMutatingProgs it reports an operand
+// that is a proper ancestor of a protected path. Both checks can add a deny
+// for a command that only reads the directory operand, and cannot remove one.
+func directoryOperandTouchesProtected(prog string, args []shellToken, prefixes []string) (bool, string) {
+	if !intoDirectoryProgs[prog] && !ancestorMutatingProgs[prog] {
+		return false, ""
+	}
+	var operands []string
+	afterDashDash := false
+	for _, w := range args {
+		v := w.value
+		if !afterDashDash && v == "--" {
+			afterDashDash = true
+			continue
+		}
+		if !afterDashDash && strings.HasPrefix(v, "-") && v != "-" {
+			if stripped := stripPathOption(v); stripped != v {
+				operands = append(operands, stripped)
+			}
+			continue
+		}
+		operands = append(operands, v)
+	}
+	if ancestorMutatingProgs[prog] {
+		checked := operands
+		if prog == "ln" && len(checked) > 1 {
+			// ln changes its last operand; the others are link targets.
+			checked = checked[len(checked)-1:]
+		}
+		for _, op := range checked {
+			for _, cand := range literalPathCandidates(op) {
+				for _, prefix := range prefixes {
+					if isProperAncestor(cand, prefix) {
+						return true, cand
+					}
+				}
+			}
+		}
+	}
+	if intoDirectoryProgs[prog] {
+		// With a long operand list only the operands that can be the
+		// destination are joined with the others: the last one, and the
+		// value of a target-directory option. Every pair of a long list
+		// takes more time than the check has.
+		destinations := map[int]bool{}
+		if len(operands) > maxPairedOperands {
+			destinations[len(operands)-1] = true
+			n := 0
+			for k, w := range args {
+				v := w.value
+				isOption := strings.HasPrefix(v, "-") && v != "-"
+				if isOption && stripPathOption(v) != v {
+					destinations[n] = true // the value glued to the option
+				}
+				if !isOption || stripPathOption(v) != v {
+					if k > 0 && strings.HasPrefix(args[k-1].value, "-") && strings.ContainsRune(args[k-1].value, 't') {
+						destinations[n] = true // the word after -t
+					}
+					n++
+				}
+			}
+		}
+		for i, dir := range operands {
+			if len(destinations) > 0 && !destinations[i] {
+				continue
+			}
+			if dir == "" || (strings.HasPrefix(dir, "~") && dir != "~" && !strings.HasPrefix(dir, "~/")) {
+				continue // matchLiteralPath already failed closed on this tilde form
+			}
+			for j, src := range operands {
+				base := filepath.Base(src)
+				if i == j || src == "" || base == "." || base == ".." || base == "/" || base == "~" {
+					continue
+				}
+				joined := strings.TrimRight(dir, "/") + "/" + base
+				if hit, target := namesProtected(joined, prefixes); hit {
+					return true, target
+				}
+				// A directory copied or moved to a place above a protected
+				// path brings its own files there: cp -r x/.claude ~/
+				if isAboveProtected(joined, prefixes) {
+					return true, shortRaw(joined)
+				}
+			}
+		}
+		// The content of a source directory lands in the destination itself
+		// with `SRC/.` or -T: cp -r x/.claude/. ~/.claude
+		contentCopy := false
+		for _, w := range args {
+			v := w.value
+			if v == "-T" || v == "--no-target-directory" || (len(v) > 1 && v[0] == '-' && v[1] != '-' && strings.ContainsRune(v, 'T')) {
+				contentCopy = true
+			}
+		}
+		for i, op := range operands {
+			// "." as the last operand is the destination (cp x .), not a
+			// source whose content is copied.
+			if strings.HasSuffix(op, "/.") || (op == "." && i < len(operands)-1) {
+				contentCopy = true
+			}
+		}
+		if contentCopy {
+			for _, op := range operands {
+				if hit, target := aboveProtected(op, prefixes); hit {
+					return true, target
+				}
+			}
+		}
+	}
+	return false, ""
+}
+
+// aboveProtected reports whether the shell word names a directory above a
+// protected path.
+func aboveProtected(literal string, prefixes []string) (bool, string) {
+	for _, cand := range literalPathCandidates(literal) {
+		for _, prefix := range prefixes {
+			if isProperAncestor(cand, prefix) {
+				return true, cand
+			}
+		}
+	}
+	return false, ""
+}
+
+// literalPathCandidates returns the canonical forms of a shell word used as a
+// path, with a leading tilde, alone or before a slash, placed under the home
+// directory.
+func literalPathCandidates(literal string) []string {
+	literal = strings.TrimSpace(literal)
+	if literal == "" {
+		return nil
+	}
+	if literal == "~" || strings.HasPrefix(literal, "~/") {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			return canonicalCandidates(home + literal[1:])
+		}
+		return nil
+	}
+	return canonicalCandidates(literal)
+}
+
+// bracketExprRe matches one bracket expression of a shell pattern: [abc],
+// [!a-c], [^x], []x], [[:alpha:]].
+var bracketExprRe = regexp.MustCompile(`\[[!^]?\]?(\[:[a-z]+:\]|[^\]/])*\]`)
+
+// globTouchesProtected checks a word that holds a glob character (*, ?, [).
+// It is a hit when the pattern matches a protected path, when its leading
+// components match one (the pattern names something inside a protected
+// directory), and, with ancestors set, when it matches a directory above a
+// protected path (rm -rf ~/.claud*). The match is made one path component at
+// a time with path.Match, so * does not cross a slash, as in the shell. A
+// "**" component matches any number of components (globstar). Each bracket
+// expression is read as "?", which matches every character the expression
+// can. Whether a character was quoted is not known here, so every one is
+// read as live. Each of these choices can add a deny and cannot remove one.
+func globTouchesProtected(literal string, ancestors bool, prefixes []string) (bool, string) {
+	if !strings.ContainsAny(literal, "*?[") {
+		return false, ""
+	}
+	pattern := bracketExprRe.ReplaceAllString(literal, "?")
+	for _, cand := range literalPathCandidates(pattern) {
+		pat := strings.Split(strings.TrimRight(normalizeIfWindowsPath(cand), "/"), "/")
+		for _, prefix := range prefixes {
+			fold := ignoresCase(prefix)
+			for _, p := range canonicalCandidates(prefix) {
+				p = strings.TrimRight(normalizeIfWindowsPath(p), "/")
+				if globComponentsMatch(pat, strings.Split(p, "/"), ancestors) {
+					return true, shortRaw(literal)
+				}
+				if fold && globComponentsMatch(strings.Split(strings.ToLower(strings.Join(pat, "/")), "/"), strings.Split(strings.ToLower(p), "/"), ancestors) {
+					return true, shortRaw(literal)
+				}
+			}
+		}
+	}
+	// The match above compares text. A pattern can also match a symbolic
+	// link (l?nk/x, /proc/self/cw?/x), and then it names what is behind it.
+	expansions, over := globLinkExpansions(literal)
+	if over {
+		return true, shortRaw(literal)
+	}
+	for _, e := range expansions {
+		if hit, _ := matchLiteralPath(e, prefixes); hit {
+			return true, shortRaw(literal)
+		}
+		if ancestors {
+			if hit, _ := aboveProtected(e, prefixes); hit {
+				return true, shortRaw(literal)
+			}
+		}
+	}
+	return false, ""
+}
+
+// maxGlobEntries and maxGlobStates bound the directory entries read and the
+// paths kept for one pattern in globLinkExpansions.
+const (
+	maxGlobEntries = 200000
+	maxGlobStates  = 20000
+)
+
+// globLinkExpansions matches a file name pattern against the file system and
+// returns the matches that pass through a symbolic link at or after the first
+// pattern part. Text after the last match is kept as written. A match with
+// no link in it is left out: the text match of globTouchesProtected reads
+// it. Every "*" also matches a name that starts with a dot. over is true
+// when the pattern matches more than the bounds allow.
+func globLinkExpansions(literal string) (out []string, over bool) {
+	literal = strings.TrimSpace(literal)
+	if !strings.ContainsAny(literal, "*?[") || len(literal) > maxResolvePathLen {
+		return nil, false
+	}
+	if literal == "~" || strings.HasPrefix(literal, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil || home == "" {
+			return nil, false
+		}
+		literal = filepath.ToSlash(home) + literal[1:]
+	}
+	if !strings.HasPrefix(literal, "/") {
+		if filepath.IsAbs(literal) || strings.HasPrefix(literal, "~") {
+			return nil, false
+		}
+		wd, err := os.Getwd()
+		if err != nil {
+			return nil, false
+		}
+		literal = filepath.ToSlash(wd) + "/" + literal
+	}
+	type state struct {
+		path string
+		link bool
+	}
+	states := []state{{}}
+	parts := strings.Split(literal, "/")
+	last := len(parts) - 1
+	for last > 0 && (parts[last] == "" || parts[last] == ".") {
+		last--
+	}
+	entries, sawPattern := 0, false
+	for i, part := range parts[:last+1] {
+		if part == "" || part == "." {
+			continue
+		}
+		if !strings.ContainsAny(part, "*?[") {
+			for k := range states {
+				states[k].path += "/" + part
+				if sawPattern && part != ".." && !states[k].link {
+					if fi, err := os.Lstat(states[k].path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+						states[k].link = true
+					}
+				}
+			}
+			continue
+		}
+		sawPattern = true
+		pattern := strings.ReplaceAll(part, "[!", "[^")
+		var next []state
+		for _, st := range states {
+			dir := st.path
+			if dir == "" {
+				dir = "/"
+			}
+			list, err := os.ReadDir(dir)
+			if err != nil {
+				continue
+			}
+			entries += len(list)
+			if entries > maxGlobEntries {
+				return nil, true
+			}
+			for _, e := range list {
+				if ok, err := stdpath.Match(pattern, e.Name()); err == nil && !ok {
+					continue
+				}
+				link := st.link || e.Type()&os.ModeSymlink != 0
+				// A match with no link in it matters only as a directory
+				// that the next parts are read in.
+				if !link && (i == last || !e.IsDir()) {
+					continue
+				}
+				next = append(next, state{st.path + "/" + e.Name(), link})
+				if len(next) > maxGlobStates {
+					return nil, true
+				}
+			}
+		}
+		states = next
+	}
+	for _, st := range states {
+		if st.link {
+			out = append(out, st.path)
+		}
+	}
+	return out, false
+}
+
+// globComponentsMatch matches pattern components against the components of
+// a protected path. A pattern that is used up first names a directory above
+// the path, which counts with ancestors set. A path that is used up first
+// means the pattern names something inside it. A component path.Match cannot
+// read counts as a match.
+func globComponentsMatch(pat, p []string, ancestors bool) bool {
+	if len(p) == 0 {
+		return true
+	}
+	if len(pat) == 0 {
+		return ancestors
+	}
+	if pat[0] == "**" {
+		return globComponentsMatch(pat[1:], p, ancestors) || globComponentsMatch(pat, p[1:], ancestors)
+	}
+	if ok, err := path.Match(pat[0], p[0]); err == nil && !ok {
+		return false
+	}
+	return globComponentsMatch(pat[1:], p[1:], ancestors)
+}
+
+// isProperAncestor reports whether dir is a directory above the protected
+// prefix. Both sides are compared in the form matchPathPrefix uses.
+func isProperAncestor(dir, prefix string) bool {
+	dir = strings.TrimRight(normalizeIfWindowsPath(dir), "/")
+	fold := ignoresCase(prefix)
+	for _, p := range canonicalCandidates(prefix) {
+		p = strings.TrimRight(normalizeIfWindowsPath(p), "/")
+		if len(p) > len(dir) && strings.HasPrefix(p, dir+"/") {
+			return true
+		}
+		if fold && len(p) > len(dir) && strings.HasPrefix(strings.ToLower(p), strings.ToLower(dir)+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// matchProtected reports whether the path is a protected path or is inside
+// one. Where the file system of the protected path ignores letter case
+// (ignoresCase), the two are also compared in lower case.
+func matchProtected(cand, prefix string) bool {
+	if matchPathPrefix(cand, prefix) {
+		return true
+	}
+	return ignoresCase(prefix) && matchPathPrefix(strings.ToLower(cand), strings.ToLower(prefix))
+}
+
+// caseProbe answers ignoresCase for a protected path that is not in the
+// cache. A test replaces it.
+var caseProbe = fsIgnoresCase
+
+var caseProbeCache = struct {
+	sync.Mutex
+	m map[string]bool
+}{m: map[string]bool{}}
+
+// ignoresCase reports whether a path written in another letter case names the
+// protected path too. The answer is kept for the life of the process.
+func ignoresCase(prefix string) bool {
+	caseProbeCache.Lock()
+	defer caseProbeCache.Unlock()
+	if v, ok := caseProbeCache.m[prefix]; ok {
+		return v
+	}
+	v := caseProbe(prefix)
+	caseProbeCache.m[prefix] = v
+	return v
+}
+
+// fsIgnoresCase is true on macOS and Windows, where the default file system
+// ignores letter case. On another system it looks at the deepest directory
+// or file of the path that exists and has a letter in its name: when the
+// name in the other letter case is the same file, the file system ignores
+// case there. A path with no such part gives false.
+func fsIgnoresCase(prefix string) bool {
+	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		return true
+	}
+	p := prefix
+	if i := strings.IndexAny(p, "*?["); i >= 0 {
+		p = p[:i]
+		p = p[:strings.LastIndex(p, "/")+1]
+	}
+	p = filepath.Clean(p)
+	for len(p) > 1 && p != "." {
+		dir, base := filepath.Split(p)
+		if swapped := swapLetterCase(base); swapped != base {
+			if fi, err := os.Stat(p); err == nil {
+				other, err := os.Stat(dir + swapped)
+				return err == nil && os.SameFile(fi, other)
+			}
+		}
+		p = filepath.Clean(dir)
+	}
+	return false
+}
+
+// swapLetterCase returns s with every lower-case letter in upper case and
+// every upper-case letter in lower case.
+func swapLetterCase(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsUpper(r) {
+			return unicode.ToLower(r)
+		}
+		return unicode.ToUpper(r)
+	}, s)
 }
 
 // mutatingProgs are argv[0] program names that create/modify/delete files.
@@ -419,6 +2221,7 @@ var mutatingProgs = map[string]bool{
 	"rm": true, "cp": true, "mv": true, "tee": true, "truncate": true,
 	"ln": true, "install": true, "chmod": true, "chown": true, "chgrp": true,
 	"mkdir": true, "rmdir": true, "touch": true, "shred": true,
+	"unlink": true, "link": true,
 }
 
 func isMutatingProg(prog string, fields []string) bool {
@@ -428,7 +2231,12 @@ func isMutatingProg(prog string, fields []string) bool {
 	switch prog {
 	case "sed":
 		for _, f := range fields[1:] {
-			if strings.HasPrefix(f, "-i") { // -i, -i.bak, -ie ...
+			// -i, -i.bak, -Ei, -ni, --in-place, --in-place=.bak, --in. A single-dash
+			// word with an "i" may also be `-e i\\text`-style input glued to
+			// its option; reading it as in-place can add a deny only.
+			// --i is enough for getopt to read --in-place.
+			if strings.HasPrefix(f, "--i") ||
+				(strings.HasPrefix(f, "-") && !strings.HasPrefix(f, "--") && strings.ContainsRune(f, 'i')) {
 				return true
 			}
 		}
@@ -630,9 +2438,33 @@ func matchLiteralPath(literal string, prefixes []string) (bool, string) {
 	if literal == "" {
 		return false, ""
 	}
+	// Tilde. The shell expands a leading "~" before the command runs, so
+	// "~/.claude/settings.json" names a file under the home directory. The
+	// tokenizer does not tell us whether the tilde was quoted, so every leading
+	// tilde is treated as live: that can add a deny and cannot remove one.
+	// "~" and "~/x" are checked under the home directory of this process. Any
+	// other form ("~user/x", "~+", "~-") names a directory this code cannot
+	// know, so the word fails closed like an unresolved variable.
+	if strings.HasPrefix(literal, "~") {
+		if literal != "~" && !strings.HasPrefix(literal, "~/") {
+			return true, shortRaw(literal)
+		}
+		home, err := os.UserHomeDir()
+		if err != nil || home == "" {
+			return true, shortRaw(literal)
+		}
+		expanded := home + literal[1:]
+		for _, cand := range canonicalCandidates(expanded) {
+			for _, prefix := range prefixes {
+				if matchProtected(cand, prefix) {
+					return true, cand
+				}
+			}
+		}
+	}
 	for _, cand := range canonicalCandidates(literal) {
 		for _, prefix := range prefixes {
-			if matchPathPrefix(cand, prefix) {
+			if matchProtected(cand, prefix) {
 				return true, cand
 			}
 		}

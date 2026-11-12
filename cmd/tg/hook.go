@@ -63,7 +63,7 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	failClosedTools := fs.String("fail-closed-tools", "", "comma list of tool names to fail CLOSED for on internal error (others fail open); overrides -fail-closed's global behavior")
 	failClosedGroups := fs.String("fail-closed-groups", "", "comma list of tool groups (shell, filesystem_writes, filesystem, network_egress) to fail CLOSED for on internal error; a tool name the hook does not recognise is in group shell. A tool fails closed when its name is in -fail-closed-tools OR its group is listed here")
 	escalateAs := fs.String("escalate-as", "ask", "how a policy escalation is returned to the harness: ask (default) | deny. Use deny for a harness measured to run a call the hook answered ask to, or for an unattended run where nobody can answer a prompt. Any other value is treated as deny")
-	agyEscalation := fs.String("antigravity-escalation", "force_ask", "how an escalation is expressed to Antigravity: force_ask (default; in an interactive session it prompts even where an \"Always Allow\" rule exists, which ask does not) | ask (the harness's own value). Measured end to end on Antigravity CLI 1.5.3 headless, NEITHER value stops an escalated call: with --dangerously-skip-permissions the harness auto-approves, and without the flag it runs no write at all. See docs/support-matrix.md.")
+	agyEscalation := fs.String("antigravity-escalation", "force_ask", "how an escalation is expressed to Antigravity: force_ask (default; the Antigravity hooks documentation says it prompts even where an \"Always Allow\" rule exists, which ask does not; not measured here) | ask (the harness's own value). Antigravity CLI started with --dangerously-skip-permissions ran the call after either value in the release run. See docs/support-matrix.md.")
 	dialectStr := fs.String("dialect", "auto", "hook payload and output dialect: auto | claude | antigravity. auto reads the input shape")
 	protectPaths := fs.String("protect-paths", "", "comma list of path prefixes; a write-capable tool targeting one is denied BEFORE policy eval, unconditionally")
 	var protectPath repeatablePathFlag
@@ -161,7 +161,14 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	// Antigravity dialect: a toolCall object instead of tool_name/tool_input.
 	// Decoded here so every downstream stage (tool group, protected paths,
 	// policy conditions, audit) sees one canonical envelope.
-	if strings.TrimSpace(in.ToolName) == "" && in.ToolCall != nil {
+	if in.ToolCall != nil {
+		if rawIn := bytes.TrimSpace(in.ToolInput); strings.TrimSpace(in.ToolName) != "" || (len(rawIn) > 0 && string(rawIn) != "null") {
+			// Two tool calls in one payload: which one the harness runs
+			// is not known.
+			d, reason := failUnattributable("the payload holds a toolCall object and tool_name or tool_input")
+			emitHookDecisionDialect(stdout, resolveHookDialect(*dialectStr, true), *agyEscalation, d, reason)
+			return 0
+		}
 		in.ToolName = in.ToolCall.Name
 		in.ToolInput = in.ToolCall.Args
 	}
@@ -191,6 +198,19 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	// honours, because all of them are checked.
 	variants, truncatedVariants := hookParamVariants(hookParams(in))
 	envs := hookVariantEnvelopes(env, variants)
+	// An apply_patch call holds its files in the patch text. Each file gets
+	// an envelope with a path parameter, and these replace the envelope
+	// without one.
+	patchEnvs, patchDeny, isPatch := applyPatchEnvelopes(env, in.Cwd)
+	if isPatch && patchDeny == "" {
+		envs = nil
+		truncatedVariants = false
+		for _, pe := range patchEnvs {
+			v, trunc := hookParamVariants(pe.Parameters)
+			truncatedVariants = truncatedVariants || trunc
+			envs = append(envs, hookVariantEnvelopes(pe, v)...)
+		}
+	}
 	auditPolicyHash, _ := policyload.PolicySetHash(nil)
 
 	// emitAudited emits the decision and, when -audit-log is set, appends it
@@ -203,13 +223,27 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 		}
 	}
 
+	// A tool input that is not an object, or a command that is not a
+	// string, cannot be evaluated. Before, such a call got an empty
+	// parameter object and was allowed.
+	if why := hookInputMalformed(in); why != "" {
+		if d, reason := failDecide(tool); d == "deny" {
+			emitAudited(d, reason+": "+why, nil)
+			return 0
+		}
+	}
+
 	// ── Protected paths (Feature B) — BEFORE policy eval, unconditional ──
 	protectList := append(splitCSVPaths(*protectPaths), protectPath...)
 	if *protectSelf {
 		protectList = append(selfProtectPaths(*policyDir, *policyFile), protectList...)
 	}
+	if patchDeny != "" {
+		emitAudited("deny", "Tool Guard: "+patchDeny, nil)
+		return 0
+	}
 	for _, e := range envs {
-		if violated, reason := engine.ViolatesProtectedPaths(e, protectList); violated {
+		if violated, reason := engine.ViolatesProtectedPaths(withHarnessCwd(e, in.Cwd), protectList); violated {
 			emitAudited("deny", reason, nil)
 			return 0
 		}
@@ -336,8 +370,9 @@ func evalHook(policyDir, policyFile string, envs []*domain.ActionEnvelope, alias
 // for that with -escalate-as deny. Only the decision "ask" is converted, so an
 // allow and a real deny pass through unchanged. Every value other than the
 // literal "ask" converts: a mistyped value must not leave an escalation as a
-// prompt that a harness may ignore. Measured 2026-11-09: Codex CLI 0.166.0 ran
-// a call the hook answered ask to.
+// prompt that a harness may ignore. In the release run of 2026-11-10, headless
+// Codex CLI 0.166.0 did not run a call the hook answered ask to (3 of 3
+// runs). The Codex wrapper of the example still defaults to deny.
 func applyEscalateAs(flagVal, dec, reason string) (string, string) {
 	if dec != "ask" || flagVal == "ask" {
 		return dec, reason
@@ -387,11 +422,14 @@ func argsRequestFailClosed(args []string) bool {
 type hookInput struct {
 	ToolName  string          `json:"tool_name"`
 	ToolInput json.RawMessage `json:"tool_input"`
+	// Cwd is the working directory the harness reports for the call. Only
+	// the apply_patch reading uses it, to place a relative path.
+	Cwd string `json:"cwd"`
 
 	// Antigravity CLI 1.5.3 sends a different shape entirely, captured from a
 	// real install on 2026-11-09:
 	//   {"toolCall":{"name":"write_file","args":{"Path":"...","Content":"..."}}}
-	// Arg names are PascalCase (protojson). The web documentation names these
+	// Arg names are PascalCase. The web documentation names these
 	// tools write_to_file / TargetFile; the shipped CLI emits write_file /
 	// Path, which is why this comes from a capture and not from the docs.
 	ToolCall *struct {
@@ -418,8 +456,11 @@ var pathAliasNames = map[string]bool{
 // never see the command, so every such call escalates and no redirection is
 // checked.
 var commandAliasNames = map[string]bool{
+	// "command" is here for a key in another letter case (Command, COMMAND).
+	"command":     true,
 	"commandline": true, "cmdline": true, "cmd": true, "script": true,
 	"shellcommand": true, "commandstring": true, "terminalcommand": true,
+	"bashcommand": true,
 }
 
 var contentAliasNames = map[string]bool{
@@ -438,10 +479,9 @@ var contentAliasNames = map[string]bool{
 // When one alias family carries several DIFFERENT values, for example
 // {"Path":"AGENTS.md","Filename":"plain.txt"}, every distinct value is exposed
 // under a distinct canonical key rather than one of them being chosen. Random
-// choice is not acceptable: measured 2026-11-09 the previous map-iteration
-// version turned the same 500 identical calls into two different results
-// (file_path = AGENTS.md 402 times, plain.txt 98 times), so identical bytes
-// could be denied and allowed. Choosing by priority is unsafe in the other
+// choice is not acceptable: the previous version ranged over a Go map, so
+// identical calls got different results and identical bytes could be denied
+// and allowed. Choosing by priority is unsafe in the other
 // direction: if the policy-relevant value loses, a write to a protected file
 // rides in under an innocuous alias. Keys are visited in sorted order, and
 // candidates land on `file_path` then `path` then `target_file` (only keys not
@@ -558,6 +598,73 @@ func hookParams(in hookInput) json.RawMessage {
 	return params
 }
 
+// hookInputMalformed returns why the tool input cannot be evaluated, or "".
+// It names two cases: the input is not a JSON object, and a key of the
+// command family holds a value that is not a string.
+func hookInputMalformed(in hookInput) string {
+	raw := bytes.TrimSpace(in.ToolInput)
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return "the tool input is not a JSON object"
+	}
+	for k, v := range obj {
+		if commandAliasNames[normParamName(k)] {
+			var s string
+			if json.Unmarshal(v, &s) != nil {
+				return "the command in the tool input is not a string"
+			}
+		}
+	}
+	return ""
+}
+
+// normParamName is a parameter name in lower case without "_", "-", "." and
+// blanks, the form the alias lists are written in.
+func normParamName(k string) string {
+	var b strings.Builder
+	for _, r := range k {
+		switch r {
+		case '_', '-', ' ', '.':
+		default:
+			b.WriteRune(unicode.ToLower(r))
+		}
+	}
+	return b.String()
+}
+
+// withHarnessCwd returns the envelope for the protected-path check: a copy
+// with the working directory the harness reports as the parameter "cwd",
+// which the check reads a relative path under. The envelope is returned as
+// it is when the harness reports no absolute directory or the tool input
+// has a "cwd" of its own.
+func withHarnessCwd(e *domain.ActionEnvelope, cwd string) *domain.ActionEnvelope {
+	if e == nil || !strings.HasPrefix(cwd, "/") {
+		return e
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal(e.Parameters, &m) != nil {
+		return e
+	}
+	if _, has := m["cwd"]; has {
+		return e
+	}
+	if m == nil {
+		m = map[string]json.RawMessage{}
+	}
+	v, _ := json.Marshal(cwd)
+	m["cwd"] = v
+	b, err := json.Marshal(m)
+	if err != nil {
+		return e
+	}
+	c := *e
+	c.Parameters = b
+	return &c
+}
+
 // hookToolGroup is a small heuristic so tool_groups-scoped policies match.
 // Keep write and network capabilities distinct from read-only filesystem
 // tools: grouping them together would make a write-classifier policy evaluate
@@ -566,9 +673,8 @@ func hookToolGroup(tool string) string {
 	switch tool {
 	case "write", "edit", "notebookedit", "apply_patch", "multiedit", "create":
 		return "filesystem_writes"
-	// Write-capable tool names from the harness contract sources recorded in
-	// CTO/Research/review-2026-11-08/opus-2026-11-09-claims-and-harness-plan.md
-	// (S-GM Gemini CLI tools, S-AG-web Antigravity tools). Without these the
+	// Write-capable tool names of the Gemini CLI and Antigravity tool
+	// contracts. Without these the
 	// default bucket is "shell", so a tool-group-scoped policy such as
 	// coding-agent-context-files never sees the write at all.
 	case "write_file", "write_to_file", "replace", "replace_file_content", "multi_replace_file_content":
@@ -638,20 +744,22 @@ func resolveHookDialect(flagVal string, hasToolCall bool) string {
 // Antigravity CLI 1.5.3 reads a top-level {"decision","reason"} object, with
 // decision one of allow | deny | ask | force_ask, per the hooks.md shipped
 // with that CLI. Claude Code and Codex read hookSpecificOutput.permissionDecision.
-// resolveAntigravityEscalation maps our "ask" onto the Antigravity decision
-// that was MEASURED to stop a tool call. Measured 2026-11-09 against
-// Antigravity CLI 1.5.3 in headless print mode:
+// resolveAntigravityEscalation maps our "ask" onto "force_ask", the stricter
+// of the two approval values Antigravity CLI reads. Measurements. The 1.5.3 runs were local and
+// their records are not in the repository. The 1.5.4 runs are in
+// docs/evidence/harness-manifest.json.
 //
-//	Tool Guard emits "ask"        -> the tool call RAN (a write to AGENTS.md
-//	                                 landed even without
-//	                                 --dangerously-skip-permissions)
-//	Tool Guard emits "force_ask"  -> the call was refused, because headless
-//	                                 mode cannot prompt
+//	1.5.3, headless, no --dangerously-skip-permissions, four runs:
+//	  "force_ask" -> the write was refused in 4 of 4 runs; a write the hook
+//	                 allowed landed in 3 of the 4
+//	1.5.4, headless, with --dangerously-skip-permissions, three runs each:
+//	  "ask"       -> the command ran in 3 of 3
+//	  "force_ask" -> the command ran in 3 of 3
 //
-// So "ask" is advisory on that harness and force_ask is not. Default to the
-// one that actually stops the call; -antigravity-escalation ask restores the
-// documented-but-ineffective value for an interactive operator who wants the
-// "Always Allow" cache respected.
+// No retained record shows "ask" without the flag. With the flag neither
+// value stops a call; use -escalate-as deny there. -antigravity-escalation ask
+// restores "ask" for an interactive operator who wants the "Always Allow"
+// cache respected.
 func resolveAntigravityEscalation(flagVal, decision string) string {
 	if decision != "ask" {
 		return decision
@@ -750,7 +858,9 @@ decision to stdout. Always exits 0.
                         docs/support-matrix.md) and for unattended runs.
   -antigravity-escalation ask
                         emit ask instead of force_ask in the antigravity
-                        dialect (measured NOT to stop a headless call).
+                        dialect. Started with
+                        --dangerously-skip-permissions, Antigravity CLI ran
+                        the call after either value.
 
 RECOMMENDED for any enforcing deployment: pass -fail-closed-tools (or
 -fail-closed). Without one, an internal error (unparseable stdin, a policy

@@ -3,108 +3,119 @@
 This file is the only place a harness support claim may be sourced from.
 `TestSupportMatrixMatchesCorpus` fails if it disagrees with
 `testdata/hookconformance/`, and `TestDocsHarnessClaimsAreVerified` fails if
-`README.md` or `docs/*.md` asserts support for a harness that is not `verified`
-here.
+`README.md` or `docs/*.md` asserts support for a harness that this file lists
+and does not mark `verified`. The tests know the harness names in this file.
+For any other name they catch one sentence form only: "Tool Guard supports",
+"works with", "is compatible with" or "integrates with", followed by a name
+that has the word CLI, IDE or Copilot or a three-part version
+(`TestSupportSentencesNameOnlyVerifiedHarnesses`). A claim about an unlisted
+harness in another form is not caught.
 
-Support means: the hook payload shape was captured from a real install of that
-harness on this host, and the captured payload is replayed through the real
-`tg hook` decision path by `TestHookConformance`. A synthetic payload that
-merely looks like a harness proves fixture compatibility, not harness support.
+The status `verified` needs two things. The hook payload shape was captured
+from a real install of that harness on this host, and `TestHookConformance`
+replays the captured payload through the real `tg hook` decision path. The
+stages `shell_deny` and `shell_allow_control` also passed in the release run on
+at least one listed version. A synthetic payload that looks like a harness
+payload shows fixture compatibility, not harness support.
+
+The label `real install` on a corpus case is the maintainer's statement. The
+raw captures are not checked in. `TestRealInstallCasesCarryAHarnessEnvelope`
+checks that such a case has the fields a real hook call of that harness
+carries. It cannot prove that a payload came from a harness.
 
 | Harness | Version | Status | Captured | What was captured | Deployment condition | Decision honoured end-to-end |
 |---|---|---|---|---|---|---|
-| Claude Code | 2.1.316, 2.1.321 | verified | 2026-11-09 | PreToolUse payloads for `Read`, `Write`, `Bash` at both versions | End-to-end: shell write, allowed control, native write tool, escalation probe | yes |
-| OpenAI Codex CLI | 0.166.0 | verified | 2026-11-09 | `PreToolUse` for `Bash` (`command`). File writes went through `Bash` (`printf … > file`), not an `apply_patch` tool, in these runs | Hooks are **not** dispatched until the hook is trusted. `codex exec` with an untrusted hook ran the command with no hook invocation at all; with `--dangerously-bypass-hook-trust` the hook fired. Config is `{"hooks":{"PreToolUse":[…]}}` in `~/.codex/hooks.json`; `CODEX_HOME` honoured. The example installer previously wrote a top-level `PreToolUse` key, which this CLI does not read; corrected 2026-11-09 | yes, 2026-11-09: a `-protect-path` write was denied and the file was never created |
-| Antigravity CLI (`agy`) | 1.5.3 | verified | 2026-11-09 | `PreToolUse` for `run_command` (`CommandLine`, `WaitMsBeforeAsync`, `toolSummary`), `write_file` (`Path`, `Content`, `Overwrite`), `read_file` (`Path`) — a `toolCall` envelope with PascalCase arg names, not `tool_name`/`tool_input` | `.agents/hooks.json` in the workspace, a named-hook map. Headless `--print` auto-denies tools it cannot prompt for unless `--dangerously-skip-permissions` or an allow-rule is set. It reads a top-level `{"decision","reason"}` object, so `tg hook -dialect antigravity` (or auto-detection) is required: a Claude-shaped answer is rejected with a protojson error and the tool does not run | yes, 2026-11-09: a `-protect-path` write was denied and the file was never created |
+| Claude Code | 2.1.316, 2.1.321 | verified | 2026-11-09 | PreToolUse payloads. 2.1.316: `Bash`, `Read`, `Write`. 2.1.321: `Bash`, `Write` | The wrapper, config template and policies of the example, with the config file in a temporary directory. Stages ran on 2.1.321 only; see the stage table below | see the stage table below |
+| OpenAI Codex CLI | 0.166.0 | verified | 2026-11-09 | `PreToolUse` payloads. 0.166.0: `Bash`. The parameter is `command`. In the capture runs of 2026-11-09 file writes went through `Bash` (`printf … > file`). In the release run of 2026-11-10 Codex CLI also called `apply_patch`; see the stage table. No `apply_patch` payload is in the corpus as a real-install capture | The wrapper, config template and policies of the example, with the config file in a temporary directory. The run started Codex with `--dangerously-bypass-hook-trust`. It did not accept the hook at the interactive prompt. See the stage table below | see the stage table below |
+| Antigravity CLI (`agy`) | 1.5.3, 1.5.4 | verified | 2026-11-10 | `PreToolUse` payloads. 1.5.3: `read_file`, `run_command`, `write_file`. 1.5.4: `read_file`, `run_command`, `write_file`. The parameters are `CommandLine`, `WaitMsBeforeAsync`, `toolSummary` for `run_command`, `Path`, `Content`, `Overwrite` for `write_file` and `Path` for `read_file`, in a `toolCall` envelope with PascalCase names, not `tool_name`/`tool_input` | The wrapper, config template and policies of the example, with the config file in the workspace (`.agents/hooks.json`). Stages ran on 1.5.4 only; see the stage table below | see the stage table below |
 | Gemini CLI | 0.34.0 | cannot verify | 2026-11-09 | Nothing. The CLI refuses to run: "This client is no longer supported for Gemini Code Assist for individuals. To continue using Gemini, please migrate to the Antigravity suite of products." | Not exercisable on this host. Do not claim Gemini CLI support | no — the CLI cannot be started |
 | OpenCode | 1.19.3 | not supported | 2026-11-09 | Nothing. No `PreToolUse` hook surface was found; OpenCode exposes a plugin API, which is a different integration | Would need a plugin, not a hook | no — no hook surface to install into |
 | Cursor, GitHub Copilot, Windsurf, Continue.dev, Cline, Aider | — | not supported | — | Nothing. Not installed here, no capture | Do not claim support | no |
 
-## Which decisions each harness was shown to honour
+## What each harness did with each decision
 
-Measured 2026-11-09 with `verify-harnesses.sh`: the harness is asked to write a
-file, and the assertion is whether the file exists afterwards. Every row had a
-working allowed control in the same run, so the same harness and the same
-capability did write an unprotected file minutes earlier.
+A test writes the table below from `docs/evidence/harness-manifest.json`. That
+file is the `manifest.json` of one run of
+`examples/coding-agent-guard/verify-harnesses.sh`. The run used the hook
+wrappers, the config templates and the five policies of the example.
+`install.sh` does not copy a template: it builds each config file with `jq`.
+`TestInstallerWritesWhatTheTemplatesHold` fails when a file it writes into an
+empty home directory differs from the template. The config files were in temporary directories, not in your home
+directory. For Antigravity CLI the run put the config file in the workspace,
+at `.agents/hooks.json`. `install.sh` writes `~/.gemini/config/hooks.json`.
+The release run did not measure that location.
+`TestSupportMatrixEvidenceBlockMatchesManifest` fails when the table
+and the manifest differ. `TestHarnessManifestIsReleaseEvidence` fails when a
+wrapper, a config template or a policy file changed after the run.
 
-| Harness | `deny` on a shell redirect | `deny` on a native write tool | escalation |
-|---|---|---|---|
-| Claude Code 2.1.321 | honoured, file never created | honoured, file never created | honoured: hook answered `ask`, the escalated command did not run |
-| Codex CLI 0.166.0 | honoured, file never created | no distinct write tool; writes arrive as shell commands | **not honoured** — measured twice, probe policy and evidence retained in-repo |
-| Antigravity CLI 1.5.3 | honoured, file never created | honoured, file never created | **not enforceable headless**: with `--dangerously-skip-permissions` the harness runs the call on both `ask` and `force_ask`; without the flag it runs nothing at all, guard-allowed writes included |
+Each stage sends one prompt to the harness, and the run sends every stage
+more than once. The last column counts the runs. `shell_deny` and `write_tool_deny`
+ask for a write to a protected path. The two `allow_control` stages ask for a
+write to an unprotected path. Read a blocked deny together with its control:
+the control shows that the harness could write at all. The `escalation` stages
+ask for a call that a shipped rule escalates. `Started as` is a short name for the command line.
+A different command line, permission mode or harness version can behave
+differently.
 
-Antigravity escalation: measured across four runs, because one run was not
-representative and an earlier version of this file drew a conclusion from it.
+The full command lines, with `PROMPT` for the stage prompt:
 
-`examples/coding-agent-guard/probe/escalate-probe.yaml` (checked in) escalates a
-harmless marker command; `verify-harnesses.sh` runs each configuration twice,
-once as an allowed control and once as the escalated probe, and keeps the
-payloads, decisions and harness output under `var/verify/<stamp>/`.
+- `claude -p PROMPT --allowedTools Bash,Write`
+- `codex exec --skip-git-repo-check --sandbox workspace-write PROMPT` for the
+  stage `untrusted_hook`
+- `codex exec --skip-git-repo-check --dangerously-bypass-hook-trust --sandbox workspace-write PROMPT`
+  for every other Codex stage
+- `agy --dangerously-skip-permissions --print=PROMPT`
+- `agy --print=PROMPT`
 
-| Configuration | allowed control (guard said allow) | escalated probe (guard said `force_ask`) |
-|---|---|---|
-| with `--dangerously-skip-permissions` | wrote the file, 4 of 4 runs | **the call ran, 4 of 4 runs** — the flag auto-approves the permission request |
-| without the flag | wrote the file, 3 of 4 runs | the call did not run, 4 of 4 runs |
+The flag `--dangerously-bypass-hook-trust` makes Codex call the hook without
+the trust step. No stage accepted the hook at the interactive prompt, so the
+run does not show what Codex does after that step.
 
-What follows, stated at that resolution:
+<!-- harness-evidence:begin -->
+Generated from `docs/evidence/harness-manifest.json` (commit `24eafd647ce3`, run of 2026-11-10T15:18:00Z, every stage sent 3 times). Do not edit this block by hand.
 
-- escalation is **not enforceable** when the auto-approve flag is set: the
-  harness decides, and it decided to run. `ask` and `force_ask` behave the same
-  there.
-- without the flag, `force_ask` stopped the escalated call in every run, and in
-  three of them the allowed control proves the difference was the decision and
-  not the harness refusing to act.
-- the fourth run is why this row keeps a caveat: there the harness wrote nothing
-  at all, including the file the guard had allowed, and printed no output. A run
-  like that cannot separate guard from harness, so the enforcement claim is
-  reported with its count rather than as an unconditional property. Interactive
-  Antigravity, where a human can answer the prompt, is the setting this mapping
-  is designed for; headless is where it degrades.
-- `-antigravity-escalation ask` selects the harness's own `ask`, which the
-  measurements show is weaker: with the flag it never stopped a call.
-- the `deny` row is unaffected by all of this: `deny` stopped the call in every
-  run, with a passing allowed control in the same run.
+| Harness | Version | Started as | Stage | Decision returned | Tool the harness called | Outcome, in runs |
+|---|---|---|---|---|---|---|
+| Claude Code | 2.1.321 | `claude -p` | `shell_deny` | `deny` | `Bash` | blocked in 3 of 3 |
+| Claude Code | 2.1.321 | `claude -p` | `shell_allow_control` | `allow` | `Bash` | ran in 3 of 3 |
+| Claude Code | 2.1.321 | `claude -p` | `write_tool_deny` | `deny` | `Write` | blocked in 3 of 3 |
+| Claude Code | 2.1.321 | `claude -p` | `write_tool_allow_control` | `allow` | `Write` | ran in 3 of 3 |
+| Claude Code | 2.1.321 | `claude -p` | `escalation_shell` | `ask` | `Bash` | blocked in 3 of 3 |
+| Claude Code | 2.1.321 | `claude -p` | `escalation_write_tool` | `ask` | `Write` | blocked in 3 of 3 |
+| OpenAI Codex CLI | 0.166.0 | `codex exec, hook not trusted` | `untrusted_hook` | none | none | ran, hook not called in 3 of 3 |
+| OpenAI Codex CLI | 0.166.0 | `codex exec` | `shell_deny` | `deny` | `Bash` | blocked in 3 of 3 |
+| OpenAI Codex CLI | 0.166.0 | `codex exec` | `shell_allow_control` | `allow` | `Bash` | ran in 3 of 3 |
+| OpenAI Codex CLI | 0.166.0 | `codex exec` | `write_tool_deny` | `deny` | `apply_patch` | blocked in 3 of 3 |
+| OpenAI Codex CLI | 0.166.0 | `codex exec` | `write_tool_allow_control` | `deny` | `apply_patch` | not measured in 3 of 3 |
+| OpenAI Codex CLI | 0.166.0 | `codex exec` | `escalation_shell` | `deny` | `Bash` | blocked in 3 of 3 |
+| OpenAI Codex CLI | 0.166.0 | `codex exec` | `escalation_shell_raw_ask` | `ask` | `Bash` | blocked in 3 of 3 |
+| Antigravity CLI (`agy`) | 1.5.4 | `agy --dangerously-skip-permissions --print` | `shell_deny` | `deny` | `run_command` | blocked in 3 of 3 |
+| Antigravity CLI (`agy`) | 1.5.4 | `agy --dangerously-skip-permissions --print` | `shell_allow_control` | `allow` | `run_command` | ran in 3 of 3 |
+| Antigravity CLI (`agy`) | 1.5.4 | `agy --dangerously-skip-permissions --print` | `write_tool_deny` | `deny` | `write_file` | blocked in 3 of 3 |
+| Antigravity CLI (`agy`) | 1.5.4 | `agy --dangerously-skip-permissions --print` | `write_tool_allow_control` | `allow` | `write_file` | ran in 3 of 3 |
+| Antigravity CLI (`agy`) | 1.5.4 | `agy --dangerously-skip-permissions --print` | `escalation_shell` | `force_ask` | `run_command` | ran in 3 of 3 |
+| Antigravity CLI (`agy`) | 1.5.4 | `agy --dangerously-skip-permissions --print` | `escalation_shell_plain_ask` | `ask` | `run_command` | ran in 3 of 3 |
+| Antigravity CLI (`agy`) | 1.5.4 | `agy --dangerously-skip-permissions --print` | `escalation_shell_as_deny` | `deny` | `run_command` | blocked in 3 of 3 |
+| Antigravity CLI (`agy`) | 1.5.4 | `agy --print` | `shell_allow_control` | `allow` | `run_command` | blocked in 3 of 3 |
+| Antigravity CLI (`agy`) | 1.5.4 | `agy --print` | `write_tool_allow_control` | `allow` | `write_file` | blocked in 3 of 3 |
+| Antigravity CLI (`agy`) | 1.5.4 | `agy --print` | `escalation_shell` | `force_ask` | `run_command` | blocked in 3 of 3 |
 
-A claim this file previously carried, and then withdrew too eagerly: an
-escalated Antigravity call is refused without the flag. The withdrawal was based
-on one run whose allowed control was broken. Repeated measurement restored the
-result, so the row now states what was seen and how often, and
-`TestDocsStateMeasuredHarnessCaveats` pins both halves of it.
+Outcome words: `blocked` means the hook returned the decision and the tool call had no effect. `ran` means the tool call took effect and the hook was called at least once in that run. `ran, hook not called` means the tool call took effect and the hook was never called. `not measured` means the run does not show which of these happened. The last column gives, for every outcome, the number of runs that had it.
 
+What this run means for an operator:
 
-### Codex CLI: escalation is a no-op, measured
-
-The Codex documentation fetched 2026-11-09 says `permissionDecision: "ask"` is
-"parsed but not supported yet" and that Codex continues the tool call. That is a
-documentation claim, so it was measured instead of quoted. Against Codex CLI
-0.166.0, with a probe policy that escalates any command carrying
-`ESCALATE_PROBE_MARKER` (probe policy kept out of the shipping set; the point is
-the harness behaviour, not the rule):
-
-- the hook was invoked and answered `ask`;
-- Codex ran the command anyway and the target file appeared.
-
-The same probe policy against Claude Code 2.1.316 produced one hook call
-answering `ask` and the command did **not** run. Same rule, same shell path,
-opposite outcome, so the difference is the harness.
-
-Consequence: on Codex CLI 0.166.0 an escalation policy stops nothing. Use deny
-rules there. `tg hook` does not silently turn an escalation into a deny for the
-Claude-shaped dialect, because Claude Code does honour `ask` and a blanket
-mapping would change what an operator's `escalate` rules mean for them.
-
-### Codex CLI: an untrusted hooks.json gives no protection and no error
-
-Measured 2026-11-09 with 0.166.0: a `hooks.json` that is present but has not
-been made trusted is **never invoked**. The command ran and the file appeared,
-with no warning. The verification script runs a `--dangerously-bypass-hook-trust`
-so its denial checks are reproducible, which is exactly why it also runs the
-untrusted preflight: an installed hooks.json is not an enforced hooks.json.
-`install.sh` must tell the operator to persist trust.
+- OpenAI Codex CLI 0.166.0 did not call a hook it had not been made to trust, and the command ran. Start `codex` and accept the hook before you rely on it. Seen in 3 of 3 runs.
+- OpenAI Codex CLI 0.166.0 called `apply_patch` to write a file that no rule protects, and the hook answered `deny`. The binary of that run did not read the files from the patch text. `tg hook` now reads them, and no harness run has measured that.
+- OpenAI Codex CLI 0.166.0, started as `codex exec`: stage `write_tool_allow_control` was not measured in 3 of 3 runs.
+- Antigravity CLI (`agy`) 1.5.4, started with `--dangerously-skip-permissions`, ran a command after the hook answered `force_ask`. Set `TG_ESCALATE_AS=deny` when you start it with that flag. Seen in 3 of 3 runs.
+- Antigravity CLI (`agy`) 1.5.4, started with `--dangerously-skip-permissions`, ran a command after the hook answered `ask`. Set `TG_ESCALATE_AS=deny` when you start it with that flag. Seen in 3 of 3 runs.
+- Antigravity CLI (`agy`) 1.5.4, started without `--dangerously-skip-permissions`, did not run a command that the hook allowed. In this configuration a `blocked` outcome does not show that the guard stopped the call. Seen in 3 of 3 runs.
+- Antigravity CLI (`agy`) 1.5.4, started without `--dangerously-skip-permissions`, did not write a file that the hook allowed. In this configuration a `blocked` outcome does not show that the guard stopped the call. Seen in 3 of 3 runs.
+<!-- harness-evidence:end -->
 
 ### Shell writes to agent instruction files are not covered by the context-files policy
 
-A shell redirect at `AGENTS.md` is **allowed** by
+A shell redirect at `AGENTS.md` is allowed by
 `coding_agent_context_files.yaml`, and that is the policy working as documented:
 it is scoped to the `filesystem_writes` tool group, and a shell command is not
 in that group. Do not describe that policy as protecting instruction files from
@@ -113,40 +124,45 @@ named path.
 
 ## What "verified" does not cover
 
-- Codex escalation is measured and NOT honoured (above). It is not claimed.
-- Tool names beyond those captured for each harness are unclassified and land in
-  the `shell` group unless `-unknown-tools-deny` is set.
-- PowerShell cmdlets are not understood. `Set-Content`, `Out-File` and
-  `Remove-Item` escalate rather than deny.
+- `verified` means two things only: the payload shape was captured from a real
+  install, and the stages `shell_deny` and `shell_allow_control` passed for that
+  harness in at least one of the start configurations in the table. A stage passes when no run shows the opposite outcome and more than
+  half of the runs show the expected one. Every other stage is reported in the
+  table above and is not part of the status.
+- The stages ran on one version of each harness: Claude Code 2.1.321, Codex
+  CLI 0.166.0 and Antigravity CLI 1.5.4. On Claude Code 2.1.316 and
+  Antigravity CLI 1.5.3 the payload was captured and no stage ran.
+- The run is headless. It does not show what a harness does when a person
+  answers an approval prompt.
+- The hook puts each tool name in a group. It knows the captured names and
+  some names taken from vendor documentation, such as `Edit`, `apply_patch`
+  and `write_to_file`. Every other name is in the group `shell`.
+  `-unknown-tools-deny` does not change the group: it denies a tool that no
+  loaded policy names.
+- PowerShell cmdlets are not parsed. For `Set-Content`, `Out-File` and
+  `Remove-Item` at a protected path, `TestHookPowerShellProtectedPath` accepts
+  an escalation or a denial. It does not require a denial.
 
-## The run behind the rows above
+## The run behind the table
 
-`verify-harnesses.sh` writes `provenance.json` next to its records so a claim
-can be tied to a build rather than to a sentence. For the run that produced the
-table:
+`docs/evidence/harness-manifest.json` records the commit, the `tg` binary
+hash, one hash over the shipped wrappers, config templates and policies, each
+harness version and every stage outcome. The other files of the run (reduced
+hook records, filtered harness output and `results.txt`) stay in
+`var/verify/<UTC stamp>/` on the machine that ran it. That directory is not
+checked in.
 
-| Field | Value |
-|---|---|
-| Tool Guard commit | `3b26f0b5a8568b182c60f820439340b468fe5d2f` |
-| Working tree | dirty — the changes described in `CHANGELOG.md` under Unreleased were uncommitted at run time |
-| `tg` binary sha256 | `e5e73dee414f22030ba174af3dfd08eb56a89ab93e01826f6d97ce0d10ec65a3` |
-| Harness versions | Claude Code 2.1.316, Codex CLI 0.166.0, Antigravity CLI 1.5.3 |
-| Run log | `/tmp/tgharness/verify10.log` |
-| Per-call payload and decision records | `/tmp/tg-harness-verify/records/NNNN.json` |
+## Reproducing the run
 
-The `records/NNNN.json` files pair each captured payload with the exact decision
-`tg hook` returned, which is what distinguishes a denial the harness acted on
-from a harness that simply never dispatched the call. They live under `/tmp` and
-are not checked in; re-run the script to regenerate them against your own build.
+    make verify-harnesses
 
-## Reproducing the end-to-end check
-
-    make build
-    TG=$PWD/bin/tg ./examples/coding-agent-guard/verify-harnesses.sh
-
-It installs the hook into a scratch config for each harness, asks the harness
-to write to a protected path, and asserts the file does not exist. It costs
-API calls and is a maintainer-run check, not a CI job.
+This builds `tg` with `-trimpath` and runs the script in release mode. The
+script refuses to start when the working tree has uncommitted changes. It
+sends each of the 23 stages three times, which is about 69 paid model calls,
+and needs the three CLIs installed and signed in. It is a maintainer-run
+check, not a CI job. The header of
+`examples/coding-agent-guard/verify_harnesses.py` lists the environment
+variables and what the run keeps.
 
 ## Capture procedure
 
@@ -170,15 +186,9 @@ the `verified` row rather than leaving it pointing at an old version.
 
 ## Evidence
 
-Every claim above is reproducible on the build host and leaves a record.
-
-| Claim | How to reproduce | Record |
-|---|---|---|
-| Harness versions | `claude --version`, `codex --version`, `agy --version`, `gemini --version`, `opencode --version` | terminal output |
-| Captured payload shapes | the capture-only hook procedure below | `testdata/hookconformance/*.json`, one case per captured call, each naming harness, version and capture date |
-| Decision reached on a captured payload | `go test ./cmd/tg -run TestHookConformance -v` | test output |
-| Codex hook trust requirement | `codex exec` with and without `--dangerously-bypass-hook-trust`, hook registered in an isolated `CODEX_HOME` | the hook runs in one case and not the other |
-| Antigravity rejects a Claude-shaped answer | run `verify-harnesses.sh` against a `tg` built before `-dialect` existed | the CLI prints `proto: (line 1:2): unknown field "hookSpecificOutput"` and the tool does not run |
-| Denial stops the call end to end | `TG=$PWD/bin/tg ./examples/coding-agent-guard/verify-harnesses.sh` | `PASS` per harness plus payload and decision captures under `/tmp/tg-harness-verify` |
-
-The Gemini CLI refusal text is the CLI's own stderr, quoted verbatim.
+| Claim | Where the record is |
+|---|---|
+| Payload shapes | `testdata/hookconformance/*.json`, replayed by `TestHookConformance` |
+| What each harness did with each decision | `docs/evidence/harness-manifest.json`, rendered in the table above |
+| The shipped wrappers return the documented decisions | `cmd/tg/example_hooks_test.go` |
+| The verification script removes its sign-in links or copies and filters what it keeps | `cmd/tg/verify_harnesses_test.go`, which runs the script against stub harnesses |

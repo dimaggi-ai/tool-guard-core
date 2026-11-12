@@ -1,6 +1,6 @@
 {
   "name": "agy_write_context_file",
-  "description": "Antigravity CLI write_file at an agent instruction file. The escalation is emitted as force_ask, not ask, because a measured run against Antigravity CLI 1.5.3 in headless print mode showed the tool call RAN when the hook answered ask, and was refused when it answered force_ask.",
+  "description": "Antigravity CLI write_file at an agent instruction file. The escalation is emitted as force_ask, the stricter of the two approval values this harness reads. docs/support-matrix.md holds what the harness did with each value in the release run.",
   "harness": "antigravity-cli",
   "harness_version": "1.5.3",
   "capture": {

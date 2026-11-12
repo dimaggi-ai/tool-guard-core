@@ -3,13 +3,13 @@ policy_id: probe-escalate-marker
 name: probe-escalate-marker
 description: >
   Measurement probe, NOT a shipping policy and never loaded by install.sh.
-  It escalates any command carrying TG_ESCALATION_PROBE_MARKER so
-  verify-harnesses.sh can ask a harness to do something harmless that policy
-  deliberately escalates, and then observe whether the harness acts on the
-  escalation. Escalation is the decision most likely to be quietly ignored:
-  measured 2026-11-09, Codex CLI 0.166.0 ran a command the hook had escalated.
-  Keeping this file in the repository means the measurement is reproducible
-  instead of living in a /tmp file the next run deletes.
+  It escalates any command carrying TG_ESCALATION_PROBE_MARKER, so a
+  maintainer can ask a harness to do something harmless that policy
+  escalates and observe whether the harness acts on the escalation. The
+  release run does not use this file: its escalation stages use the shipped
+  shell policy. A harness can ignore an escalation: in the release run,
+  Antigravity CLI 1.5.4 started with --dangerously-skip-permissions ran a
+  command the hook had escalated.
 version: 1
 status: approved
 mode: enforcement
