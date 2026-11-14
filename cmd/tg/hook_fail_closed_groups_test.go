@@ -175,10 +175,11 @@ func TestDocsNameTheLinkAndUnknownToolRules(t *testing.T) {
 	dir := t.TempDir()
 	prot := filepath.Join(dir, "prot")
 	args := []string{"-policy-dir", dir, "-protect-path", prot}
+	shellProt := "'" + filepath.ToSlash(prot) + "'"
 	for _, payload := range []string{
-		`{"tool_name":"exec_command","tool_input":{"command":"echo x > ` + prot + `/f"}}`,
-		`{"tool_name":"FooBar","tool_input":{"command":"python3 edit.py ` + prot + `/f"}}`,
-		`{"tool_name":"Bash","tool_input":{"command":"cd ` + prot + ` && echo x > /proc/self/cwd/f"}}`,
+		`{"tool_name":"exec_command","tool_input":{"command":` + jsonMarshalString("echo x > "+shellProt+"/f") + `}}`,
+		`{"tool_name":"FooBar","tool_input":{"command":` + jsonMarshalString("python3 edit.py "+shellProt+"/f") + `}}`,
+		`{"tool_name":"Bash","tool_input":{"command":` + jsonMarshalString("cd "+shellProt+" && echo x > /proc/self/cwd/f") + `}}`,
 	} {
 		out, _ := runHookStr(t, payload, args...)
 		if got := hookDecision(t, out); got != "deny" {

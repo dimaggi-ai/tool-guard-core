@@ -171,16 +171,17 @@ func TestHookProtectedPathReadsEveryAliasValue(t *testing.T) {
 		t.Fatal(err)
 	}
 	target := filepath.Join(protected, "x")
+	command := "echo x > '" + filepath.ToSlash(target) + "'"
 	cases := []struct {
 		name    string
 		payload string
 	}{
 		{"second command value redirects into the protected directory",
-			fmt.Sprintf(`{"toolCall":{"name":"run_command","args":{"Cmd":"echo hi","CommandLine":"echo x > %s"}}}`, target)},
+			fmt.Sprintf(`{"toolCall":{"name":"run_command","args":{"Cmd":"echo hi","CommandLine":%s}}}`, jsonMarshalString(command))},
 		{"canonical command harmless, alias redirects into the protected directory",
-			fmt.Sprintf(`{"tool_name":"Bash","tool_input":{"command":"echo hi","cmd":"echo x > %s"}}`, target)},
+			fmt.Sprintf(`{"tool_name":"Bash","tool_input":{"command":"echo hi","cmd":%s}}`, jsonMarshalString(command))},
 		{"third path value is in the protected directory",
-			fmt.Sprintf(`{"toolCall":{"name":"write_file","args":{"File":"a.txt","Filename":"plain.txt","Path":"%s","Content":"a"}}}`, target)},
+			fmt.Sprintf(`{"toolCall":{"name":"write_file","args":{"File":"a.txt","Filename":"plain.txt","Path":%s,"Content":"a"}}}`, jsonMarshalString(target))},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

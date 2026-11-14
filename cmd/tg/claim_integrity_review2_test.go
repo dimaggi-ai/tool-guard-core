@@ -21,6 +21,7 @@ import (
 // this test the two could differ. Before it, an installer that wrote the
 // matcher "Bash" for Claude Code or "run_command" for Antigravity CLI passed.
 func TestInstallerWritesWhatTheTemplatesHold(t *testing.T) {
+	exampleHooksTg(t)
 	if _, err := exec.LookPath("jq"); err != nil {
 		t.Fatalf("install.sh needs jq; install it so this test can run: %v", err)
 	}

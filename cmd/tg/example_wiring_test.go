@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -156,7 +157,7 @@ func TestShippedExampleConfigsWireTheVerifiedPath(t *testing.T) {
 				}
 			}
 			info, err := os.Stat(script)
-			if err == nil && info.Mode()&0o111 == 0 {
+			if err == nil && runtime.GOOS != "windows" && info.Mode()&0o111 == 0 {
 				t.Errorf("%s: %s is not executable; the harness would fail to run it and fail open", cfg, script)
 			}
 		}
@@ -181,6 +182,7 @@ func codeOnly(script string) string {
 // each harness config names.
 func installExample(t *testing.T, home string, protect ...string) map[string]string {
 	t.Helper()
+	exampleHooksTg(t)
 	if _, err := exec.LookPath("jq"); err != nil {
 		t.Fatalf("install.sh needs jq; install it so this test can run: %v", err)
 	}
@@ -218,7 +220,7 @@ func installExample(t *testing.T, home string, protect ...string) map[string]str
 // a path with a space and a path with a comma, for a write-tool call and for a
 // shell redirect, and it requires that a path outside the list stays writable.
 func TestInstallerProtectPathsAreHonoured(t *testing.T) {
-	home := t.TempDir()
+	home := exampleWorkspaceTempDir(t)
 	work := filepath.Join(home, "work")
 	plain := filepath.Join(work, "plain")
 	spaced := filepath.Join(work, "my docs")

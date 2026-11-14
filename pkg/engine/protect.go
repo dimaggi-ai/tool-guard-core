@@ -574,6 +574,23 @@ const maxShellSubstDepth = 8
 // the directories found in the command around it. work are the directories
 // the tool call says it runs in.
 func shellTouchesProtectedRec(cmd string, prefixes []string, depth int, inherited, work []string) (bool, string) {
+	if hit, reason := shellTouchesProtectedPOSIX(cmd, prefixes, depth, inherited, work); hit {
+		return true, reason
+	}
+	// Native Windows shells retain backslashes as path separators. Check
+	// that reading as well; replacing the POSIX reading would lose escaped
+	// command names and paths used by POSIX shells running on Windows.
+	if runtime.GOOS == "windows" && depth == 0 && strings.Contains(cmd, `\`) {
+		for _, text := range []string{cmd, decodeWindowsShellEscapes(cmd)} {
+			if hit, reason := shellTouchesProtectedPOSIX(strings.ReplaceAll(text, `\`, "/"), prefixes, depth, inherited, work); hit {
+				return true, reason
+			}
+		}
+	}
+	return false, ""
+}
+
+func shellTouchesProtectedPOSIX(cmd string, prefixes []string, depth int, inherited, work []string) (bool, string) {
 	toks := tokenizeShell(cmd)
 	frags, homeAlts, over := shellFragments(cmd)
 	if over {
@@ -675,6 +692,13 @@ func shellTouchesProtectedRec(cmd string, prefixes []string, depth int, inherite
 // commandTextNamesProtected reports whether the command text names a
 // protected path, or a word under a directory the check does not know.
 func commandTextNamesProtected(cmd string, prefixes, work []string) bool {
+	if runtime.GOOS == "windows" && strings.Contains(cmd, `\`) {
+		for _, text := range []string{cmd, decodeWindowsShellEscapes(cmd)} {
+			if commandTextNamesProtected(strings.ReplaceAll(text, `\`, "/"), prefixes, work) {
+				return true
+			}
+		}
+	}
 	toks := tokenizeShell(cmd)
 	frags, homeAlts, over := shellFragments(cmd)
 	if over {
@@ -1779,7 +1803,7 @@ func homeVarWord(w shellToken) (value string, ok bool) {
 	if !w.unresolved || !homeVarRe.MatchString(w.raw) {
 		return "", false
 	}
-	home, err := os.UserHomeDir()
+	home, err := shellHomeDir()
 	if err != nil || home == "" {
 		return "", false
 	}
@@ -1933,19 +1957,37 @@ func aboveProtected(literal string, prefixes []string) (bool, string) {
 	return false, ""
 }
 
-// literalPathCandidates returns the canonical forms of a shell word used as a
-// path, with a leading tilde, alone or before a slash, placed under the home
-// directory.
+// shellHomeDir returns the home directory used by POSIX shell expansion.
+func shellHomeDir() (string, error) {
+	// POSIX shells use HOME on Windows too. os.UserHomeDir uses
+	// USERPROFILE there, which can name a different directory.
+	if home := os.Getenv("HOME"); home != "" {
+		return filepath.ToSlash(home), nil
+	}
+	home, err := os.UserHomeDir()
+	return filepath.ToSlash(home), err
+}
+
+// literalPathCandidates returns the canonical forms of a shell path word,
+// including its possible home directories when it starts with a tilde.
 func literalPathCandidates(literal string) []string {
 	literal = strings.TrimSpace(literal)
 	if literal == "" {
 		return nil
 	}
 	if literal == "~" || strings.HasPrefix(literal, "~/") {
-		if home, err := os.UserHomeDir(); err == nil && home != "" {
-			return canonicalCandidates(home + literal[1:])
+		var out []string
+		if home, err := shellHomeDir(); err == nil && home != "" {
+			out = canonicalCandidates(home + literal[1:])
 		}
-		return nil
+		// The tool may invoke a native shell whose tilde uses USERPROFILE.
+		// Retain this interpretation when HOME points somewhere else.
+		if runtime.GOOS == "windows" {
+			if home, err := os.UserHomeDir(); err == nil && home != "" {
+				out = append(out, canonicalCandidates(home+literal[1:])...)
+			}
+		}
+		return out
 	}
 	return canonicalCandidates(literal)
 }
@@ -2022,7 +2064,7 @@ func globLinkExpansions(literal string) (out []string, over bool) {
 		return nil, false
 	}
 	if literal == "~" || strings.HasPrefix(literal, "~/") {
-		home, err := os.UserHomeDir()
+		home, err := shellHomeDir()
 		if err != nil || home == "" {
 			return nil, false
 		}
@@ -2449,12 +2491,11 @@ func matchLiteralPath(literal string, prefixes []string) (bool, string) {
 		if literal != "~" && !strings.HasPrefix(literal, "~/") {
 			return true, shortRaw(literal)
 		}
-		home, err := os.UserHomeDir()
-		if err != nil || home == "" {
+		candidates := literalPathCandidates(literal)
+		if len(candidates) == 0 {
 			return true, shortRaw(literal)
 		}
-		expanded := home + literal[1:]
-		for _, cand := range canonicalCandidates(expanded) {
+		for _, cand := range candidates {
 			for _, prefix := range prefixes {
 				if matchProtected(cand, prefix) {
 					return true, cand

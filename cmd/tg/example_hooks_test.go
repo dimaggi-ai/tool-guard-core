@@ -378,7 +378,7 @@ func TestUpgradeShimsKeepOldInstallsWorking(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s must exist: install.sh up to 0.8.x wrote its absolute path into harness config files: %v", c.shim, err)
 		}
-		if info.Mode()&0o111 == 0 {
+		if runtime.GOOS != "windows" && info.Mode()&0o111 == 0 {
 			t.Fatalf("%s is not executable", c.shim)
 		}
 		out := runExampleHook(t, script, t.TempDir(), exampleShellPayload(c.harness, c.command))
@@ -395,6 +395,7 @@ func TestUpgradeShimsKeepOldInstallsWorking(t *testing.T) {
 }
 
 func TestInstallerWritesBareWrapperPathsAndProtectFile(t *testing.T) {
+	exampleHooksTg(t)
 	if _, err := exec.LookPath("jq"); err != nil {
 		t.Fatalf("install.sh needs jq; install it so this test can run: %v", err)
 	}
@@ -482,6 +483,7 @@ func TestExampleHookUnknownToolsDenySwitch(t *testing.T) {
 // command must show the three decisions the three wrappers return: ask for
 // Claude Code, deny for Codex CLI and force_ask for Antigravity CLI.
 func TestOfflineDemoShowsEveryWrapper(t *testing.T) {
+	exampleHooksTg(t)
 	if _, err := exec.LookPath("jq"); err != nil {
 		t.Skip("jq is not on PATH")
 	}
@@ -510,6 +512,7 @@ func TestOfflineDemoShowsEveryWrapper(t *testing.T) {
 // command proves the default path resolves: the adapter exits 2 when it cannot
 // find its policy.
 func TestLegacyAdaptersResolveTheirDefaults(t *testing.T) {
+	exampleHooksTg(t)
 	if _, err := exec.LookPath("jq"); err != nil {
 		t.Skip("jq is not on PATH")
 	}

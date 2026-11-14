@@ -31,6 +31,7 @@ func writeConfig(t *testing.T, f, content string) {
 // TestInstallerFailsWhenJqCannotEdit: before the fix, install.sh printed its
 // success lines and exited 0 when jq failed, and the config file held no hook.
 func TestInstallerFailsWhenJqCannotEdit(t *testing.T) {
+	exampleHooksTg(t)
 	if _, err := exec.LookPath("jq"); err != nil {
 		t.Fatalf("install.sh needs jq; install it so this test can run: %v", err)
 	}
@@ -86,6 +87,7 @@ func TestInstallerKeepsAnEntryWithoutHooks(t *testing.T) {
 // Codex reads CODEX_HOME. The installer must write where the harness reads,
 // and --uninstall must restore the same files.
 func TestInstallerUsesConfigDirVariables(t *testing.T) {
+	exampleHooksTg(t)
 	if _, err := exec.LookPath("jq"); err != nil {
 		t.Fatalf("install.sh needs jq; install it so this test can run: %v", err)
 	}

@@ -5,6 +5,7 @@ import (
 	stdpath "path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -117,6 +118,11 @@ const maxProtectedBases = 64
 // fragments than maxShellFragments.
 func shellFragments(cmd string) (frags, homeAlts []string, over bool) {
 	seen := map[string]bool{}
+	if runtime.GOOS == "windows" {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			homeAlts = append(homeAlts, filepath.ToSlash(home))
+		}
+	}
 	texts := []string{cmd}
 	// The same text with its \xHH, \NNN and \uHHHH escapes decoded, as
 	// echo -e, printf and $'…' write them.
@@ -153,12 +159,30 @@ func decodeShellEscapes(s string) string {
 	})
 }
 
+// decodeWindowsShellEscapes keeps numeric directory components, such as
+// "\001\", as native path text while also reading encoded file names.
+// The original POSIX scan still checks the fully decoded interpretation.
+func decodeWindowsShellEscapes(s string) string {
+	var b strings.Builder
+	start := 0
+	for _, loc := range shellEscapeRe.FindAllStringIndex(s, -1) {
+		if loc[1] < len(s) && (s[loc[1]] == '/' || s[loc[1]] == '\\') {
+			continue
+		}
+		b.WriteString(s[start:loc[0]])
+		b.WriteString(decodeShellEscapes(s[loc[0]:loc[1]]))
+		start = loc[1]
+	}
+	b.WriteString(s[start:])
+	return b.String()
+}
+
 // shellPlainText returns the command text without its quotes and
 // backslashes, with $HOME as the home directory and an extended-glob group
 // as *.
 func shellPlainText(cmd string) string {
 	s := cmd
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
+	if home, err := shellHomeDir(); err == nil && home != "" {
 		s = homeVarRe.ReplaceAllString(s, strings.ReplaceAll(home, "$", "$$"))
 	}
 	for i := 0; i < 8 && extglobRe.MatchString(s); i++ {
@@ -322,6 +346,18 @@ func appendShellFragments(frags []string, seen map[string]bool, cmd string) (out
 		}
 		for _, v := range variants {
 			add(v)
+			// A drive colon belongs to the path, including inside an option
+			// or ${X:-PATH}. The generic punctuation split below drops it.
+			if runtime.GOOS == "windows" {
+				for _, part := range strings.FieldsFunc(v, func(r rune) bool { return strings.ContainsRune("=,{}", r) }) {
+					for i := 0; i+2 < len(part); i++ {
+						if isWindowsDriveLetterPath(part[i:]) {
+							add(part[i:])
+							break
+						}
+					}
+				}
+			}
 			if stripped := stripPathOption(v); stripped != v {
 				add(stripped)
 			}
@@ -631,6 +667,16 @@ func dotDotBases(frags, prefixes []string) []string {
 // would count. The same holds for the program name under a directory in
 // work, the directories the tool call says it runs in.
 func commandNamesProtected(toks []shellToken, frags, bases, work, homeAlts, prefixes []string) string {
+	// The text fragments split whitespace even inside quotes. Keep complete
+	// parsed words as well so a quoted path with spaces remains visible.
+	for _, tok := range toks {
+		if tok.kind == tokWord && !tok.unresolved && strings.ContainsAny(tok.value, " \t") {
+			frags = append(frags, tok.value)
+		}
+	}
+	if len(frags) > maxShellFragments {
+		return "a command with more words than the check reads"
+	}
 	progs := map[string]bool{}
 	for _, seg := range splitShellSegments(toks) {
 		if words := stripCommandPrefix(commandWords(seg)); len(words) > 0 && !words[0].unresolved {
@@ -977,7 +1023,7 @@ func partsCanMatch(word, prefix []string) bool {
 // the middle of a file name.
 func braceHeadForms(head string, bases []string) []string {
 	if head == "~" || strings.HasPrefix(head, "~/") {
-		home, err := os.UserHomeDir()
+		home, err := shellHomeDir()
 		if err != nil || home == "" {
 			return nil
 		}

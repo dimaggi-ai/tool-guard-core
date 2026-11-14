@@ -134,7 +134,7 @@ func runVerifyWithStubs(t *testing.T, extraEnv ...string) verifyStubRun {
 		t.Skip("python3 is not on PATH")
 	}
 	tg := exampleHooksTg(t)
-	root := t.TempDir()
+	root := exampleWorkspaceTempDir(t)
 	bin := filepath.Join(root, "bin")
 	home := filepath.Join(root, "home")
 	run := verifyStubRun{evidence: filepath.Join(root, "evidence"), scratch: filepath.Join(root, "scratch"), home: home}

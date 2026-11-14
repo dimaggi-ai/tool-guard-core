@@ -152,6 +152,9 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Windows protected-path checks now use `HOME` for POSIX shell paths and
+  also check native Windows path separators. Shell checks remain enabled
+  on Windows.
 - The protected-path check missed a shell path written with `~`.
   `echo x > ~/.claude/settings.json` was allowed, while the same path written
   in full or with `$HOME` was denied. A leading `~` or `~/` is now checked

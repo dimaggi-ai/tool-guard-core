@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -851,19 +852,27 @@ func TestHookHarnessPathParameterAliasesReachContextFilePolicy(t *testing.T) {
 func TestHookPowerShellProtectedPath(t *testing.T) {
 	dir := t.TempDir()
 	guarded := filepath.Join(dir, "settings.json")
+	shellGuarded := "'" + filepath.ToSlash(guarded) + "'"
 
 	cases := []struct {
 		tool, command, want string
 	}{
-		{"PowerShell", "echo x > " + guarded, "deny"},
-		{"pwsh", "echo x > " + guarded, "deny"},
-		{"PowerShell", "Set-Content -Path " + guarded + " -Value x", "not-allow"},
-		{"PowerShell", "Out-File -FilePath " + guarded, "not-allow"},
-		{"PowerShell", "Remove-Item -Recurse -Force " + guarded, "not-allow"},
+		{"PowerShell", "echo x > " + shellGuarded, "deny"},
+		{"pwsh", "echo x > " + shellGuarded, "deny"},
+		{"PowerShell", "Set-Content -Path " + shellGuarded + " -Value x", "not-allow"},
+		{"PowerShell", "Out-File -FilePath " + shellGuarded, "not-allow"},
+		{"PowerShell", "Remove-Item -Recurse -Force " + shellGuarded, "not-allow"},
 		// legitimate-use control: reading an unrelated file must not be
 		// denied by protected-path matching.
 		{"PowerShell", "Get-Content /etc/hostname", "not-deny"},
-		{"Bash", "echo x > " + guarded, "deny"},
+		{"Bash", "echo x > " + shellGuarded, "deny"},
+	}
+	if runtime.GOOS == "windows" {
+		for _, tool := range []string{"PowerShell", "pwsh", "Bash"} {
+			cases = append(cases, struct{ tool, command, want string }{
+				tool, `echo x > "` + guarded + `"`, "deny",
+			})
+		}
 	}
 	for _, tc := range cases {
 		name := tc.tool + " :: " + tc.command

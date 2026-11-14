@@ -20,6 +20,7 @@ func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 func runInstaller(t *testing.T, home string, args ...string) string {
 	t.Helper()
+	exampleHooksTg(t)
 	if _, err := exec.LookPath("jq"); err != nil {
 		t.Fatalf("install.sh needs jq; install it so this test can run: %v", err)
 	}
@@ -83,6 +84,7 @@ func TestInstallerUpgradesAnOldCodexHooksFile(t *testing.T) {
 // tool under that key is not the installer's to move, so the installer must
 // stop without a success line and without changing the file.
 func TestInstallerRefusesAForeignTopLevelCodexEntry(t *testing.T) {
+	exampleHooksTg(t)
 	if _, err := exec.LookPath("jq"); err != nil {
 		t.Fatalf("install.sh needs jq; install it so this test can run: %v", err)
 	}
