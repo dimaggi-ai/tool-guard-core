@@ -27,7 +27,7 @@
 
 ARG RUNTIME=gcr.io/distroless/static-debian12:nonroot
 
-FROM golang:1.26.11-bookworm AS build
+FROM golang:1.27.0-bookworm AS build
 WORKDIR /src
 
 # Cache modules separately from source so a code-only change doesn't
