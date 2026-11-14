@@ -60,6 +60,20 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   is additive; code that builds `StreamReport` with positional struct literals must switch to keyed
   fields. A trusted external checkpoint pin establishes checkpoint identity
   only; it does not authenticate deleted records.
+- New policy `policies/coding_agent_secret_commands.yaml`, in shadow mode: it
+  records a secret that a coding agent types into a shell command, writes into
+  an agent config file, or copies into a note, and blocks nothing. It reads
+  inline passwords, credentials in URLs, authorization headers, a hand-written
+  list of provider-key formats, and 75 provider-key formats generated from the
+  default rules of gitleaks (MIT licence, pinned in `third_party/gitleaks`) by
+  `scripts/gen-secret-formats.py`. The generated rules have no entropy limits
+  or allowlists, so a placeholder in a provider format is recorded. The rules
+  match text: they catch a secret pasted by mistake, not one an agent hides on
+  purpose by splitting it across shell variables, encoding it, or building it
+  in a script. Core has no redaction: a recorded call goes into the audit log
+  with the secret as written. CI fails when the generated rules do not match
+  the pinned file. The test fixtures store each key in two pieces, which the
+  test joins, so the repository holds no complete key string.
 - Two new policies, `policies/coding_agent_secret_egress.yaml` and
   `policies/coding_agent_context_files.yaml`. Loading the whole `policies/`
   directory now activates them; a deployment that names policy files

@@ -1,0 +1,30 @@
+{"id": "h-pgpass-export", "params": {"command": "export PGPASSWORD=SYNTHheld && pg_dump -h db.example.com app > a.sql"}, "tool": "bash", "want": "hit"}
+{"id": "h-mysql-p{{+}}ass-space", "params": {"command": "mysql -h db.example.com --password SYNTHheld -e \"select 1\""}, "tool": "bash", "want": "clean"}
+{"id": "h-sshpass-env", "params": {"command": "sshpass -p \"SYNTHheld\" scp a.tar deploy@203.0.113.9:/tmp"}, "tool": "bash", "want": "hit"}
+{"id": "h-curl-u{{+}}ser-long", "params": {"command": "curl --user ci:SYNTHheld https://jenkins.example.com/job/x/build"}, "tool": "bash", "want": "hit"}
+{"id": "h-redis-url", "params": {"command": "redis-cli -u redis://default:SYNTHheld@cache.example.com:6379"}, "tool": "bash", "want": "hit"}
+{"id": "h-mongo-url", "params": {"command": "mongosh \"mongodb+srv://app:SYNTHheld@cluster0.example.net/app\""}, "tool": "bash", "want": "hit"}
+{"id": "h-amqp-url", "params": {"command": "celery -b amqp://u:SYNTHheld@mq.example.com// worker"}, "tool": "bash", "want": "hit"}
+{"id": "h-token-query", "params": {"command": "wget \"https://api.example.com/export?access_token=SYNTHheld{{+}}0123456789\""}, "tool": "bash", "want": "hit"}
+{"id": "h-basic-header", "params": {"command": "curl -H \"Authorization: Basic U1lOVEhoZWxkOnB{{+}}3MDEyMzQ1Njc4OQ==\" https://x.example.com"}, "tool": "bash", "want": "hit"}
+{"id": "h-ghs", "params": {"command": "git push https://x-access-token:ghs_SYNTH00000000000{{+}}00000000000000000000@github.com/o/r.git"}, "tool": "bash", "want": "hit"}
+{"id": "h-glpat-header", "params": {"command": "curl --header \"PRIVATE-TOKEN: glpat-SYNTH00{{+}}0000000000000\" https://gitlab.example.com/api/v4/projects"}, "tool": "bash", "want": "hit"}
+{"id": "h-skant", "params": {"command": "ANTHROPI{{+}}C_API_KEY=sk-ant-api03-SYNTHbbbbbbbbbbb{{+}}bbbbbbbbbbbbbbbbbbbbbbbbbbbbb node agent.js"}, "tool": "bash", "want": "hit"}
+{"id": "h-rk-live", "params": {"command": "export STRIPE_KEY=rk_live_SYNTH999{{+}}99999999999999999"}, "tool": "bash", "want": "hit"}
+{"id": "h-aws-se{{+}}cret-cfg", "params": {"command": "aws configure set aws_secret{{+}}_access_key SYNTHaB3/aB3/aB3/aB3/aB3/aB3/aB3/aB3/xyz"}, "tool": "bash", "want": "hit"}
+{"id": "h-settings-{{+}}escaped-url", "params": {"content": "{\"allow\":[\"Bash(psql \\\"postgres://app:SYNTHheld@db.example.com/app\\\")\"]}", "file_path": "/home/u/proj/.claude/settings.local.json"}, "tool": "write", "want": "hit"}
+{"id": "h-cursor{{+}}-mcp-key", "params": {"content": "{\"env\":{\"API_KEY\":\"sk-proj-SYNTHaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa{{+}}T3BlbkFJSYNTHccccccccccccccccccccccccccccccccccccccccccccccccccccc\"}}", "file_path": "/home/u/proj/.cursor/mcp.json"}, "tool": "write", "want": "hit"}
+{"id": "h-gemini{{+}}-settings", "params": {"file_path": "/home/u/.gemini/settings.json", "new_string": "\"MYSQL_PWD=\\\"SYNTHheld\\\"\"", "old_string": "x"}, "tool": "edit", "want": "hit"}
+{"id": "h-specstory", "params": {"content": "ran: PGPASSWORD=SYNTHheld psql", "file_path": "/home/u/proj/.specstory/history/2026-11-13.md"}, "tool": "write", "want": "hit"}
+{"id": "h-deploy-note", "params": {"content": "login: sshpass -p SYNTHheld ssh prod", "file_path": "/home/u/proj/DEPLOY-notes.md"}, "tool": "write", "want": "hit"}
+{"id": "h-git-add-force", "params": {"command": "git add -f .claude/settings.json"}, "tool": "bash", "want": "hit"}
+{"id": "h-c-url-loc{{+}}alhost-mysql", "params": {"command": "mysql -h 127.0.0.1 -u root mysql://root:root@localhost/app"}, "tool": "bash", "want": "clean"}
+{"id": "h-c-compose-url", "params": {"command": "DATABASE_URL=postgres://postgres:postgres@db:5432/app npm run migrate"}, "tool": "bash", "want": "clean"}
+{"id": "h-c-url-{{+}}no-creds", "params": {"command": "curl https://example.com/path?a=1&b=2"}, "tool": "bash", "want": "clean"}
+{"id": "h-c-git-ssh", "params": {"command": "git clone git@github.com:org/repo.git"}, "tool": "bash", "want": "clean"}
+{"id": "h-c-password{{+}}-flag-prompt", "params": {"command": "psql --password -h db.example.com"}, "tool": "bash", "want": "clean"}
+{"id": "h-c-env-r{{+}}ef-braced", "params": {"command": "PGPASSWORD=${DB_PASS} psql -h db"}, "tool": "bash", "want": "clean"}
+{"id": "h-c-docs-p{{+}}laceholder", "params": {"content": "Set PGPASSWORD=<your-password> before running.", "file_path": "/home/u/proj/README.md"}, "tool": "write", "want": "clean"}
+{"id": "h-c-commit-{{+}}settings-msg", "params": {"command": "git commit -am 'chore: ignore .claude/settings.local.json'"}, "tool": "bash", "want": "clean"}
+{"id": "h-c-redi{{+}}s-askpass", "params": {"command": "redis-cli --askpass -h cache.example.com"}, "tool": "bash", "want": "clean"}
+{"id": "h-c-curl-u{{+}}-only-user", "params": {"command": "curl -u admin https://ci.example.com"}, "tool": "bash", "want": "clean"}
