@@ -10,6 +10,7 @@ package main
 // real harness does.
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -17,7 +18,27 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestVerifyHarnessesPythonEvidence(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("verifier evidence tests use POSIX file permissions")
+	}
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 is not on PATH")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, python, "-m", "unittest", "discover", "-s",
+		filepath.Join("..", "..", "examples", "coding-agent-guard"), "-p", "test_verify_harnesses.py", "-v")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("Python verifier evidence regressions failed: %v\n%s", err, output)
+	}
+	t.Logf("%s", output)
+}
 
 const verifyStubCanary = "CANARYSIGNIN0123456789abcdefghijklmnop"
 
@@ -54,6 +75,8 @@ if os.environ.get("STUB_REPLACE_LINK") == "1" and signin and os.path.islink(sign
     text = open(signin).read()
     os.unlink(signin)
     open(signin, "w").write(text)
+if os.environ.get("STUB_TRUNCATE_SIGNIN") == "1" and signin:
+    open(signin, "w").write("changed-by-harness")
 print("session 123e4567-e89b-12d3-a456-426614174000 for stub.user@example.com in " + os.getcwd())
 if os.environ.get("STUB_LEAK") == "1" and signin:
     print(open(signin).read())
@@ -148,7 +171,16 @@ func runVerifyWithStubs(t *testing.T, extraEnv ...string) verifyStubRun {
 			t.Fatalf("write stub %s: %v", n, err)
 		}
 	}
-	signin := []byte(`{"token":"` + verifyStubCanary + `"}`)
+	canary := verifyStubCanary
+	for _, env := range extraEnv {
+		if strings.HasPrefix(env, "STUB_SIGNIN_TEXT=") {
+			canary = strings.TrimPrefix(env, "STUB_SIGNIN_TEXT=")
+		}
+	}
+	signin, err := json.Marshal(map[string]string{"token": canary})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, f := range []string{filepath.Join(home, ".claude", ".credentials.json"), filepath.Join(home, ".codex", "auth.json")} {
 		if err := os.WriteFile(f, signin, 0o600); err != nil {
 			t.Fatalf("write %s: %v", f, err)
@@ -358,22 +390,22 @@ func verifyHomeSignInUnchanged(t *testing.T, run verifyStubRun) {
 	}
 }
 
-func TestVerifyHarnessesLinksSignInFilesByDefault(t *testing.T) {
+func TestVerifyHarnessesCopiesSignInFilesByDefault(t *testing.T) {
 	kinds := filepath.Join(t.TempDir(), "kinds")
 	run := runVerifyWithStubs(t, "TG_ONLY=claude", "STUB_SIGNIN_KIND_FILE="+kinds)
 	if run.code != 0 {
 		t.Fatalf("exit status %d, want 0\n%s", run.code, run.output)
 	}
-	if got := verifySignInKinds(t, kinds); len(got) != 1 || got[0] != "link" {
-		t.Errorf("the harness home held %v, want only a symbolic link", got)
+	if got := verifySignInKinds(t, kinds); len(got) != 1 || got[0] != "file" {
+		t.Errorf("the harness home held %v, want only a regular file", got)
 	}
-	if got := verifySignInMode(t, run); got != "link" {
-		t.Errorf("manifest signin_mode = %q, want link", got)
+	if got := verifySignInMode(t, run); got != "copy" {
+		t.Errorf("manifest signin_mode = %q, want copy", got)
 	}
 	verifyHomeSignInUnchanged(t, run)
 }
 
-func TestVerifyHarnessesCopiesSignInFilesOnlyWhenAsked(t *testing.T) {
+func TestVerifyHarnessesCopiesSignInFilesWhenAsked(t *testing.T) {
 	kinds := filepath.Join(t.TempDir(), "kinds")
 	run := runVerifyWithStubs(t, "TG_ONLY=claude", "TG_VERIFY_SIGNIN=copy", "STUB_SIGNIN_KIND_FILE="+kinds)
 	if run.code != 0 {
@@ -392,7 +424,7 @@ func TestVerifyHarnessesCopiesSignInFilesOnlyWhenAsked(t *testing.T) {
 }
 
 func TestVerifyHarnessesReportsAReplacedSignInLink(t *testing.T) {
-	run := runVerifyWithStubs(t, "TG_ONLY=claude", "STUB_REPLACE_LINK=1")
+	run := runVerifyWithStubs(t, "TG_ONLY=claude", "TG_VERIFY_SIGNIN=link", "STUB_REPLACE_LINK=1")
 	if run.code != 0 {
 		t.Fatalf("exit status %d, want 0\n%s", run.code, run.output)
 	}
@@ -401,6 +433,14 @@ func TestVerifyHarnessesReportsAReplacedSignInLink(t *testing.T) {
 	}
 	if left, _ := os.ReadDir(run.scratch); len(left) != 0 {
 		t.Errorf("scratch base must be empty after the run, has %d entries", len(left))
+	}
+	verifyHomeSignInUnchanged(t, run)
+}
+
+func TestVerifyHarnessesDefaultSignInCopyDoesNotWriteThrough(t *testing.T) {
+	run := runVerifyWithStubs(t, "TG_ONLY=claude", "STUB_TRUNCATE_SIGNIN=1")
+	if run.code != 0 {
+		t.Fatalf("exit status %d, want 0\n%s", run.code, run.output)
 	}
 	verifyHomeSignInUnchanged(t, run)
 }
@@ -425,6 +465,20 @@ func TestVerifyHarnessesRemovesEvidenceThatHoldsSignInText(t *testing.T) {
 	}
 	if !strings.Contains(run.output, "held text from a sign-in file") {
 		t.Errorf("the run did not report the removed evidence file:\n%s", run.output)
+	}
+}
+
+func TestVerifyHarnessesRejectsShortPunctuationSignInLeak(t *testing.T) {
+	canary := strings.Join([]string{"CANARY", "+", "/", "=", "TOKEN"}, "")
+	run := runVerifyWithStubs(t, "TG_ONLY=claude", "STUB_LEAK=1", "STUB_SIGNIN_TEXT="+canary)
+	if run.code != 1 {
+		t.Fatalf("exit status %d, want 1\n%s", run.code, run.output)
+	}
+	if strings.Contains(verifyEvidenceText(t, run.evidence), canary) {
+		t.Error("evidence retained the short punctuation credential")
+	}
+	if !strings.Contains(run.output, "held text from a sign-in file") {
+		t.Errorf("missing credential leak failure:\n%s", run.output)
 	}
 }
 

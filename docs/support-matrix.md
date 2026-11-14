@@ -11,6 +11,12 @@ that has the word CLI, IDE or Copilot or a three-part version
 (`TestSupportSentencesNameOnlyVerifiedHarnesses`). A claim about an unlisted
 harness in another form is not caught.
 
+The table describes historical verification at commit
+`24eafd647ce3fabebe0837df540340ed31b30829`, measured on 2026-11-10.
+It does not establish end-to-end verification of the current source.
+`make release-binding` fails for this retained manifest; release requires a
+new measurement tied to the binary and current code.
+
 The status `verified` needs two things. The hook payload shape was captured
 from a real install of that harness on this host, and `TestHookConformance`
 replays the captured payload through the real `tg hook` decision path. The
@@ -45,8 +51,10 @@ directory. For Antigravity CLI the run put the config file in the workspace,
 at `.agents/hooks.json`. `install.sh` writes `~/.gemini/config/hooks.json`.
 The release run did not measure that location.
 `TestSupportMatrixEvidenceBlockMatchesManifest` fails when the table
-and the manifest differ. `TestHarnessManifestIsReleaseEvidence` fails when a
-wrapper, a config template or a policy file changed after the run.
+and the manifest differ. `TestHarnessManifestIsHistoricalEvidence` checks
+historical provenance and stage consistency. `make release-binding` checks
+the measured binary hash and Go VCS metadata, the verifier hash, and that
+only documentation or evidence files differ from the measured commit.
 
 Each stage sends one prompt to the harness, and the run sends every stage
 more than once. The last column counts the runs. `shell_deny` and `write_tool_deny`

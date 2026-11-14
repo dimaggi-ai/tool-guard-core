@@ -319,10 +319,10 @@ records whether the write happened. It makes paid model calls. It uses the wrapp
 in `config/`, with temporary config directories, so it does not change your
 own config files. For
 Antigravity CLI it puts the config file in a temporary workspace, at
-`.agents/hooks.json`, and not at `~/.gemini/config/hooks.json`. It
-does not copy your sign-in files for Claude Code and Codex: the temporary
-config directory holds a symbolic link to each file, and the script removes
-the directory when it ends. It keeps a `manifest.json`, reduced hook records
+`.agents/hooks.json`, and not at `~/.gemini/config/hooks.json`. By default, it
+copies your sign-in files into the temporary config directory with mode
+0600. Writes by a harness change these copies, leaving the originals
+unchanged. The script removes the directory when it ends. It keeps a `manifest.json`, reduced hook records
 and filtered agent output under `var/verify/`. The first lines of
 `verify_harnesses.py` list its environment variables.
 
@@ -330,6 +330,14 @@ and filtered agent output under `var/verify/`. The first lines of
 stage three times. The table in `docs/support-matrix.md` comes from its
 `manifest.json`. To send every stage more than once in your own run, set
 `TG_VERIFY_REPEAT` to a number from 1 to 9.
+
+The checked-in manifest measured commit
+`24eafd647ce3fabebe0837df540340ed31b30829` on 2026-11-10. It is historical
+evidence; the current source has not been measured end to end. Before
+release, retain the measured binary and run
+`make release-binding TG=/absolute/path/to/measured/tg HARNESS_MANIFEST=/absolute/path/to/manifest.json`. This check fails until a new manifest binds the measurement to the
+current code. The verifier removes credential values from evidence before
+writing it and fails a run that exposes them.
 
 ## Other files in this directory
 

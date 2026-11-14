@@ -6,6 +6,26 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Review corrections
+
+- `tg hook` reads the requested dialect even when an earlier flag is invalid.
+  When the harness cannot be identified, early-error responses include both
+  decision formats. Missing or null tool arguments now fail closed for
+  configured tool groups. Empty argument objects remain valid.
+- Repeated identical parameter aliases no longer consume the alias limit.
+  When distinct values exceed the limit, the reason reports a lower bound
+  instead of counting sampled envelopes as values.
+
+- The retained harness run measured commit
+  `24eafd647ce3fabebe0837df540340ed31b30829` on 2026-11-10. It does not
+  verify the current source end to end. `make release-binding` checks the
+  measured binary hash and Go VCS metadata, verifier hash, and source changes
+  since the measured commit. This gate fails for the retained historical
+  manifest. A new maintainer-run measurement is required before release.
+- The harness verifier copies sign-in files with mode 0600 by default. It
+  removes credential values, including short tokens and base64 punctuation,
+  from retained evidence before writing it, and fails a run that exposes them.
+
 ### Added
 
 - `tg prune` previews retention of a closed audit log and writes a new file with
@@ -84,12 +104,12 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   templates and policies of the example against the installed harnesses. It decides each result from whether a file
   exists, not from the model's wording. It writes one `manifest.json` with the commit, the hash of the
   `tg` binary, the hash of the wrapper, config and policy files and one record per stage. The
-  manifest of the release run is `docs/evidence/harness-manifest.json`, and a
-  test renders the stage table in `docs/support-matrix.md` from it. The script
-  no longer copies a sign-in file: the isolated harness home holds a symbolic
-  link, in a private scratch directory outside the repository. The script
-  removes that directory when it exits. A run that was killed leaves it until
-  the next run. `TG_VERIFY_SIGNIN=copy` restores the copy. It filters session
+  historical manifest is `docs/evidence/harness-manifest.json`, and a
+  test renders the stage table in `docs/support-matrix.md` from it. By default,
+  the script copies sign-in files into a private scratch directory outside the repository,
+  with file mode 0600. Harness writes to these copies leave the original files
+  unchanged. The script removes that directory when it exits. A run that was
+  killed leaves it until the next run. It filters session
   identifiers, e-mail addresses and home paths out of the output it keeps.
   `TG_VERIFY_REPEAT` sends every stage more than once, and the manifest holds
   the count of every outcome. `make verify-harnesses` is the release run: it

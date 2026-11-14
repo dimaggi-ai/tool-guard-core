@@ -728,13 +728,16 @@ rules:
 
 func TestHookFlagParseErrorHonoursLaterFailClosedFlag(t *testing.T) {
 	cases := []struct {
-		name string
-		args []string
+		name    string
+		args    []string
+		dialect string
 	}{
-		{"unknown flag before -fail-closed-tools", []string{"-nope", "-fail-closed-tools", "bash"}},
-		{"unknown flag before -fail-closed", []string{"-nope", "-fail-closed"}},
-		{"unknown flag before -fail-closed-tools with =", []string{"-nope", "-fail-closed-tools=bash"}},
-		{"control: flag parses normally", []string{"-fail-closed-tools", "bash"}},
+		{"unknown flag before -fail-closed-tools", []string{"-nope", "-fail-closed-tools", "bash"}, "both"},
+		{"unknown flag before -fail-closed", []string{"-nope", "-fail-closed"}, "both"},
+		{"unknown flag before -fail-closed-tools with =", []string{"-nope", "-fail-closed-tools=bash"}, "both"},
+		{"control: flag parses normally", []string{"-fail-closed-tools", "bash"}, "both"},
+		{"antigravity dialect before unknown flag", []string{"-dialect", "antigravity", "-nope", "-fail-closed-groups", "shell"}, "antigravity"},
+		{"antigravity dialect after unknown flag", []string{"-nope", "-dialect", "antigravity", "-fail-closed-groups", "shell"}, "antigravity"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -742,7 +745,11 @@ func TestHookFlagParseErrorHonoursLaterFailClosedFlag(t *testing.T) {
 			if code != 0 {
 				t.Fatalf("hook must always exit 0, got %d; output=%s", code, out)
 			}
-			if d := hookDecision(t, out); d != "deny" {
+			d, dialect := exampleDecision(t, out)
+			if dialect != tc.dialect {
+				t.Errorf("dialect = %q, want %q; output=%s", dialect, tc.dialect, out)
+			}
+			if d != "deny" {
 				t.Errorf("a flag parse error with a fail-closed flag anywhere in args must deny, got %q; args=%v output=%s", d, tc.args, out)
 			}
 		})

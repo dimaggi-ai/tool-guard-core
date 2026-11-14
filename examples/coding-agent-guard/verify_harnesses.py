@@ -24,7 +24,7 @@ Environment:
                           without -trimpath, or a policy directory other than ./policies
   TG_VERIFY_TIMEOUT       seconds for one harness call   default 300
   TG_VERIFY_REPEAT        times each stage is sent, 1 to 9   default 1
-  TG_VERIFY_SIGNIN        link or copy                   default link
+  TG_VERIFY_SIGNIN        copy or link                   default copy
 
 Exit status: 0 no check failed, 1 a check failed, 2 the run could not start.
 
@@ -35,11 +35,11 @@ stage that expects measure never fails: its outcomes are recorded only.
 
 Sign-in files: the harnesses need them inside an isolated home. That home is a
 private scratch directory (mode 0700) outside the repository. By default the
-script makes no copy of a sign-in file: the scratch home holds a symbolic link
-to the file in your home directory. A harness can replace the link with its
-own file when it renews a token. The script overwrites and removes that file
-at exit and reports it. With TG_VERIFY_SIGNIN=copy the scratch home holds a
-copy (mode 0600) that is overwritten before removal. Overwriting a file before
+scratch home holds a copy (mode 0600) that is overwritten before removal.
+TG_VERIFY_SIGNIN=link explicitly opts into a symbolic link to the original
+file: harness writes through that link can change the original. A harness can
+also replace the link with its own file when it renews a token. The script
+overwrites and removes that replacement at exit and reports it. Overwriting a file before
 removal does not guarantee erasure on a copy-on-write file system or on flash
 storage. The scratch directory is removed on every exit, including Ctrl-C,
 TERM and HUP. A run that was killed leaves the directory behind, and the next
@@ -164,12 +164,14 @@ class Run:
         self.release = e.get("TG_VERIFY_RELEASE") == "1"
         self.timeout = int(e.get("TG_VERIFY_TIMEOUT") or "300")
         self.repeat_text = e.get("TG_VERIFY_REPEAT") or "1"
-        self.signin = e.get("TG_VERIFY_SIGNIN") or "link"
+        self.signin = e.get("TG_VERIFY_SIGNIN") or "copy"
         self.home = os.path.expanduser("~")
         self.scratch = None
         self.child = None
         self.failures = 0
         self.secrets = set()
+        self.credential_leaks = 0
+        self.credential_leaks_reported = False
         self.signin_copies = []
         self.harnesses = []
 
@@ -212,10 +214,18 @@ class Run:
         self.commit = head.strip() if head else ""
         self.dirty = None if status is None else bool(status.strip())
         self.trimpath = None
+        self.tg_vcs_revision = ""
+        self.tg_vcs_modified = None
         try:
             p = subprocess.run(["go", "version", "-m", self.tg], capture_output=True, text=True)
             if p.returncode == 0:
                 self.trimpath = "-trimpath=true" in p.stdout
+                for line in p.stdout.splitlines():
+                    setting = line.strip().removeprefix("build\t")
+                    if setting.startswith("vcs.revision="):
+                        self.tg_vcs_revision = setting.split("=", 1)[1]
+                    elif setting in ("vcs.modified=true", "vcs.modified=false"):
+                        self.tg_vcs_modified = setting.endswith("=true")
         except OSError:
             pass
         self.shipped = os.path.realpath(self.policies) == os.path.realpath(os.path.join(EX, "policies"))
@@ -224,6 +234,8 @@ class Run:
                 self.stop("TG_VERIFY_RELEASE=1 needs a clean git working tree")
             if self.trimpath is not True:
                 self.stop("TG_VERIFY_RELEASE=1 needs a tg built with -trimpath (run: make verify-harnesses)")
+            if self.tg_vcs_revision != self.commit or self.tg_vcs_modified is not False:
+                self.stop("TG_VERIFY_RELEASE=1 needs a tg built from the clean current commit")
             if not self.shipped:
                 self.stop("TG_VERIFY_RELEASE=1 needs the shipped policy directory, unset TG_POLICIES")
 
@@ -259,25 +271,62 @@ class Run:
             dst = os.path.join(self.scratch, key, name)
             if not os.path.isfile(src):
                 continue
-            with open(src, "rb") as f:
-                self.secrets.update(t for t in re.findall(rb"[A-Za-z0-9_.\-]{24,}", f.read()))
+            try:
+                with open(src, "rb") as f:
+                    signin_data = f.read()
+                credentials = json.loads(signin_data)
+            except (OSError, ValueError):
+                self.stop("cannot parse sign-in JSON for " + key)
+            self.collect_secrets(credentials)
             if self.signin == "link":
                 os.symlink(src, dst)
             else:
-                shutil.copyfile(src, dst)
-                os.chmod(dst, 0o600)
+                # Create privately, before any credential bytes are written.
+                with os.fdopen(os.open(dst, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as dest:
+                    dest.write(signin_data)
             self.signin_copies.append(dst)
 
     # ---- evidence -------------------------------------------------------
+    def collect_secrets(self, value):
+        """Treat every nonempty JSON string value as private, regardless of shape."""
+        if isinstance(value, str) and value:
+            self.secrets.add(value.encode("utf-8"))
+            for ascii_only in (True, False):
+                self.secrets.add(json.dumps(value, ensure_ascii=ascii_only)[1:-1].encode("utf-8"))
+        elif isinstance(value, dict):
+            for item in value.values():
+                self.collect_secrets(item)
+        elif isinstance(value, list):
+            for item in value:
+                self.collect_secrets(item)
+
     def scrub(self, text):
         for path, word in ((os.path.realpath(self.scratch), "<scratch>"), (self.scratch, "<scratch>"),
                            (os.path.realpath(self.home), "<home>"), (self.home, "<home>")):
             text = text.replace(path, word)
         text = re.sub(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", "<uuid>", text)
-        return re.sub(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", "<email>", text)
+        text = re.sub(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", "<email>", text)
+        values = [secret.decode("utf-8") for secret in sorted(self.secrets, key=len, reverse=True)]
+        while True:
+            previous = text
+            for value in values:
+                if value in text:
+                    self.credential_leaks += 1
+                    text = text.replace(value, "")
+            if text == previous:
+                return text
+
+    def scrub_json(self, value):
+        if isinstance(value, str):
+            return self.scrub(value)
+        if isinstance(value, dict):
+            return {self.scrub(k): self.scrub_json(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [self.scrub_json(v) for v in value]
+        return value
 
     def report(self, word, label, detail):
-        line = "%-9s %s: %s" % (word, label, detail)
+        line = self.scrub("%-9s %s: %s" % (word, label, detail))
         print(line, flush=True)
         with open(os.path.join(self.out, "results.txt"), "a") as f:
             f.write(line + "\n")
@@ -312,7 +361,7 @@ class Run:
         else:
             rec["decision"], rec["reason"] = "", ""
         rec["hook_exit_status"] = raw["rc"]
-        return json.loads(self.scrub(json.dumps(rec)))
+        return self.scrub_json(rec)
 
     # ---- one harness call -----------------------------------------------
     def call(self, cfg, prompt, log):
@@ -437,7 +486,14 @@ class Run:
             entry["stages"].append(self.stage_runs(cfg, slug, spec))
 
     # ---- finish ---------------------------------------------------------
+    def report_credential_leaks(self):
+        if self.credential_leaks and not self.credential_leaks_reported:
+            self.credential_leaks_reported = True
+            self.report("FAIL", "evidence", "harness evidence held text from a sign-in file; "
+                        "the text was removed before writing")
+
     def leak_check(self):
+        self.report_credential_leaks()
         for d, _, files in os.walk(self.out):
             for n in files:
                 path = os.path.join(d, n)
@@ -466,17 +522,24 @@ class Run:
                 h.update((rel + "\n" + hashlib.sha256(f.read()).hexdigest() + "\n").encode())
         with open(self.tg, "rb") as f:
             tg_sha = hashlib.sha256(f.read()).hexdigest()
+        with open(__file__, "rb") as f:
+            verifier_sha = hashlib.sha256(f.read()).hexdigest()
         doc = {
             "schema": 4,
             "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "commit": self.commit, "working_tree_dirty": self.dirty,
             "tg_sha256": tg_sha, "tg_build_trimpath": self.trimpath,
+            "tg_vcs_revision": self.tg_vcs_revision, "tg_vcs_modified": self.tg_vcs_modified,
+            "verifier_sha256": verifier_sha,
             "wiring_sha256": h.hexdigest(), "policy_dir_is_shipped": self.shipped,
             "harness_filter": self.only, "repeat": self.repeat, "signin_mode": self.signin,
             "retention": "Kept: manifest.json, results.txt, reduced hook records, filtered harness output. "
                          "Not kept: harness homes, sign-in files, session files, raw hook payloads.",
             "failures": self.failures, "harnesses": self.harnesses,
         }
+        doc = self.scrub_json(doc)
+        self.report_credential_leaks()
+        doc["failures"] = self.failures
         with open(os.path.join(self.out, "manifest.json"), "w") as f:
             json.dump(doc, f, indent=2)
             f.write("\n")

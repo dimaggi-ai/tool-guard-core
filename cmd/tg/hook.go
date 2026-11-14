@@ -73,10 +73,12 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	unknownToolsDeny := fs.Bool("unknown-tools-deny", false, "deny any tool_name not declared in scope.tool_names of some loaded ENFORCEMENT policy (closes the tool-name-spoofing/new-tool-goes-ungoverned class); mirrors tg-proxy's -unknown-tools-deny")
 
 	parseErr := fs.Parse(args)
-	// The output dialect is needed even on the error paths, so resolve it
-	// before anything is emitted. Until the input is decoded, auto can only
-	// mean the Claude/Codex contract.
-	dialect := resolveHookDialect(*dialectStr, false)
+	// Until input is decoded, auto has no known harness. Include both
+	// contracts on early errors so either harness receives the decision.
+	dialect := *dialectStr
+	if dialect != dialectClaude && dialect != dialectAntigravity {
+		dialect = dialectBoth
+	}
 
 	failTools := csvSet(*failClosedTools)
 	failGroups := csvSet(*failClosedGroups)
@@ -123,6 +125,7 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 		// the very error path the operator asked it to fail closed on. Scan
 		// the raw argument list instead: a mistyped flag must not be able to
 		// disarm fail-closed.
+		dialect = argsHookDialect(args)
 		if argsRequestFailClosed(args) {
 			emitHookDecisionDialect(stdout, dialect, *agyEscalation, "deny", "Tool Guard hook could not parse its command-line flags (flag parse error); a -fail-closed flag appears in the argument list, so failing closed")
 			return 0
@@ -268,8 +271,8 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 		// Say so in the answer the operator and the model see: a decision that
 		// sampled only part of the candidate set must not read as complete.
 		reason = strings.TrimRight(reason, "\n") + fmt.Sprintf(
-			"\n(parameter-spelling limit: %d distinct alias values exceeded the reviewable limit of %d, so not every spelling could be evaluated)",
-			len(envs), maxHookParamVariants)
+			"\n(parameter-spelling limit: more than %d distinct alias values, so not every spelling could be evaluated)",
+			maxHookParamVariants)
 	}
 	if *escalateAs != "ask" && *escalateAs != "deny" {
 		fmt.Fprintf(os.Stderr, "tg hook: -escalate-as %q is not ask or deny; treating it as deny\n", *escalateAs)
@@ -393,6 +396,31 @@ func hookReason(r *domain.EvaluationResult) string {
 		return r.PrimaryCitation.Excerpt
 	}
 	return r.DecisionReason
+}
+
+// argsHookDialect reads explicit dialect flags even after a flag parse error.
+// The last occurrence wins, as in flag.Parse. An absent, auto, invalid or
+// missing value leaves the harness unknown and requires both contracts.
+func argsHookDialect(args []string) string {
+	dialect := dialectBoth
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--" {
+			break
+		}
+		name, value, hasValue := strings.Cut(args[i], "=")
+		if name != "-dialect" && name != "--dialect" {
+			continue
+		}
+		if !hasValue && i+1 < len(args) {
+			i++
+			value = args[i]
+		}
+		dialect = dialectBoth
+		if value == dialectClaude || value == dialectAntigravity {
+			dialect = value
+		}
+	}
+	return dialect
 }
 
 // argsRequestFailClosed reports whether any fail-closed flag appears in the
@@ -604,7 +632,7 @@ func hookParams(in hookInput) json.RawMessage {
 func hookInputMalformed(in hookInput) string {
 	raw := bytes.TrimSpace(in.ToolInput)
 	if len(raw) == 0 || string(raw) == "null" {
-		return ""
+		return "the tool input is not a JSON object"
 	}
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &obj); err != nil {
@@ -725,6 +753,7 @@ type hookOutput struct {
 const (
 	dialectClaude      = "claude"
 	dialectAntigravity = "antigravity"
+	dialectBoth        = "both"
 )
 
 // resolveHookDialect picks the output contract. An explicit -dialect wins;
@@ -776,6 +805,20 @@ func emitHookDecisionDialect(w io.Writer, dialect, escalationDecision, decision,
 			"decision": resolveAntigravityEscalation(escalationDecision, decision),
 			"reason":   reason,
 		})
+		return
+	}
+	if dialect == dialectBoth {
+		var out struct {
+			hookOutput
+			Decision string `json:"decision"`
+			Reason   string `json:"reason"`
+		}
+		out.Decision = resolveAntigravityEscalation(escalationDecision, decision)
+		out.Reason = reason
+		out.HookSpecificOutput.HookEventName = "PreToolUse"
+		out.HookSpecificOutput.PermissionDecision = decision
+		out.HookSpecificOutput.PermissionDecisionReason = reason
+		_ = json.NewEncoder(w).Encode(out)
 		return
 	}
 	emitHookDecisionTo(w, decision, reason)
@@ -915,6 +958,7 @@ func hookParamVariants(raw json.RawMessage) ([]json.RawMessage, bool) {
 	total := 0
 	for _, fam := range families {
 		base := m[fam.canonical]
+		seenValues := map[string]bool{}
 		for _, k := range keys {
 			if !fam.aliases[norm(k)] {
 				continue
@@ -923,6 +967,11 @@ func hookParamVariants(raw json.RawMessage) ([]json.RawMessage, bool) {
 			if bytes.Equal(bytes.TrimSpace(v), bytes.TrimSpace(base)) {
 				continue
 			}
+			value := string(bytes.TrimSpace(v))
+			if seenValues[value] {
+				continue
+			}
+			seenValues[value] = true
 			total++
 			if len(out) >= maxHookParamVariants {
 				continue
