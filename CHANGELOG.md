@@ -23,12 +23,13 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- Tool Guard now requires Go 1.26.0 and sets the preferred toolchain to Go 1.26.10,
-  which fixes [GO-2026-6809](https://pkg.go.dev/vuln/GO-2026-6809) in the standard
+- Tool Guard now requires Go 1.26.0 and sets the preferred toolchain to Go 1.26.11,
+  which fixes [GO-2026-6809](https://pkg.go.dev/vuln/GO-2026-6809) and
+  [GO-2026-6859](https://pkg.go.dev/vuln/GO-2026-6859) (net/http) in the standard
   library. Tool Guard also includes the golang.org/x/sys v0.49.0 update from PR #51.
 - CI pins govulncheck to v1.9.0 instead of `@latest`, and a new weekly
   workflow scans `main` for newly published Go advisories.
-- The policy-protection workflow builds with Go 1.26.10, matching the other
+- The policy-protection workflow builds with Go 1.26.11, matching the other
   workflows (it was still on 1.25.11).
 - The Kubernetes example in `docs/integration.md` uses image tag `0.8.1`.
   The old `v0.2.0` tag does not match the published tag format, which has
