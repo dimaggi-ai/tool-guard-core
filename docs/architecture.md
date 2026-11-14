@@ -142,6 +142,7 @@ of these classifier conditions:
 | `llm_classify` | LLM classification of generation requests, with a local Ollama model (text and images) or a TypeSafe System One model (text only) |
 | `write_classify` | File-write destinations, size ceilings, and denied content |
 | `http_classify` | Outbound HTTP hosts, schemes, methods, and ports |
+| `secret_classify` | Bounded text scans for provider and generic secret formats |
 
 This table is checked against the classifier fields on `domain.Condition` in
 CI. The recursive shapes are:
@@ -161,6 +162,7 @@ conditions:
   llm_classify: ...
   write_classify: ...
   http_classify: ...
+  secret_classify: ...
 
 # Tree shapes
 conditions:

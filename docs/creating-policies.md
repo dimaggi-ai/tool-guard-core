@@ -393,7 +393,7 @@ conditions:
 
 `not:` may wrap a leaf condition (as above) but **not** a classifier
 (`sql_classify` / `path_classify` / `shell_classify` / `llm_classify` /
-`write_classify` / `http_classify`).
+`write_classify` / `http_classify` / `secret_classify`).
 Classifiers are fail-closed - they fire on malformed or adversarial input
 so a deny rule trips - and negating one inverts that into fail-OPEN.
 `ValidatePolicy` rejects any classifier under a `not:` node; express the
@@ -495,3 +495,46 @@ refuse:
 
 A policy that fails any of these gates is rejected at load; the
 previously loaded policy set stays live.
+
+
+## Secret classification
+
+`secret_classify` scans a field using the pinned gitleaks rules. It applies
+case-insensitive keyword checks, regex capture groups, Shannon entropy
+thresholds, global and rule allowlist regexes, and stopwords. Rule data comes
+from `third_party/gitleaks/gitleaks.toml`; regenerate it with
+`python3 scripts/gen-secret-formats.py`. Use `--check` to detect drift.
+
+```yaml
+conditions:
+  secret_classify:
+    field: parameters.command
+    classes: [provider]
+    max_bytes: 65536
+```
+
+`classes` must contain `provider`, `generic`, or both. `generic` is the
+`generic-api-key` rule; all other text rules are `provider`. These classes
+select findings, not effects. Use a separate low-severity `flag` rule for
+`generic` when a generic assignment needs review rather than denial.
+`exclude_rules` can list pinned rule IDs to omit from this condition.
+
+The default scan limit is 65,536 bytes. `max_bytes` accepts 0 for the default
+or 1 through 1,048,576. Bytes after the limit are not scanned. Successful scan diagnostics
+include `scanned_bytes`, `truncated`, and matched rule IDs, without captured
+values. Truncation alone does not match the condition. Logical conditions
+short-circuit, so a leaf that is not reached produces no diagnostic.
+
+Missing fields, nulls, scalar values other than strings, and invalid
+configuration match the condition. Guard optional fields with an `exists`
+condition in an `and` node. Arrays and objects are serialized as JSON before
+scanning; the byte cap applies to that serialization, not its memory cost.
+The condition cannot appear under `not`.
+
+This is text-only detection. Path-dependent rules do not run; path allowlists
+cannot suppress a match. Inline gitleaks suppression comments are ignored.
+The scanner does not decode values or join shell variables. It does not
+redact tool parameters or audit records. A generic finding contained in a
+provider finding on the same line is suppressed, as in gitleaks v8.30.1.
+Class selection and `exclude_rules` apply after this suppression. Excluding
+a provider rule does not restore a generic finding that it suppressed.
