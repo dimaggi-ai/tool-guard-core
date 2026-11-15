@@ -22,14 +22,18 @@ func exampleWorkspaceTempDir(t *testing.T) string {
 		// A macOS background service can still be writing under a HOME
 		// inside dir when the test ends, so RemoveAll can find a directory
 		// that is not empty. Try again for up to 2 s.
-		var err error
-		for i := 0; i < 10; i++ {
-			if err = os.RemoveAll(dir); err == nil {
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			err := os.RemoveAll(dir)
+			if err == nil {
+				return
+			}
+			if !time.Now().Before(deadline) {
+				t.Error(err)
 				return
 			}
 			time.Sleep(200 * time.Millisecond)
 		}
-		t.Error(err)
 	})
 	return dir
 }
