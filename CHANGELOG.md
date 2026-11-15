@@ -6,6 +6,8 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-11-15
+
 ### Review corrections
 
 - The example shell policy now matches recursive and force flags as separate
@@ -2040,7 +2042,8 @@ Lint heuristics shipped (8):
   documented battle-test catalogue; the strict variants are for
   operators who already accept those build-time costs.
 
-[Unreleased]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.6.0...v0.7.0

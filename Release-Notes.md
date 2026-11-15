@@ -5,6 +5,146 @@ per-change record see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## 0.9.0 — 2026-11-15
+
+0.9.0 adds guards for coding agents and states which of them were measured.
+`tg hook` now reads the hook payloads of Claude Code, OpenAI Codex CLI and
+Antigravity CLI, and [docs/support-matrix.md](docs/support-matrix.md) records
+what each harness did in a run against real installs. The release also adds
+`secret_classify`, `command_classify` and audit pruning, and moves the build
+to Go 1.26.11.
+
+### Upgrade requirements
+
+- **Go 1.26 is required.** The `go` line in `go.mod` moves from 1.25.0 to
+  1.26.0, so a module that imports Core must build with Go 1.26 or later. The
+  preferred toolchain is Go 1.26.11, which fixes GO-2026-6809 and GO-2026-6859
+  in `net/http`.
+- **Two new policies enforce when you load the whole `policies/` directory.**
+  `coding_agent_secret_egress` denies a call that carries a value in a known
+  API-key or token format, unless the URL names a host in its carve-out list.
+  `coding_agent_context_files` escalates a write to an agent instruction or
+  permission file, and denies a write whose content carries a known key
+  format. A deployment that names its policy files one by one does not change
+  until it adds them. A third new policy, `coding_agent_secret_commands`, is
+  in shadow mode and blocks nothing.
+- **Go API: use keyed struct fields.** `domain.Condition` gains
+  `CommandClassify` and `SecretClassify`, and `audit.StreamReport` gains
+  `Pruned`. Code that builds these structs with positional literals must
+  switch to keyed fields.
+- **`tg hook` no longer treats a payload with no usable `tool_name` as a Bash
+  call.** Such a payload now counts as malformed input: the hook fails closed
+  when a fail-closed mode is set and fails open otherwise.
+- **An `or` condition that does not fire now returns the details of its
+  branches**, joined by `; `. It returned an empty string before.
+
+### Coding-agent guard
+
+`examples/coding-agent-guard/install.sh` wires `tg hook` into each harness
+through one wrapper script per harness. The hook loads the five policies of
+the example, writes a dated audit log, and denies the writes it can read to
+its own files and to three harness config files. When `tg` is missing or
+prints no decision, the hook answers with a denial. If you installed the
+example from an earlier version, run `install.sh` again to move to the
+wrappers.
+
+The new `tg hook` flags include:
+
+- `-dialect auto|claude|antigravity` selects the input shape and the output
+  contract.
+- `-escalate-as deny` returns a policy escalation as a denial. The default,
+  `ask`, is unchanged.
+- `-fail-closed-groups` denies a call the hook cannot evaluate when its tool
+  is in a listed tool group.
+
+`-protect-path` reads more shell forms than before, among them paths written
+with `~` and paths with `..` after a symbolic link. It now also
+applies to `PowerShell` and `pwsh` tool calls for shell redirects. PowerShell
+cmdlets such as `Set-Content` are still not parsed as writes. The example
+README lists the shell forms the check reads and the ones it does not.
+
+### What was measured
+
+`make verify-harnesses` runs the wrappers, config templates and policies of
+the example against the installed harnesses, three times per stage. It decides
+each result from whether a file exists, not from what the model says. The
+release run measured commit `b7b3a1c` on 2026-11-15 with Claude Code 2.1.325,
+Codex CLI 0.166.0 and Antigravity CLI 1.5.9. Its manifest is
+`docs/evidence/harness-manifest.json`, and a test renders the stage table in
+the support matrix from it. `make release-binding` fails if anything other
+than documentation and evidence files changed after the measured commit.
+
+Three limits matter for an operator:
+
+- Escalating `rm -f` does not prevent deletion by another allowed command.
+  The shell policy allows plain `rm file`, `unlink` and `find -delete`. In an
+  earlier measurement on 2026-11-15, Claude Code held `rm -f` and then removed
+  the file with plain `rm` in 1 of 3 runs. Use `-protect-path` for a file that
+  must not be changed or removed.
+- Codex CLI 0.166.0 did not call a hook it had not been made to trust, and
+  the command ran. Start `codex` and accept the hook before you rely on it.
+- With `--dangerously-skip-permissions`, Antigravity CLI 1.5.4 ran a call
+  after the hook answered with an escalation. In the release run on 1.5.9 no
+  escalated call ran. Set `TG_ESCALATE_AS=deny` when you start Antigravity
+  with that flag.
+
+The results hold for the versions, command lines and stages in the table. A
+different version or permission mode can behave differently.
+
+### New conditions and commands
+
+- **`secret_classify`** matches provider and generic secret formats with the
+  pinned gitleaks keywords, capture groups, entropy limits, allowlists and
+  stopwords. It scans 65,536 bytes by default and reports truncation. It does
+  not scan paths, decode values, join variables or redact data. Core has no
+  redaction.
+- **`command_classify`** with the `gh_read` profile is opt-in. It checks each
+  segment of a shell command and matches every operation it cannot verify as
+  a supported `gh` read. `tg hook -dispatch gh_read` uses it in enforcement
+  mode. The profile checks command text and is not a sandbox. No shipped
+  policy uses it yet. See
+  [Hook dispatch](docs/creating-policies.md#hook-dispatch-tg-hook--dispatch-gh_read).
+- **`tg prune`** previews retention of a closed audit log and writes a new
+  file with `--yes`. A versioned checkpoint keeps the removed boundary and the
+  retained hashes. `tg verify` and `tg export` reject a pruned chain unless
+  `-allow-pruned` or `-checkpoint-hash` is given. Writing the pruned file
+  currently requires Linux. See [Audit Pruning](docs/audit-prune.md).
+
+### Selected fixes
+
+- `http_classify` no longer copies the raw URL into rule details when it
+  fails closed on a URL it cannot parse. It reports the length of the URL.
+  Records written by earlier versions keep the URL, which can carry a
+  credential in its query string.
+- A command-line flag parse error can no longer turn off fail-closed in
+  `tg hook`.
+- Antigravity escalation is returned as `force_ask`.
+  `-antigravity-escalation ask` restores `ask`.
+
+[CHANGELOG.md](CHANGELOG.md) has the complete list.
+
+### Upgrade
+
+```sh
+go get github.com/dimaggi-ai/tool-guard-core@v0.9.0
+pip install "tool-guard-core==0.9.0"
+docker pull ghcr.io/dimaggi-ai/tool-guard-core:0.9.0
+```
+
+From 0.8.x, check the upgrade requirements above. From 0.7 or earlier,
+follow the 0.8.0 upgrade notes below first.
+
+Verify a downloaded archive and the published image separately:
+
+```sh
+gh attestation verify ./tool-guard-core_0.9.0_linux_amd64.tar.gz -R dimaggi-ai/tool-guard-core
+cosign verify ghcr.io/dimaggi-ai/tool-guard-core:0.9.0 \
+  --certificate-identity-regexp '^https://github\.com/dimaggi-ai/tool-guard-core/\.github/workflows/release\.yml@refs/tags/v0\.9\.0$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+---
+
 ## 0.8.1 — 2026-10-17
 
 A patch release that does not change Tool Guard's behavior. It fixes a
