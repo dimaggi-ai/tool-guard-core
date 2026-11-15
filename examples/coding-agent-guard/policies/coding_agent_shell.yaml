@@ -19,11 +19,12 @@
 # (\-rf, -"rf", $'-rf', -r$'f'), a backslash-newline before it, GNU long-option
 # prefixes (--r, --f), and a flag-like operand after -- (rm -- -f) all match.
 # A word that starts with one dash and contains the letter counts, so
-# -fr${X} matches. The word may hold $(...) substitutions that are not
-# nested, so -$(:;)r matches. This is a text pattern, not a shell parser.
-# It misses a flag whose letters come only from an expansion (rm $OPTS,
-# rm -${X}), and a flag word that holds a blank, ;, & or | inside a nested
-# substitution or inside backquotes.
+# -fr${X} matches. The word may hold $(...) substitutions with no
+# parenthesis between the outer pair, so -$(:;)r matches. This is a text
+# pattern, not a shell parser. It misses a flag whose letters come only
+# from an expansion (rm $OPTS, rm -${X}). It also misses a flag word that
+# holds a blank, ;, & or | inside backquotes, or inside a substitution
+# that contains a parenthesis, nested, quoted or escaped: -$(: ')'; :)r.
 # This is why `rm -rf /`, `rm -r -f /`, `rm --recursive --force /`, and
 # `rm -fR /home` are all caught — bundled, separated, long-form, or uppercase.
 schema_version: 1

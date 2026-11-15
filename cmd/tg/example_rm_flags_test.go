@@ -78,6 +78,10 @@ func TestExampleRMFlagWords(t *testing.T) {
 		{`rm --$(:;)recursive /`, "deny"},
 		{`rm --$(:;)force x`, "ask"},
 		{`rm --$(:;)verbose x`, "allow"},
+		// Known limit, stated in the policy comment: a parenthesis inside the
+		// substitution ends the match, so these flags are missed.
+		{`rm -$(: ')'; :)r /tmp/x`, "allow"},
+		{`rm -$(: $(:); :)f /tmp/x`, "allow"},
 		{`rm -v$(:;) /tmp/x`, "allow"},
 		{`rm -i $(echo a b) x`, "allow"},
 		{`rm -$(:)f /tmp/x`, "ask"},
