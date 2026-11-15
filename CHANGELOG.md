@@ -68,8 +68,9 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   regex branches. Its hand-written checks remain. Generic keys have a
   separate low-severity flag rule. The policy still blocks nothing in shadow
   mode. Core has no redaction: `tg hook` and `tg-proxy` do not store
-  tool parameters in the audit record, but a decision reason can quote a
-  value taken from them, such as a protected file path.
+  the raw tool parameters in the audit record, but the record can hold
+  values taken from them, such as an amount or a protected file path quoted
+  in a decision reason.
 - An `or` condition that does not fire now returns its branches' details,
   joined by `; `, instead of an empty string. A `secret_classify`
   truncation report inside an `or` now reaches the rule result.
