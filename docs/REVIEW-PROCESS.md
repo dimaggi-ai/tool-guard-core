@@ -304,6 +304,19 @@ passes have real precedent instead of a starting from scratch.
   tag, and a repository ruleset blocks updating or deleting `v*` tags.
   → pillars 5 and 6.
 
+- **2026-11 · 0.9.0 release evidence.** `make release-binding` allows only
+  documentation and evidence files to change after the measured commit. Three
+  kinds of change sat outside that set and each forced a new measurement.
+  A help string in `cmd/tg/hook.go` and two tests described "the release
+  run", so they had to change when a run differed. Two tests were stricter
+  than the pass rule of the verifier and rejected a valid manifest in which
+  one of three runs was not measured. The `testdata/policy-compat/v0.9.0`
+  snapshot, which `TestPolicyCompatCoverage` needs at the tag, was missing
+  until a panel review of the evidence PR found it. Statements about one
+  measured run now live in documentation, tests follow the verifier rule, and
+  the snapshot lands before the release measurement.
+  → pillars 5 and 6.
+
 ## Where this fits in the release checklist
 
 `RELEASING.md`'s "Before tagging at all" section should include running

@@ -634,6 +634,14 @@ Comprehensive docs live in [`docs/`](docs/README.md):
 
 ## Known limitations
 
+> **New in 0.9.0:** guards for coding agents. `tg hook` reads the hook
+> payloads of Claude Code, OpenAI Codex CLI and Antigravity CLI, and
+> [docs/support-matrix.md](docs/support-matrix.md) records what each harness
+> did in a measured run. Escalating `rm -f` does not prevent deletion by
+> another allowed command; use `-protect-path` for a file that must not
+> change. Go 1.26 is now required, and loading the whole `policies/`
+> directory activates two new enforcing policies. See
+> [Release-Notes.md](Release-Notes.md).
 > **New in 0.8.1:** no change to Tool Guard's behavior. Binaries and the
 > container image are built with Go 1.26.9, which fixes nine reachable
 > standard-library vulnerabilities. Go users should pin `v0.8.1`:

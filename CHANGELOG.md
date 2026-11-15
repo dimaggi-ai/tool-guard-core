@@ -6,6 +6,8 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-11-15
+
 ### Review corrections
 
 - The example shell policy now matches recursive and force flags as separate
@@ -263,7 +265,8 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 ### Changed
 
 - Tool Guard now requires Go 1.26.0 and sets the preferred toolchain to Go 1.26.11,
-  which fixes [GO-2026-6809](https://pkg.go.dev/vuln/GO-2026-6809) and
+  which includes the fixes for
+  [GO-2026-6809](https://pkg.go.dev/vuln/GO-2026-6809) (crypto/x509) and
   [GO-2026-6859](https://pkg.go.dev/vuln/GO-2026-6859) (net/http) in the standard
   library. Tool Guard also includes the golang.org/x/sys v0.49.0 update from PR #51.
 - Three existing structural-validation messages now list `command_classify`: empty
@@ -2040,7 +2043,8 @@ Lint heuristics shipped (8):
   documented battle-test catalogue; the strict variants are for
   operators who already accept those build-time costs.
 
-[Unreleased]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/dimaggi-ai/tool-guard-core/compare/v0.6.0...v0.7.0
