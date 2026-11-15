@@ -70,8 +70,8 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   mode. Core has no redaction: neither `tg hook` nor `tg-proxy` copies tool
   parameters into the audit record.
 - An `or` condition that does not fire now returns its branches' details,
-  joined by `; `, instead of an empty string, so a `secret_classify`
-  truncation report inside an `or` reaches the rule result.
+  joined by `; `, instead of an empty string. A `secret_classify`
+  truncation report inside an `or` now reaches the rule result.
 - Go API: `domain.Condition.SecretClassify` and `domain.SecretClassify` add
   secret-scanning configuration. Callers using positional `Condition`
   struct literals must switch to keyed fields.

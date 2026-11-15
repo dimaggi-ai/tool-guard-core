@@ -186,6 +186,14 @@ func classifySecrets(text string, maxBytes int) secretResult {
 		line       int
 	}
 	var candidates []candidate
+	// A line-target allowlist regex gives the same answer for every match on
+	// one line. Caching it by line offsets keeps a long line with many
+	// matches from being rescanned once per match.
+	type lineRegexKey struct {
+		re         *regexp.Regexp
+		start, end int
+	}
+	lineHits := map[lineRegexKey]bool{}
 	for _, r := range rules {
 		if r.Path != "" || (len(r.Keywords) > 0 && !containsSecretKeyword(lower, r.Keywords)) {
 			continue
@@ -209,8 +217,18 @@ func classifySecrets(text string, maxBytes int) secretResult {
 			if r.Entropy != 0 && secretEntropy(secret) <= r.Entropy {
 				continue
 			}
-			line, lineNumber := secretMatchLine(text, newlines, loc[0], loc[0]+len(match))
-			if secretAllowed(global, secret, match, line) || secretAllowed(r.allows, secret, match, line) {
+			lineStart, lineEnd, lineNumber := secretMatchLineSpan(text, newlines, loc[0], loc[0]+len(match))
+			line := text[lineStart:lineEnd]
+			lineMatch := func(re *regexp.Regexp) bool {
+				key := lineRegexKey{re, lineStart, lineEnd}
+				hit, ok := lineHits[key]
+				if !ok {
+					hit = re.MatchString(line)
+					lineHits[key] = hit
+				}
+				return hit
+			}
+			if secretAllowed(global, secret, match, line, lineMatch) || secretAllowed(r.allows, secret, match, line, lineMatch) {
 				continue
 			}
 			candidates = append(candidates, candidate{r.ID, secret, lineNumber})
@@ -250,6 +268,13 @@ func classifySecrets(text string, maxBytes int) secretResult {
 // unterminated-last-line behavior: that line's allowlist context starts at 0.
 // Upstream copyright Zachary Rice; MIT license: third_party/gitleaks/LICENSE.
 func secretMatchLine(text string, newlines []int, start, end int) (string, int) {
+	lineStart, lineEnd, number := secretMatchLineSpan(text, newlines, start, end)
+	return text[lineStart:lineEnd], number
+}
+
+// secretMatchLineSpan returns the offsets of secretMatchLine's line and its
+// number.
+func secretMatchLineSpan(text string, newlines []int, start, end int) (int, int, int) {
 	if len(newlines) == 0 {
 		newlines = []int{len(text)}
 	}
@@ -281,7 +306,7 @@ func secretMatchLine(text string, newlines []int, start, end int) (string, int) 
 	if end > lineEnd {
 		lineEnd = end
 	}
-	return text[lineStart:lineEnd], startLine
+	return lineStart, lineEnd, startLine
 }
 
 func containsSecretKeyword(lower string, keywords []string) bool {
@@ -307,7 +332,9 @@ func secretEntropy(secret string) float64 {
 	return entropy
 }
 
-func secretAllowed(allows []compiledSecretAllowlist, secret, match, line string) bool {
+// lineMatch, when not nil, answers a regex against line; the caller uses it
+// to cache answers for one line.
+func secretAllowed(allows []compiledSecretAllowlist, secret, match, line string, lineMatch func(*regexp.Regexp) bool) bool {
 	for _, a := range allows {
 		// Text-only calls have no path. An AND with paths cannot match.
 		if a.Condition == "AND" && len(a.Paths) > 0 {
@@ -320,7 +347,11 @@ func secretAllowed(allows []compiledSecretAllowlist, secret, match, line string)
 		case "line":
 			target = line
 		}
-		regexMatch := target != "" && slices.ContainsFunc(a.regexes, func(re *regexp.Regexp) bool { return re.MatchString(target) })
+		matchTarget := func(re *regexp.Regexp) bool { return re.MatchString(target) }
+		if a.RegexTarget == "line" && lineMatch != nil {
+			matchTarget = lineMatch
+		}
+		regexMatch := target != "" && slices.ContainsFunc(a.regexes, matchTarget)
 		wordMatch := secret != "" && containsSecretKeyword(strings.ToLower(secret), a.Stopwords)
 		if a.Condition == "AND" {
 			if (len(a.Regexes) > 0 || len(a.Stopwords) > 0) && (len(a.Regexes) == 0 || regexMatch) && (len(a.Stopwords) == 0 || wordMatch) {

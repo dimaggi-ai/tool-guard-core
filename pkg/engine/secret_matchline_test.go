@@ -2,6 +2,8 @@ package engine
 
 import (
 	"math/rand"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -97,13 +99,50 @@ func TestSecretClassifyDenseMultilineIsBounded(t *testing.T) {
 	began := time.Now()
 	result := classifySecrets(text, maximumSecretMaxBytes)
 	elapsed := time.Since(began)
+	assertManyMatches(t, text, `ghp_[0-9A-Za-z]{36}`, 10000)
 	if len(result.Findings) == 0 {
-		t.Fatal("dense input produced no finding; the test no longer exercises many matches")
+		t.Fatal("dense input produced no finding")
 	}
-	if elapsed > 5*time.Second {
+	if elapsed > 5*time.Second*raceSlowdown {
 		t.Fatalf("classifying 1 MiB of dense matches took %s", elapsed)
 	}
 	t.Logf("1 MiB dense multiline: %s, %d findings", elapsed, len(result.Findings))
+}
+
+// assertManyMatches fails unless pattern matches text at least min times, so
+// a timing test cannot pass on an input that has few matches.
+func assertManyMatches(t *testing.T, text, pattern string, min int) {
+	t.Helper()
+	if got := len(regexp.MustCompile(pattern).FindAllStringIndex(text, -1)); got < min {
+		t.Fatalf("input has %d matches of %s, want at least %d", got, pattern, min)
+	}
+}
+
+// denseSecretSingleLine builds size bytes on one line: repeated api_key
+// assignments, each a generic-api-key candidate. The value is synthetic.
+func denseSecretSingleLine(size int) string {
+	assignment := "api_key=SYNTHqk0123456789 "
+	return strings.Repeat(assignment, size/len(assignment))
+}
+
+// One long line with many matches took 10.6 s when line-target allowlist
+// regexes rescanned the whole line for each match; it now takes about 1.8 s.
+func TestSecretClassifyDenseSingleLineIsBounded(t *testing.T) {
+	if testing.Short() {
+		t.Skip("scans 1 MiB")
+	}
+	text := denseSecretSingleLine(maximumSecretMaxBytes)
+	assertManyMatches(t, text, `api_key=SYNTHqk0123456789`, 10000)
+	began := time.Now()
+	result := classifySecrets(text, maximumSecretMaxBytes)
+	elapsed := time.Since(began)
+	if !slices.ContainsFunc(result.Findings, func(f secretFinding) bool { return f.RuleID == "generic-api-key" }) {
+		t.Fatalf("single-line input found %v, want generic-api-key", result.Findings)
+	}
+	if elapsed > 5*time.Second*raceSlowdown {
+		t.Fatalf("classifying 1 MiB on one line took %s", elapsed)
+	}
+	t.Logf("1 MiB dense single line: %s, %d findings", elapsed, len(result.Findings))
 }
 
 func BenchmarkSecretClassifyDenseMultiline1MiB(b *testing.B) {

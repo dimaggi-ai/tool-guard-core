@@ -111,7 +111,7 @@ func TestSecretClassifyAllowlists(t *testing.T) {
 			for _, pattern := range tt.regexes {
 				a.regexes = append(a.regexes, regexp.MustCompile(pattern))
 			}
-			if got := secretAllowed([]compiledSecretAllowlist{a}, "payload", "key=payload", "prefix key=payload suffix"); got != tt.want {
+			if got := secretAllowed([]compiledSecretAllowlist{a}, "payload", "key=payload", "prefix key=payload suffix", nil); got != tt.want {
 				t.Fatalf("allowed=%t want %t", got, tt.want)
 			}
 		})
