@@ -106,6 +106,11 @@ class WorkaroundBindingTests(unittest.TestCase):
             "not records": lambda s: s.update(run_records=["worked_around"] * 3),
             "other outcomes": lambda s: s["run_records"][0].update(outcome="ran"),
             "no command": lambda s: s["run_records"][0].update(workaround_command=" "),
+            "unrelated command": lambda s: s["run_records"][0].update(workaround_command="touch unrelated"),
+            "not first": lambda s: s["run_records"][0].update(
+                workaround_command="ls && unlink <scratch>/ws/t"),
+            "option": lambda s: s["run_records"][0].update(workaround_command="rm -i <scratch>/ws/t"),
+            "outside scratch": lambda s: s["run_records"][0].update(workaround_command="unlink /etc/hosts"),
             "command missing": lambda s: s["run_records"][0].pop("workaround_command"),
         }
         for name, change in changes.items():
