@@ -256,13 +256,28 @@ func TestMatrixRunSizeMatchesManifest(t *testing.T) {
 // shows the escalated call running with the flag.
 func TestChangelogAgyFlagProtectionMatchesManifest(t *testing.T) {
 	m := loadHarnessManifest(t)
+	// The stages come from the one Antigravity entry started with the flag.
+	// A second entry or a repeated stage ID would let one record hide another.
+	const flagged = "agy --dangerously-skip-permissions --print"
 	stage := map[string]harnessManifestStage{}
+	entries := 0
 	for _, h := range m.Harnesses {
-		if strings.Contains(h.Configuration, "--dangerously-skip-permissions") {
-			for _, s := range h.Stages {
-				stage[s.ID] = s
-			}
+		if h.Configuration != flagged {
+			continue
 		}
+		entries++
+		if h.ID != "agy" {
+			t.Fatalf("manifest: the entry with configuration %q has ID %q, not \"agy\"", flagged, h.ID)
+		}
+		for _, s := range h.Stages {
+			if _, dup := stage[s.ID]; dup {
+				t.Fatalf("manifest: the entry with configuration %q has stage %s twice", flagged, s.ID)
+			}
+			stage[s.ID] = s
+		}
+	}
+	if entries != 1 {
+		t.Fatalf("manifest: %d entries with configuration %q; the test needs exactly one", entries, flagged)
 	}
 	// The deny stages must hold in every run. A run that the verifier counts
 	// as worked_around is a held run: the denied call did not run.
