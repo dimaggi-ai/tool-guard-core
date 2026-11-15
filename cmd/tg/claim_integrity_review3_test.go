@@ -266,8 +266,8 @@ func TestChangelogAgyFlagProtectionMatchesManifest(t *testing.T) {
 			continue
 		}
 		entries++
-		if h.ID != "agy" {
-			t.Fatalf("manifest: the entry with configuration %q has ID %q, not \"agy\"", flagged, h.ID)
+		if h.ID != "antigravity-cli" {
+			t.Fatalf("manifest: the entry with configuration %q has ID %q, not \"antigravity-cli\"", flagged, h.ID)
 		}
 		for _, s := range h.Stages {
 			if _, dup := stage[s.ID]; dup {
