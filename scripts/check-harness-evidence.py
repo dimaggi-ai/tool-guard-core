@@ -60,7 +60,10 @@ WORKAROUND_SHAPE = re.compile(
 
 
 def workaround_shape(command):
-    """The verifier's rule: the accepted first command, and a line that parses."""
+    """The verifier's rule: the accepted first command, and a line that parses.
+
+    Only the syntax is checked, so any path can stand in for the scrubbed one.
+    """
     if not WORKAROUND_SHAPE.match(command.lstrip(" \t")):
         return False
     shell = shutil.which("bash") or shutil.which("sh")
