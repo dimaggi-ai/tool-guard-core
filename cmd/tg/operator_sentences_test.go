@@ -180,14 +180,18 @@ func TestOperatorSentencesMatchBehaviour(t *testing.T) {
 		t.Fatalf("maxApplyPatchTargets is %d; CHANGELOG.md says 64", maxApplyPatchTargets)
 	}
 
-	// The trust flag of the release run.
+	// The trust flag of the release run. A run in which Codex made no call
+	// shows nothing, so it does not count against the statement; any other
+	// outcome does.
 	m := loadHarnessManifest(t)
 	untrusted := false
 	for _, h := range m.Harnesses {
 		for _, s := range h.Stages {
-			if s.ID == "untrusted_hook" && s.Outcome == "ran_without_hook" {
-				untrusted = true
+			if s.ID != "untrusted_hook" {
+				continue
 			}
+			n := s.Outcomes["ran_without_hook"]
+			untrusted = n > 0 && n+s.Outcomes["not_measured"] == s.Runs
 		}
 	}
 	if !untrusted {
