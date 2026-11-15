@@ -78,8 +78,11 @@ func TestExampleRMFlagWords(t *testing.T) {
 		{`rm --$(:;)recursive /`, "deny"},
 		{`rm --$(:;)force x`, "ask"},
 		{`rm --$(:;)verbose x`, "allow"},
-		// Known limit, stated in the policy comment: a parenthesis inside the
-		// substitution ends the match, so these flags are missed.
+		// Known limit, stated in the policy comment: a substitution that holds
+		// both a parenthesis and a separator is not matched as one word, so
+		// these two flags are missed. A parenthesis alone does not cause a miss.
+		{`rm -$(foo(bar))r /tmp/x`, "ask"},
+		{`rm -$(:\(x\))f /tmp/x`, "ask"},
 		{`rm -$(: ')'; :)r /tmp/x`, "allow"},
 		{`rm -$(: $(:); :)f /tmp/x`, "allow"},
 		{`rm -v$(:;) /tmp/x`, "allow"},

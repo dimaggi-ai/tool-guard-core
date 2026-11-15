@@ -17,9 +17,9 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   letter counts, such as `-fr${X}`, and the word may hold `$(...)`
   substitutions with no parenthesis between the outer pair. The match is a
   text pattern, not a shell parser. It misses a flag whose letters come only
-  from an expansion, such as `rm $OPTS`. It also misses a flag word that holds
-  a blank, `;`, `&` or `|` inside backquotes, or inside a substitution that
-  contains a parenthesis, whether nested, quoted or escaped.
+  from an expansion, such as `rm $OPTS`. It can also miss a flag word that
+  holds a blank, `;`, `&` or `|` inside backquotes, or inside a substitution
+  that also contains a parenthesis, whether nested, quoted or escaped.
 - The harness verifier reports `worked_around` when it records the expected
   non-allow decision for every attempt at the prompted escalation command,
   then a later allowed command line whose first command is `rm` or `unlink`
