@@ -45,6 +45,13 @@ import (
 // deny that tg-proxy applies, BEFORE policy evaluation. A policy cannot turn
 // it off (the point: the agent can edit the policy, but not these flags).
 func cmdHook(args []string) int {
+	// hookChildArg is internal: only the supervisor passes it.
+	if len(args) > 0 && args[0] == hookChildArg {
+		return runHook(args[1:], os.Stdin, os.Stdout)
+	}
+	if hookDispatchRequested(args) {
+		return superviseHook(os.Stdin, os.Stdout, os.Stderr, hookSuperviseTimeout, hookChildCommand(args), args...)
+	}
 	return runHook(args, os.Stdin, os.Stdout)
 }
 
@@ -71,6 +78,7 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	protectSelf := fs.Bool("protect-self", false, "shorthand: also protect the policy dir/file and $HOME/.claude from writes")
 	auditLog := fs.String("audit-log", "", "append each hook decision to this SHA-256 hash-chained JSONL log (tamper-evident, verify with `tg verify`); empty disables")
 	unknownToolsDeny := fs.Bool("unknown-tools-deny", false, "deny any tool_name not declared in scope.tool_names of some loaded ENFORCEMENT policy (closes the tool-name-spoofing/new-tool-goes-ungoverned class); mirrors tg-proxy's -unknown-tools-deny")
+	dispatch := fs.String("dispatch", "", "gh_read: after policy evaluation allows a Bash call, allow verified gh reads; validated literal pwd/ls return no decision in the claude dialect and ask in other dialects; everything else asks and every internal error denies")
 
 	parseErr := fs.Parse(args)
 	// Until input is decoded, auto has no known harness. Include both
@@ -82,8 +90,42 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 
 	failTools := csvSet(*failClosedTools)
 	failGroups := csvSet(*failClosedGroups)
+	dispatching := *dispatch != "" || hookDispatchRequested(args)
+	var env *domain.ActionEnvelope
+	auditPolicyHash, _ := policyload.PolicySetHash(nil)
+	// Dispatch records the decision before output and denies on audit failure.
+	// Other calls preserve the best-effort audit behavior.
+	emitAudited := func(dec, reason string, result *domain.EvaluationResult) {
+		if dispatching && *auditLog != "" {
+			auditEnv := env
+			if auditEnv == nil {
+				auditEnv = hookEnvelope("", hookInput{}, *agentID)
+			}
+			if err := appendHookAudit(*auditLog, auditEnv, result, dec, reason, auditPolicyHash); err != nil {
+				fmt.Fprintf(os.Stderr, "tg hook: audit append failed under -dispatch; denying: %v\n", err)
+				dec, reason = "deny", "Tool Guard hook could not write its audit record; failing closed (-dispatch)"
+			}
+		}
+		emitHookDecisionDialect(stdout, dialect, *agyEscalation, dec, reason)
+		if !dispatching && env != nil && *auditLog != "" {
+			appendHookAuditBestEffort(os.Stderr, *auditLog, env, result, dec, reason, auditPolicyHash)
+		}
+	}
+	if dispatching {
+		// A panic outside evalHook (dispatch, audit) must still deny. If the
+		// supervisor is skipped, nothing else would turn it into a decision.
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Fprintf(os.Stderr, "tg hook: panic under -dispatch; denying: %v\n", r)
+				emitAudited("deny", "Tool Guard hook failed internally; failing closed (-dispatch)", nil)
+			}
+		}()
+	}
 	// failDecide picks the on-error decision for a KNOWN tool name.
 	failDecide := func(tool string) (string, string) {
+		if dispatching {
+			return "deny", fmt.Sprintf("Tool Guard hook could not evaluate; failing closed for tool %q (-dispatch)", tool)
+		}
 		if len(failTools) > 0 || len(failGroups) > 0 {
 			lt := strings.ToLower(tool)
 			if failTools[lt] {
@@ -106,7 +148,7 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	// asked for destructive calls to fail closed. Pure default (no fail-closed
 	// flags) still fails open so a transient glitch never wedges the agent.
 	failUnattributable := func(why string) (string, string) {
-		if *failClosed || len(failTools) > 0 || len(failGroups) > 0 {
+		if dispatching || *failClosed || len(failTools) > 0 || len(failGroups) > 0 {
 			return "deny", fmt.Sprintf("Tool Guard hook could not read/parse the tool call (%s); failing closed (fail-closed engaged)", why)
 		}
 		return "allow", ""
@@ -115,7 +157,7 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	if parseErr != nil {
 		// A flag misconfiguration (or -h) can't be evaluated. -h prints a
 		// short usage; anything else is an unattributable error.
-		if errors.Is(parseErr, flag.ErrHelp) {
+		if errors.Is(parseErr, flag.ErrHelp) && !dispatching {
 			fmt.Fprint(os.Stderr, hookUsage)
 			return 0
 		}
@@ -127,11 +169,17 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 		// disarm fail-closed.
 		dialect = argsHookDialect(args)
 		if argsRequestFailClosed(args) {
-			emitHookDecisionDialect(stdout, dialect, *agyEscalation, "deny", "Tool Guard hook could not parse its command-line flags (flag parse error); a -fail-closed flag appears in the argument list, so failing closed")
+			emitAudited("deny", "Tool Guard hook could not parse its command-line flags (flag parse error); a -fail-closed flag appears in the argument list, so failing closed", nil)
 			return 0
 		}
 		d, reason := failUnattributable("flag parse error")
-		emitHookDecisionDialect(stdout, dialect, *agyEscalation, d, reason)
+		emitAudited(d, reason, nil)
+		return 0
+	}
+	// The dispatcher replaces the default allow for Bash, so it is only
+	// meaningful when decisions are enforced.
+	if dispatching && (*dispatch != "gh_read" || *modeStr != "enforcement") {
+		emitAudited("deny", "Tool Guard hook -dispatch requires the value gh_read and -mode enforcement; failing closed", nil)
 		return 0
 	}
 
@@ -142,12 +190,12 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	raw, rerr := io.ReadAll(io.LimitReader(stdin, maxHookStdin+1))
 	if rerr != nil {
 		d, reason := failUnattributable("stdin read error")
-		emitHookDecisionDialect(stdout, dialect, *agyEscalation, d, reason)
+		emitAudited(d, reason, nil)
 		return 0
 	}
 	if len(raw) > maxHookStdin {
 		d, reason := failUnattributable("oversized stdin")
-		emitHookDecisionDialect(stdout, dialect, *agyEscalation, d, reason)
+		emitAudited(d, reason, nil)
 		return 0
 	}
 
@@ -157,7 +205,7 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 		// fail-closed mode is engaged (can't prove it's non-destructive),
 		// else fail open.
 		d, reason := failUnattributable("malformed JSON")
-		emitHookDecisionDialect(stdout, dialect, *agyEscalation, d, reason)
+		emitAudited(d, reason, nil)
 		return 0
 	}
 
@@ -169,7 +217,8 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 			// Two tool calls in one payload: which one the harness runs
 			// is not known.
 			d, reason := failUnattributable("the payload holds a toolCall object and tool_name or tool_input")
-			emitHookDecisionDialect(stdout, resolveHookDialect(*dialectStr, true), *agyEscalation, d, reason)
+			dialect = resolveHookDialect(*dialectStr, true)
+			emitAudited(d, reason, nil)
 			return 0
 		}
 		in.ToolName = in.ToolCall.Name
@@ -186,11 +235,11 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 		// cannot see and let it be evaluated as a shell command, so it goes
 		// down the same unattributable path as malformed input.
 		d, reason := failUnattributable("no tool_name field; payload format not recognised")
-		emitHookDecisionDialect(stdout, dialect, *agyEscalation, d, reason)
+		emitAudited(d, reason, nil)
 		return 0
 	}
 
-	env := hookEnvelope(tool, in, *agentID)
+	env = hookEnvelope(tool, in, *agentID)
 	// Alias families (Path/path/file_path, Content/text/content,
 	// CommandLine/script/command) can carry more than one distinct value in a
 	// single call, and which one a harness will act on is not knowable from the
@@ -214,22 +263,11 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 			envs = append(envs, hookVariantEnvelopes(pe, v)...)
 		}
 	}
-	auditPolicyHash, _ := policyload.PolicySetHash(nil)
-
-	// emitAudited emits the decision and, when -audit-log is set, appends it
-	// to the hash chain (best-effort — an audit failure never changes the
-	// decision). Used for every decision that has a real envelope.
-	emitAudited := func(dec, reason string, result *domain.EvaluationResult) {
-		emitHookDecisionDialect(stdout, dialect, *agyEscalation, dec, reason)
-		if *auditLog != "" {
-			appendHookAuditBestEffort(os.Stderr, *auditLog, env, result, dec, reason, auditPolicyHash)
-		}
-	}
 
 	// A tool input that is not an object, or a command that is not a
 	// string (or a string array for apply_patch), cannot be evaluated. Before,
 	// such a call got an empty parameter object and was allowed.
-	if why := hookInputMalformed(in); why != "" {
+	if why := hookInputMalformed(in); why != "" && !(dispatching && tool == "bash" && dispatchCommandMalformed(in)) {
 		if d, reason := failDecide(tool); d == "deny" {
 			emitAudited(d, reason+": "+why, nil)
 			return 0
@@ -267,6 +305,13 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	}
 
 	dec, reason, result, auditPolicyHash := evalHook(*policyDir, *policyFile, envs, truncatedVariants, mode, failDecide, *unknownToolsDeny)
+	if dispatching && tool == "bash" && dec == "allow" {
+		dec, reason = dispatchBashEnvelopes(envs, truncatedVariants)
+		if dec == hookNoDecision && dialect != dialectClaude {
+			dec, reason = "ask", "Tool Guard dispatch: this dialect requires an explicit decision for an unrelated command"
+		}
+		result = dispatchedResult(result, dec, reason)
+	}
 	if truncatedVariants {
 		// Say so in the answer the operator and the model see: a decision that
 		// sampled only part of the candidate set must not read as complete.
@@ -280,6 +325,88 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	dec, reason = applyEscalateAs(*escalateAs, dec, reason)
 	emitAudited(dec, reason, result)
 	return 0
+}
+
+// hookNoDecision is the decision value for a proven unrelated command. The
+// hook writes no permissionDecision, so the client's own permission rules
+// apply. The audit record keeps the engine result with this reason.
+const hookNoDecision = ""
+
+// dispatchCommandMalformed permits the dispatcher to ask about an invalid
+// command value. Malformed values in other parameter families still deny.
+func dispatchCommandMalformed(in hookInput) bool {
+	var params map[string]json.RawMessage
+	if json.Unmarshal(in.ToolInput, &params) != nil || params == nil {
+		return false
+	}
+	invalid := false
+	for key, value := range params {
+		if commandAliasNames[normParamName(key)] {
+			var command string
+			if bytes.Equal(bytes.TrimSpace(value), []byte("null")) || json.Unmarshal(value, &command) != nil {
+				invalid = true
+			}
+			delete(params, key)
+		}
+	}
+	in.ToolInput, _ = json.Marshal(params)
+	return invalid && hookInputMalformed(in) == ""
+}
+
+// dispatchBashEnvelopes checks every alias candidate. An ask outranks no
+// decision, which outranks allow. An incomplete candidate set always asks.
+func dispatchBashEnvelopes(envs []*domain.ActionEnvelope, truncated bool) (string, string) {
+	if truncated || len(envs) == 0 {
+		return "ask", "Tool Guard dispatch: command alias candidates are incomplete"
+	}
+	decision, reason := "allow", ""
+	for _, env := range envs {
+		d, why := dispatchBash(env)
+		if d == "ask" {
+			return d, why
+		}
+		if d == hookNoDecision || decision == "allow" {
+			decision, reason = d, why
+		}
+	}
+	return decision, reason
+}
+
+// dispatchedResult returns a copy of the engine result that records the
+// dispatcher's outcome: an ask is recorded as escalated, and every outcome
+// carries the dispatch reason. Rule results and citations are unchanged.
+func dispatchedResult(result *domain.EvaluationResult, dec, reason string) *domain.EvaluationResult {
+	if result == nil {
+		return nil
+	}
+	r := *result
+	if dec == "ask" {
+		r.Decision, r.ActionTaken = domain.DecisionEscalated, domain.ActionEscalated
+	}
+	r.DecisionReason = reason
+	return &r
+}
+
+// dispatchBash runs only after protected paths and every loaded enforcing
+// rule allowed the call. Verified reads allow, proven unrelated commands get
+// no decision, and everything else asks.
+func dispatchBash(env *domain.ActionEnvelope) (string, string) {
+	var params map[string]interface{}
+	cmd, ok := "", false
+	if json.Unmarshal(env.Parameters, &params) == nil {
+		cmd, ok = params["command"].(string)
+	}
+	if !ok {
+		return "ask", "Tool Guard dispatch: command is missing or not a string"
+	}
+	switch class, why := engine.ClassifyCommand(cmd); class {
+	case engine.CommandVerifiedRead:
+		return "allow", "Tool Guard dispatch: " + why
+	case engine.CommandProvenUnrelated:
+		return hookNoDecision, "Tool Guard dispatch: " + why + "; no decision, client permissions apply"
+	default:
+		return "ask", "Tool Guard dispatch: " + why
+	}
 }
 
 // evalHook loads the policy set and evaluates env, recovering from any panic
@@ -787,7 +914,7 @@ func selfProtectPaths(policyDir, policyFile string) []string {
 type hookOutput struct {
 	HookSpecificOutput struct {
 		HookEventName            string `json:"hookEventName"`
-		PermissionDecision       string `json:"permissionDecision"`
+		PermissionDecision       string `json:"permissionDecision,omitempty"`
 		PermissionDecisionReason string `json:"permissionDecisionReason,omitempty"`
 	} `json:"hookSpecificOutput"`
 }
@@ -933,7 +1060,7 @@ Usage:
           [-fail-closed] [-fail-closed-tools bash,write,edit]
           [-fail-closed-groups shell,filesystem_writes,network_egress]
           [-protect-path PATH ...] [-protect-paths P1,P2]
-          [-protect-self] [-unknown-tools-deny] [-audit-log FILE]
+          [-protect-self] [-unknown-tools-deny] [-audit-log FILE] [-dispatch gh_read]
 
 Reads ONE PreToolUse JSON object on stdin, evaluates it, and writes one
 decision to stdout. Always exits 0.
@@ -960,6 +1087,15 @@ load failure, an evaluator panic) fails OPEN — allow — by default, so a
 tooling glitch never wedges the agent, but that also means the error is
 never denied either. That default suits local dev; it is not what you want
 once this hook is actually enforcing policy.
+
+-dispatch gh_read (enforcement mode only) changes what an allowed Bash call
+returns: a verified gh read allows; a validated literal pwd or ls returns no
+decision in the claude dialect so the client's permission rules apply.
+Other dialects ask for pwd or ls, and every other command asks in all
+dialects. Load it without a broad rule that escalates gh commands, because
+escalate outranks allow. Every internal error then denies for every tool,
+and the hook runs its evaluation in a supervised child process: a crash,
+timeout, non-zero exit or malformed child output denies.
 `
 
 // maxHookParamVariants bounds how many alias candidates one call can raise.

@@ -254,6 +254,11 @@ directory. A word that holds `/proc/NAME/cwd` counts in the same way. So does a 
 for the policy and audit paths; keep `bash` out of the write-capable policy
 scope if you need stronger shell containment.
 
+Quotes and escapes are tokenized. Examples of denied unresolved write targets include
+`X=/etc; rm $X/passwd`, `X=/etc rm $X/passwd`, `export X=/etc; rm $X/f`,
+`(X=/etc; rm $X/f)`, `rm "$X"/f`, `rm ${X:-/etc}/f`, and
+`rm $(echo /etc)/f`. `echo $HOME` remains allowed by this path check.
+
 When the guard fires, the proxy returns **HTTP 403** and records a
 boundary-deny trace in the audit chain so `tg verify` remains intact.
 

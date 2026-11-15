@@ -107,12 +107,13 @@ func TestSecretClassifyDenseMultilineIsBounded(t *testing.T) {
 	t.Logf("1 MiB dense multiline: %s, %d findings", elapsed, len(result.Findings))
 }
 
-// assertBoundedByScan fails when classifying text took more than four times
+// assertBoundedByScan fails when classifying text took more than eight times
 // the rule-regex scan of the same text, measured here on the same machine,
 // plus 250 ms. The scan is work classifySecrets cannot avoid, so the bound
 // holds on slow runners and under the race detector. Without the race
 // detector, a per-match rescan of a long line (10 s or more at 1 MiB, about
-// 18 times the scan) exceeds it; the race detector slows the scan more than
+// 18 times the scan) exceeds it. The linear code takes 3 to 4.3 times the
+// scan, the higher figure on a hosted runner with coverage on; the race detector slows the scan more than
 // the rescan, so only the non-race run catches that regression.
 func assertBoundedByScan(t *testing.T, text string, elapsed time.Duration) {
 	t.Helper()
@@ -131,7 +132,7 @@ func assertBoundedByScan(t *testing.T, text string, elapsed time.Duration) {
 		}
 	}
 	scan := time.Since(began)
-	if limit := 4*scan + 250*time.Millisecond; elapsed > limit {
+	if limit := 8*scan + 250*time.Millisecond; elapsed > limit {
 		t.Fatalf("classifying took %s; the rule scan alone took %s, limit %s", elapsed, scan, limit)
 	}
 	t.Logf("classify %s, rule scan %s", elapsed, scan)
