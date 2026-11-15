@@ -221,6 +221,8 @@ jobs:
             fi
             echo "OK: $p"
           done
+      - name: Generated secret formats match third_party/gitleaks
+        run: python3 scripts/gen-secret-formats.py --check
 
   goreleaser-validate:
     name: goreleaser config check
