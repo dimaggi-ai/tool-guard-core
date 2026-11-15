@@ -86,7 +86,6 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 - Go API: `domain.CommandClassify` and `domain.Condition.CommandClassify`.
 - Go API: `engine.ClassifyCommand`, `engine.CommandClass` and its constants
   `CommandVerifiedRead`, `CommandProvenUnrelated` and `CommandUnverified`.
-  The additions are compatible.
   The condition field is additive; positional `Condition` literals must switch
   to keyed fields. YAML and JSON configurations use `field` and `profile`.
 - Regression tests for literal-path protection cover assignments, quoting, parameter
