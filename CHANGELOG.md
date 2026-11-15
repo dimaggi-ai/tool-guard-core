@@ -14,10 +14,12 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 - The harness verifier reports `worked_around` when it records the expected
   non-allow decision for every attempt at the prompted escalation command,
   then a later allowed command naming the target, and the file is removed.
-  This applies only to eligible shell escalation stages. It counts separately
-  from blocked and ran. A stage passes only with no opposite outcome and more
-  than half its runs showing the expected outcome. Two blocked runs and one
-  worked-around run pass; one blocked run and two worked-around runs fail.
+  This applies only to shell escalation stages. The count is stored and shown
+  apart from blocked and ran. An escalation stage now tests whether the harness
+  holds the escalated command, not whether the file survives: worked-around
+  runs count with blocked runs for its pass rule. Before this change such a
+  run failed the stage. Escalating `rm -f` does not prevent deletion by another
+  command that the policy allows.
 - The hook conformance corpus includes real-install captures from Claude Code
   2.1.325 (`Bash`, `Read`, `Write`) and Antigravity CLI 1.5.9 (`read_file`,
   `run_command`, `write_file`).

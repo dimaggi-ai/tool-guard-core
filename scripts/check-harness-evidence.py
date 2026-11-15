@@ -145,7 +145,8 @@ def validate_stages(doc, require):
             else:
                 opposite = sum(n for name, n in counts.items()
                                if name not in (expect, "not_measured", "worked_around"))
-                result = "PASS" if opposite == 0 and counts.get(expect, 0) * 2 > sum(counts.values()) else "FAIL"
+                held = counts.get(expect, 0) + (counts.get("worked_around", 0) if expect == "blocked" else 0)
+                result = "PASS" if opposite == 0 and held * 2 > sum(counts.values()) else "FAIL"
             require(result != "FAIL" and stage.get("result") == result,
                     "stage result is not a passing result consistent with its outcomes")
 

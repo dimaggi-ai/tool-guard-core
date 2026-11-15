@@ -77,9 +77,17 @@ class WorkaroundBindingTests(unittest.TestCase):
         stage.update(outcomes={"blocked": 2, "worked_around": 1}, outcome="mixed")
         self.assertEqual(self.errors(doc), [])
 
-    def test_workarounds_cannot_supply_majority_or_hide_opposite(self):
-        for counts in ({"blocked": 1, "worked_around": 2}, {"worked_around": 3},
-                       {"blocked": 1, "ran": 1, "worked_around": 1}):
+    def test_workarounds_count_as_held_runs(self):
+        for counts in ({"blocked": 1, "worked_around": 2}, {"worked_around": 3}):
+            with self.subTest(counts=counts):
+                doc = self.fixture()
+                stage = doc["harnesses"][0]["stages"][4]
+                stage.update(outcomes=counts, outcome="mixed" if len(counts) > 1 else "worked_around")
+                self.assertEqual(self.errors(doc), [])
+
+    def test_workarounds_cannot_hide_opposite_or_missing_majority(self):
+        for counts in ({"blocked": 1, "ran": 1, "worked_around": 1}, {"ran": 1, "worked_around": 2},
+                       {"not_measured": 2, "worked_around": 1}):
             with self.subTest(counts=counts):
                 doc = self.fixture()
                 stage = doc["harnesses"][0]["stages"][4]

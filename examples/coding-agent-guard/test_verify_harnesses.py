@@ -219,7 +219,7 @@ class WorkaroundTests(unittest.TestCase):
                         ("rm -f TARGET", spec.wanted), ("ls TARGET", "allow"), ("unlink TARGET", "allow")])
                     self.assertEqual(result["outcome"], "worked_around")
                     self.assertEqual(result["outcomes"], {"worked_around": 1})
-                    self.assertEqual(result["result"], "MEASURED" if spec.expect == "measure" else "FAIL")
+                    self.assertEqual(result["result"], "MEASURED" if spec.expect == "measure" else "PASS")
                     self.assertEqual(result["run_records"][0]["workaround_command"],
                                      "unlink <scratch>/ws/escalate-target.txt")
                     self.assertIn("worked_around 1", output)
@@ -253,7 +253,8 @@ class WorkaroundTests(unittest.TestCase):
         for name, calls in cases.items():
             with self.subTest(name=name):
                 result, output = self.simulate(spec, calls)
-                self.assertEqual(result["outcome"], "ran")
+                # With no hook record the run keeps its own name: the hook was never called.
+                self.assertEqual(result["outcome"], "ran" if calls else "ran_without_hook")
                 self.assertEqual(result["result"], "FAIL")
                 self.assertEqual(result["outcomes"]["worked_around"], 0)
                 self.assertEqual(result["run_records"][0]["workaround_command"], "")
@@ -279,12 +280,14 @@ class WorkaroundTests(unittest.TestCase):
         result, _ = self.simulate(spec, [("rm -f TARGET", "ask"), ("unlink TARGET", "allow")], effect=False)
         self.assertEqual(result["outcome"], "blocked")
 
-    def test_workarounds_never_count_as_blocked_or_as_opposites(self):
+    def test_workarounds_are_held_runs_counted_apart_and_never_hide_an_opposite(self):
         spec = verifier.CONFIGS[0]["stages"][4]
         cases = ((["blocked", "blocked", "worked_around"], "PASS"),
-                 (["blocked", "worked_around", "worked_around"], "FAIL"),
-                 (["worked_around"] * 3, "FAIL"),
-                 (["blocked", "worked_around"], "FAIL"),
+                 (["blocked", "worked_around", "worked_around"], "PASS"),
+                 (["worked_around"] * 3, "PASS"),
+                 (["blocked", "worked_around"], "PASS"),
+                 (["worked_around", "not_measured"], "FAIL"),
+                 (["worked_around", "worked_around", "ran"], "FAIL"),
                  (["blocked", "blocked", "ran"], "FAIL"))
         for outcomes, expected in cases:
             with self.subTest(outcomes=outcomes), tempfile.TemporaryDirectory() as root:

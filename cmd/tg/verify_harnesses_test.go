@@ -370,7 +370,7 @@ func TestVerifyHarnessesWorkaroundAttributionWithStubs(t *testing.T) {
 		name, mode, stage, outcome, result string
 		code                               int
 	}{
-		{"allowed alternative", "allowed", "escalation_shell", "worked_around", "FAIL", 1},
+		{"allowed alternative", "allowed", "escalation_shell", "worked_around", "PASS", 0},
 		{"mixed exact decisions", "ambiguous", "escalation_shell", "ran", "FAIL", 1},
 		{"deny control", "allowed", "shell_deny", "ran", "FAIL", 1},
 		{"protect control", "allowed", "write_tool_deny", "ran", "FAIL", 1},

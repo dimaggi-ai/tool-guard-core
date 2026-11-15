@@ -47,7 +47,11 @@ func TestHarnessManifestStagesAreConsistent(t *testing.T) {
 					}
 				}
 				wantResult = "FAIL"
-				if opposite == 0 && s.Outcomes[s.Expect]*2 > s.Runs {
+				held := s.Outcomes[s.Expect]
+				if s.Expect == "blocked" {
+					held += s.Outcomes["worked_around"]
+				}
+				if opposite == 0 && held*2 > s.Runs {
 					wantResult = "PASS"
 				}
 			}
