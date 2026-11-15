@@ -5,6 +5,7 @@ package main
 // required as written, next to a check of the behaviour it states.
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -111,8 +112,70 @@ func TestOperatorSentencesMatchBehaviour(t *testing.T) {
 	}
 	requireSentences(t, changelog,
 		"`tg hook` now reads the files from the patch text,",
-		"A call that names more than 64 files is denied.",
-		"No harness run has measured the new reading:")
+		"A call that names more than 64 files is denied.")
+	// What the changelog says about a harness run of the new reading follows
+	// the run records of the release manifest. A run counts when its own
+	// record names apply_patch: the allowed file was written, or the call for
+	// the protected file was blocked. The stage summary names one tool for
+	// all runs, so it is not used.
+	//   every run of both stages counts: "The release run measured ..." with
+	//     the version and the counts is required;
+	//   no run of the allowed write counts: "No harness run has measured ..."
+	//     is required;
+	//   otherwise neither sentence is true and both are rejected.
+	const notMeasured, measured = "No harness run has measured the new reading:", "The release run measured the new reading:"
+	patchStages := map[string]harnessManifestStage{}
+	for _, h := range loadHarnessManifest(t).Harnesses {
+		if h.ID != "codex-cli" || h.Configuration != "codex exec" {
+			continue
+		}
+		for _, s := range h.Stages {
+			if _, dup := patchStages[s.ID]; dup {
+				t.Fatalf("manifest: stage %s of codex exec is there twice", s.ID)
+			}
+			patchStages[s.ID] = s
+		}
+	}
+	patchRuns := func(id, outcome string) (int, int) {
+		s, ok := patchStages[id]
+		if !ok {
+			t.Fatalf("manifest: no stage %s for codex exec", id)
+		}
+		n := 0
+		for _, r := range s.Records {
+			if r.Tool == "apply_patch" && r.Outcome == outcome {
+				n++
+			}
+		}
+		if len(s.Records) != 0 && len(s.Records) != s.Runs {
+			t.Fatalf("manifest: stage %s of codex exec has %d run records for %d runs", id, len(s.Records), s.Runs)
+		}
+		return n, s.Runs
+	}
+	wrote, writeRuns := patchRuns("write_tool_allow_control", "ran")
+	held, denyRuns := patchRuns("write_tool_deny", "blocked")
+	has := func(sentence string) bool { return strings.Contains(oneLine(changelog), sentence) }
+	switch {
+	case writeRuns > 0 && wrote == writeRuns && denyRuns > 0 && held == denyRuns:
+		requireSentences(t, changelog, measured, fmt.Sprintf(
+			"Codex CLI %s wrote the allowed file with `apply_patch` in %d of %d runs, and the call for the protected file was blocked in %d of %d runs.",
+			manifestVersion(t, loadHarnessManifest(t), "codex"), wrote, writeRuns, held, denyRuns))
+		if has(notMeasured) {
+			t.Errorf("CHANGELOG.md holds the sentence %q; in the release manifest every run measured the reading", notMeasured)
+		}
+	case wrote == 0:
+		requireSentences(t, changelog, notMeasured)
+		if has(measured) {
+			t.Errorf("CHANGELOG.md holds the sentence %q; in the release manifest no run wrote the allowed file with apply_patch", measured)
+		}
+	default:
+		for _, sentence := range []string{notMeasured, measured} {
+			if has(sentence) {
+				t.Errorf("CHANGELOG.md holds the sentence %q; the release manifest measured the reading in some runs only (allowed write %d of %d, protected write blocked %d of %d)",
+					sentence, wrote, writeRuns, held, denyRuns)
+			}
+		}
+	}
 	if maxApplyPatchTargets != 64 {
 		t.Fatalf("maxApplyPatchTargets is %d; CHANGELOG.md says 64", maxApplyPatchTargets)
 	}

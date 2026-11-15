@@ -33,6 +33,12 @@ type harnessManifestStage struct {
 	Outcomes map[string]int `json:"outcomes"`
 	Outcome  string         `json:"outcome"`
 	Result   string         `json:"result"`
+	// Records holds one record for each run. A manifest written before the
+	// verifier kept run records has none.
+	Records []struct {
+		Tool    string `json:"tool"`
+		Outcome string `json:"outcome"`
+	} `json:"run_records"`
 }
 
 // manifestMinRuns is the least number of times a release run must send every

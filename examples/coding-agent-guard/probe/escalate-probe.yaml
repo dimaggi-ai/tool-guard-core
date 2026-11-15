@@ -7,8 +7,8 @@ description: >
   maintainer can ask a harness to do something harmless that policy
   escalates and observe whether the harness acts on the escalation. The
   release run does not use this file: its escalation stages use the shipped
-  shell policy. A harness can ignore an escalation: in the release run,
-  Antigravity CLI 1.5.4 started with --dangerously-skip-permissions ran a
+  shell policy. A harness can ignore an escalation: in the harness run of
+  2026-11-10, Antigravity CLI 1.5.4 started with --dangerously-skip-permissions ran a
   command the hook had escalated.
 version: 1
 status: approved
