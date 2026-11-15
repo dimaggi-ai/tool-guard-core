@@ -25,7 +25,7 @@ def measured_harnesses():
     entries = []
     for config in verifier.CONFIGS:
         stages = []
-        for sid, expect, _kind, _target, wanted, _cls, _prompt, _env in config["stages"]:
+        for sid, expect, _kind, _target, wanted, _cls, _prompt, _env, _eligible in config["stages"]:
             outcome = expect if expect != "measure" else "not_measured"
             stages.append({"id": sid, "expect": expect, "wanted_decision": wanted,
                            "runs": 3, "outcomes": {outcome: 3}, "outcome": outcome,
@@ -54,6 +54,127 @@ def commit(repo):
             "-c", "commit.gpgsign=false", "commit", "-qm",
             "fixture\n\nCo-Authored-By: Codex <noreply@openai.com>")
     return command(repo, "git", "rev-parse", "HEAD")
+
+
+class WorkaroundBindingTests(unittest.TestCase):
+    def fixture(self):
+        harnesses = measured_harnesses()
+        for harness, config in zip(harnesses, verifier.CONFIGS):
+            for stage, spec in zip(harness["stages"], config["stages"]):
+                stage["workaround_eligible"] = spec.workaround_eligible
+                if spec.workaround_eligible:
+                    stage["outcomes"]["worked_around"] = 0
+        doc = {"schema": 5, "repeat": 3, "harnesses": harnesses}
+        for harness in harnesses:
+            for stage in harness["stages"]:
+                self.records(stage)
+        return doc
+
+    @staticmethod
+    def records(stage):
+        """Write the per-run records that back the stage counts."""
+        stage["run_records"] = [
+            {"outcome": name, "workaround_command": "unlink <scratch>/ws/escalate-target.txt" if name == "worked_around" else ""}
+            for name, n in stage["outcomes"].items() for _ in range(n)]
+
+    def errors(self, doc):
+        errors = []
+        binding.validate_stages(doc, lambda condition, message: None if condition else errors.append(message))
+        return errors
+
+    def test_eligible_majority_with_workaround_passes(self):
+        doc = self.fixture()
+        stage = doc["harnesses"][0]["stages"][4]
+        stage.update(outcomes={"blocked": 2, "worked_around": 1}, outcome="mixed")
+        self.records(stage)
+        self.assertEqual(self.errors(doc), [])
+
+    def test_counts_need_matching_run_records(self):
+        def stage_of(doc):
+            stage = doc["harnesses"][0]["stages"][4]
+            stage.update(outcomes={"blocked": 0, "worked_around": 3}, outcome="worked_around")
+            del stage["outcomes"]["blocked"]
+            self.records(stage)
+            return stage
+        doc = self.fixture()
+        stage_of(doc)
+        self.assertEqual(self.errors(doc), [])
+        changes = {
+            "missing": lambda s: s.pop("run_records"),
+            "empty": lambda s: s.update(run_records=[]),
+            "short": lambda s: s["run_records"].pop(),
+            "not records": lambda s: s.update(run_records=["worked_around"] * 3),
+            "other outcomes": lambda s: s["run_records"][0].update(outcome="ran"),
+            "no command": lambda s: s["run_records"][0].update(workaround_command=" "),
+            "unrelated command": lambda s: s["run_records"][0].update(workaround_command="touch unrelated"),
+            "not first": lambda s: s["run_records"][0].update(
+                workaround_command="ls && unlink <scratch>/ws/escalate-target.txt"),
+            "option": lambda s: s["run_records"][0].update(workaround_command="rm -i <scratch>/ws/escalate-target.txt"),
+            "other scratch file": lambda s: s["run_records"][0].update(
+                workaround_command="rm <scratch>/ws/not-the-stage-target"),
+            "dangling and": lambda s: s["run_records"][0].update(
+                workaround_command="rm <scratch>/ws/escalate-target.txt &&"),
+            "open quote": lambda s: s["run_records"][0].update(
+                workaround_command="unlink <scratch>/ws/escalate-target.txt; echo \""),
+            "outside scratch": lambda s: s["run_records"][0].update(workaround_command="unlink /etc/hosts"),
+            "command missing": lambda s: s["run_records"][0].pop("workaround_command"),
+        }
+        for name, change in changes.items():
+            with self.subTest(name=name):
+                doc = self.fixture()
+                change(stage_of(doc))
+                self.assertNotEqual(self.errors(doc), [])
+        doc = self.fixture()
+        doc["harnesses"][0]["stages"][0]["run_records"][0]["workaround_command"] = "unlink x"
+        self.assertIn("a worked_around run, and no other run, must name its workaround command", self.errors(doc))
+
+    def test_workarounds_count_as_held_runs(self):
+        for counts in ({"blocked": 1, "worked_around": 2}, {"worked_around": 3}):
+            with self.subTest(counts=counts):
+                doc = self.fixture()
+                stage = doc["harnesses"][0]["stages"][4]
+                stage.update(outcomes=counts, outcome="mixed" if len(counts) > 1 else "worked_around")
+                self.records(stage)
+                self.assertEqual(self.errors(doc), [])
+
+    def test_workarounds_cannot_hide_opposite_or_missing_majority(self):
+        for counts in ({"blocked": 1, "ran": 1, "worked_around": 1}, {"ran": 1, "worked_around": 2},
+                       {"not_measured": 2, "worked_around": 1}):
+            with self.subTest(counts=counts):
+                doc = self.fixture()
+                stage = doc["harnesses"][0]["stages"][4]
+                stage.update(outcomes=counts, outcome="mixed" if len(counts) > 1 else "worked_around")
+                self.records(stage)
+                self.assertIn("stage result is not a passing result consistent with its outcomes", self.errors(doc))
+
+    def test_ineligible_stages_reject_key_even_when_zero_or_claimed_eligible(self):
+        for config_index, config in enumerate(verifier.CONFIGS):
+            for stage_index, spec in enumerate(config["stages"]):
+                if spec.workaround_eligible:
+                    continue
+                for count in (0, 1):
+                    with self.subTest(config=config_index, stage=spec.id, count=count):
+                        doc = self.fixture()
+                        stage = doc["harnesses"][config_index]["stages"][stage_index]
+                        stage["outcomes"]["worked_around"] = count
+                        stage["workaround_eligible"] = True
+                        errors = self.errors(doc)
+                        self.assertIn("worked_around is forbidden for an ineligible stage", errors)
+                        self.assertIn("stage workaround eligibility does not match the verifier", errors)
+
+    def test_eligible_zero_count_is_required_and_does_not_change_summary(self):
+        doc = self.fixture()
+        self.assertEqual(self.errors(doc), [])
+        del doc["harnesses"][0]["stages"][4]["outcomes"]["worked_around"]
+        self.assertIn("stage outcomes must store the worked_around count", self.errors(doc))
+
+    def test_legacy_counts_remain_valid_but_cannot_claim_workarounds(self):
+        doc = {"schema": 4, "repeat": 3, "harnesses": measured_harnesses()}
+        self.assertEqual(self.errors(doc), [])
+        stage = doc["harnesses"][0]["stages"][4]
+        stage.update(outcomes={"blocked": 2, "worked_around": 1}, outcome="mixed")
+        self.records(stage)
+        self.assertIn("worked_around requires manifest schema 5", self.errors(doc))
 
 
 class ReleaseBindingTests(unittest.TestCase):
@@ -154,11 +275,11 @@ class ReleaseBindingTests(unittest.TestCase):
 
     def test_malformed_stage_counts_results_and_expectations_are_rejected(self):
         cases = [
-            ({"outcomes": {"unknown": 3}}, "known names and positive integer"),
-            ({"outcomes": {"blocked": 4, "ran": -1}}, "known names and positive integer"),
-            ({"outcomes": {"blocked": True, "not_measured": 2}}, "known names and positive integer"),
-            ({"outcomes": {"blocked": 3.0}}, "known names and positive integer"),
-            ({"outcomes": {"blocked": 3, "ran": 0}}, "known names and positive integer"),
+            ({"outcomes": {"unknown": 3}}, "known names and valid integer"),
+            ({"outcomes": {"blocked": 4, "ran": -1}}, "known names and valid integer"),
+            ({"outcomes": {"blocked": True, "not_measured": 2}}, "known names and valid integer"),
+            ({"outcomes": {"blocked": 3.0}}, "known names and valid integer"),
+            ({"outcomes": {"blocked": 3, "ran": 0}}, "known names and valid integer"),
             ({"outcomes": {"blocked": 2}}, "counts must equal"),
             ({"runs": 4}, "counts must equal"),
             ({"result": "UNKNOWN"}, "stage result"),

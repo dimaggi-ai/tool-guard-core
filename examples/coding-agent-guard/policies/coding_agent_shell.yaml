@@ -9,13 +9,23 @@
 #   escalate -> hold for a human         (... exit 2 | ... "ask")
 #   allow    -> let it run               (... exit 0 | ... "allow")
 #
-# DESIGN NOTE — defense in depth, never fail to "allow":
-# Rather than one fragile mega-regex, each rule is an AND/OR tree of small,
-# independent regexes (the engine supports `and`/`or`/`not`). The escalate
-# rule fires on ANY recursive-or-force `rm`, so even a delete shape the deny
-# rule's target matcher does not recognize still gets HELD for a human — it is
-# never silently allowed. The deny rule is the stricter overlay for deletes
-# rooted at `/`, a top-level system dir, or $HOME/~ (deny outranks escalate).
+# The rm escalation rule matches recursive or forced rm only. The deny rule
+# also checks for root, a top-level system directory, or $HOME/~.
+# Plain rm, unlink and find -delete are allowed by these rules.
+# Use -protect-path for a file that must not be changed or removed. Shell
+# protection covers delete forms the hook reads; see README.md for its limits.
+# A flag must be an option word in the same command segment as rm. The match
+# is loose on purpose and fails closed: quotes and backslashes in the word
+# (\-rf, -"rf", $'-rf', -r$'f'), a backslash-newline before it, GNU long-option
+# prefixes (--r, --f), and a flag-like operand after -- (rm -- -f) all match.
+# A word that starts with one dash and contains the letter counts, so
+# -fr${X} matches. The word may hold $(...) substitutions with no
+# parenthesis between the outer pair, so -$(:;)r matches. This is a text
+# pattern, not a shell parser. It misses a flag whose letters come only
+# from an expansion (rm $OPTS, rm -${X}). It can also miss a flag word that
+# holds a blank, ;, & or | inside backquotes, or inside a substitution
+# that also contains a parenthesis, nested, quoted or escaped. Example of
+# a miss: -$(: ')'; :)r. A parenthesis with no such separator is matched.
 # This is why `rm -rf /`, `rm -r -f /`, `rm --recursive --force /`, and
 # `rm -fR /home` are all caught — bundled, separated, long-form, or uppercase.
 schema_version: 1
@@ -44,7 +54,7 @@ rules:
           value: '(^|[\s;&|(])(\S+/)?rm(\s|$)'
         - field: parameters.command
           operator: regex
-          value: '(--recursive|-[a-zA-Z]*[rR])'
+          value: '(^|[\s;&|(])(\S+/)?rm([ \t\r\f\v]|\\\n)+(([^ \t\r\f\v\n;&|"''\\]|\\[^\n]|"([^"\\\n]|\\[^\n])*"|''[^''\n]*'')+([ \t\r\f\v]|\\\n)+)*(\$?["''\\]*-((\$\([^()]*\)|[^-\s;&|])(\$\([^()]*\)|[^\s;&|])*)?[rR](\$\([^()]*\)|[^\s;&|])*|\$?["''\\]*--(\$\([^()]*\)|["''\\$])*r(\$\([^()]*\)|[^\s;&|])*)([\s;&|)]|$)'
         - field: parameters.command
           operator: regex
           value: '(\s|["''=])(/\*?|/(bin|boot|dev|etc|home|lib|lib64|opt|proc|root|sbin|srv|sys|usr|var)/?|\$\{?HOME\}?|~)(\s|["'';&|]|$)'
@@ -52,9 +62,7 @@ rules:
     citation:
       excerpt: "Recursive delete of / a system directory or HOME is never permitted."
 
-  # ESCALATE — any other recursive OR force `rm`. The safety net: a destructive
-  # delete the deny rule's target matcher did not flag still gets held for a
-  # human, never silently allowed.
+  # ESCALATE: any other recursive or forced rm. Plain rm is not escalated.
   - rule_id: rule-escalate-rm
     rule_type: regex
     conditions:
@@ -65,10 +73,10 @@ rules:
         - or:
             - field: parameters.command
               operator: regex
-              value: '(--recursive|-[a-zA-Z]*[rR])'
+              value: '(^|[\s;&|(])(\S+/)?rm([ \t\r\f\v]|\\\n)+(([^ \t\r\f\v\n;&|"''\\]|\\[^\n]|"([^"\\\n]|\\[^\n])*"|''[^''\n]*'')+([ \t\r\f\v]|\\\n)+)*(\$?["''\\]*-((\$\([^()]*\)|[^-\s;&|])(\$\([^()]*\)|[^\s;&|])*)?[rR](\$\([^()]*\)|[^\s;&|])*|\$?["''\\]*--(\$\([^()]*\)|["''\\$])*r(\$\([^()]*\)|[^\s;&|])*)([\s;&|)]|$)'
             - field: parameters.command
               operator: regex
-              value: '(--force|-[a-zA-Z]*f)'
+              value: '(^|[\s;&|(])(\S+/)?rm([ \t\r\f\v]|\\\n)+(([^ \t\r\f\v\n;&|"''\\]|\\[^\n]|"([^"\\\n]|\\[^\n])*"|''[^''\n]*'')+([ \t\r\f\v]|\\\n)+)*(\$?["''\\]*-((\$\([^()]*\)|[^-\s;&|])(\$\([^()]*\)|[^\s;&|])*)?f(\$\([^()]*\)|[^\s;&|])*|\$?["''\\]*--(\$\([^()]*\)|["''\\$])*f(\$\([^()]*\)|[^\s;&|])*)([\s;&|)]|$)'
     effect: escalate
     citation:
       excerpt: "A recursive or forced rm requires manual review before it runs."

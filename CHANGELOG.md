@@ -8,6 +8,32 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Review corrections
 
+- The example shell policy now matches recursive and force flags as separate
+  words of the `rm` command. Plain `rm` of a path with `-r` or `-f` letters
+  inside a word is no longer escalated or denied for those letters. The match
+  is loose on purpose: a flag word written with quotes or backslashes, a
+  backslash-newline before it, and the long-option prefixes `--r` and `--f`
+  all count as the flag. A word that starts with one dash and contains the
+  letter counts, such as `-fr${X}`, and the word may hold `$(...)`
+  substitutions with no parenthesis between the outer pair. The match is a
+  text pattern, not a shell parser. It misses a flag whose letters come only
+  from an expansion, such as `rm $OPTS`. It can also miss a flag word that
+  holds a blank, `;`, `&` or `|` inside backquotes, or inside a substitution
+  that also contains a parenthesis, whether nested, quoted or escaped.
+- The harness verifier reports `worked_around` when it records the expected
+  non-allow decision for every attempt at the prompted escalation command,
+  then a later allowed command line whose first command is `rm` or `unlink`
+  (bare, or under `/bin/` or `/usr/bin/`) with the target as its only argument,
+  and the file is removed. The whole line must pass the syntax check of
+  `bash` or `sh`. The file must still exist when the
+  later command reaches the hook; otherwise the run counts as `ran`. The
+  release-binding check requires one run record for each counted run.
+  This applies only to shell escalation stages. The count is stored and shown
+  apart from blocked and ran. An escalation stage now tests whether the harness
+  holds the escalated command, not whether the file survives: worked-around
+  runs count with blocked runs for its pass rule. Before this change such a
+  run failed the stage. Escalating `rm -f` does not prevent deletion by another
+  command that the policy allows.
 - The hook conformance corpus includes real-install captures from Claude Code
   2.1.325 (`Bash`, `Read`, `Write`) and Antigravity CLI 1.5.9 (`read_file`,
   `run_command`, `write_file`).

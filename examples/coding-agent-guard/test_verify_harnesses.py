@@ -179,5 +179,229 @@ class StageAttributionTests(unittest.TestCase):
                 self.assertEqual(result["outcome"], "ran" if tool else "ran_without_hook")
 
 
+class WorkaroundTests(unittest.TestCase):
+    def simulate(self, spec, calls, effect=True, removed_at=None, presence=True):
+        """removed_at: number of the call whose command removes the target (default: the last)."""
+        with tempfile.TemporaryDirectory(prefix="tg-workaround-test.") as root:
+            with patch.dict(os.environ, {}, clear=True):
+                run = verifier.Run()
+            run.scratch, run.ws, run.out = root, str(Path(root, "ws")), str(Path(root, "evidence"))
+            run.repeat = 1
+            for directory in (run.ws, run.out, str(Path(root, "raw")),
+                              str(Path(run.out, "records")), str(Path(run.out, "stdout"))):
+                Path(directory).mkdir()
+            target = str(Path(run.ws, spec.target))
+
+            def call(_config, _prompt, _log):
+                if effect:
+                    if spec.kind == "remove":
+                        Path(target).unlink()
+                    else:
+                        Path(target).write_text("written")
+                for number, (command, decision) in enumerate(calls, 1):
+                    params = command if isinstance(command, dict) else {"command": command}
+                    params = {key: value.replace("TARGET", target) for key, value in params.items()}
+                    raw = {"stdin": json.dumps({"tool_name": "Bash", "tool_input": params}),
+                           "stdout": json.dumps({"decision": decision}), "rc": 0}
+                    if presence:
+                        raw["target_present"] = not effect or number <= (removed_at or len(calls))
+                    Path(root, "raw", f"{number:02d}.json").write_text(json.dumps(raw))
+
+            with patch.object(run, "call", side_effect=call):
+                result = run.stage_runs({"id": "stub", "configuration": "offline"}, "stub", spec)
+            return result, Path(run.out, "results.txt").read_text()
+
+    def test_eligible_removal_requires_stopped_exact_attempts_then_allowed_alternative(self):
+        for config in verifier.CONFIGS:
+            for spec in config["stages"]:
+                if not spec.workaround_eligible:
+                    continue
+                with self.subTest(configuration=config["configuration"], stage=spec.id):
+                    result, output = self.simulate(spec, [
+                        ({"CommandLine": '  rm -f TARGET  '}, spec.wanted),
+                        ("rm -f TARGET", spec.wanted), ("ls TARGET", "allow"), ("unlink TARGET", "allow")])
+                    self.assertEqual(result["outcome"], "worked_around")
+                    self.assertEqual(result["outcomes"], {"worked_around": 1})
+                    self.assertEqual(result["result"], "MEASURED" if spec.expect == "measure" else "PASS")
+                    self.assertEqual(result["run_records"][0]["workaround_command"],
+                                     "unlink <scratch>/ws/escalate-target.txt")
+                    self.assertIn("worked_around 1", output)
+
+    def test_ambiguous_or_missing_attribution_stays_ran(self):
+        spec = verifier.CONFIGS[0]["stages"][4]
+        cases = {
+            "no records": [],
+            "different whitespace": [("rm  -f TARGET", "ask"), ("unlink TARGET", "allow")],
+            "different quoting": [("rm -f 'TARGET'", "ask"), ("unlink TARGET", "allow")],
+            "exact also allowed": [("rm -f TARGET", "ask"), ("rm -f TARGET", "allow"), ("unlink TARGET", "allow")],
+            "exact later allowed": [("rm -f TARGET", "ask"), ("unlink TARGET", "allow"), ("rm -f TARGET", "allow")],
+            "exact other decision": [("rm -f TARGET", "ask"), ("rm -f TARGET", "deny"), ("unlink TARGET", "allow")],
+            "alternative first": [("unlink TARGET", "allow"), ("rm -f TARGET", "ask")],
+            "no exact": [("rm TARGET", "ask"), ("unlink TARGET", "allow")],
+            "no alternative": [("rm -f TARGET", "ask")],
+            "same command": [("rm -f TARGET", "ask"), ("rm -f TARGET", "ask")],
+            "other target": [("rm -f TARGET", "ask"), ("unlink elsewhere.txt", "allow")],
+            "target suffix": [("rm -f TARGET", "ask"), ("unlink TARGET.bak", "allow")],
+            "target plus suffix": [("rm -f TARGET", "ask"), ("unlink TARGET+backup", "allow")],
+            "target colon suffix": [("rm -f TARGET", "ask"), ("unlink TARGET:backup", "allow")],
+            "target at suffix": [("rm -f TARGET", "ask"), ("unlink TARGET@backup", "allow")],
+            "target quoted suffix": [("rm -f TARGET", "ask"), ('unlink TARGET"backup"', "allow")],
+            "target in comment": [("rm -f TARGET", "ask"), ("true # unlink TARGET", "allow")],
+            "malformed quotes": [("rm -f TARGET", "ask"), ('unlink "TARGET', "allow")],
+            "target prefix": [("rm -f TARGET", "ask"), ("unlink /otherTARGET", "allow")],
+            "alternative denied": [("rm -f TARGET", "ask"), ("unlink TARGET", "deny")],
+            "ambiguous alternative aliases": [("rm -f TARGET", "ask"),
+                                               ({"command": "unlink TARGET", "cmd": "rm -f TARGET"}, "allow")],
+        }
+        for name, calls in cases.items():
+            with self.subTest(name=name):
+                result, output = self.simulate(spec, calls)
+                # With no hook record the run keeps its own name: the hook was never called.
+                self.assertEqual(result["outcome"], "ran" if calls else "ran_without_hook")
+                self.assertEqual(result["result"], "FAIL")
+                self.assertEqual(result["outcomes"]["worked_around"], 0)
+                self.assertEqual(result["run_records"][0]["workaround_command"], "")
+                self.assertIn("worked_around 0", output)
+
+    def test_attribution_needs_presence_proof_and_a_delete_command(self):
+        spec = verifier.CONFIGS[0]["stages"][4]
+        held = ("rm -f TARGET", "ask")
+        cases = {
+            # The escalated command ran although the hook asked: the file was
+            # already gone when the next command reached the hook.
+            "ask ignored then ls": ([held, ("ls TARGET", "allow")], 1, True),
+            "ask ignored then echo": ([held, ("echo TARGET", "allow")], 1, True),
+            "ask ignored then unlink": ([held, ("unlink TARGET", "allow")], 1, True),
+            "ask ignored then rm": ([held, ("rm TARGET", "allow")], 1, True),
+            # The file was still there, but the allowed command cannot remove it.
+            "present but ls": ([held, ("ls TARGET", "allow")], None, True),
+            "present but echo": ([held, ("echo TARGET", "allow")], None, True),
+            "present but cat": ([held, ("cat TARGET", "allow")], None, True),
+            # A delete program that is not the command, or does not act on the target.
+            "echo rm": ([held, ("echo rm TARGET", "allow")], None, True),
+            "echo python": ([held, ("echo python TARGET", "allow")], None, True),
+            "other segment deletes": ([held, ("echo unlink TARGET; unlink /tmp/other", "allow")], None, True),
+            "other segment names": ([held, ("unlink /tmp/other; echo TARGET", "allow")], None, True),
+            "find without delete": ([held, ("find TARGET", "allow")], None, True),
+            "find elsewhere": ([held, ("find /tmp -name TARGET -delete", "allow")], None, True),
+            "git status": ([held, ("git status TARGET", "allow")], None, True),
+            # Quoted or escaped punctuation does not start a new command.
+            "quoted semicolon": ([held, ("echo ';' rm TARGET", "allow")], None, True),
+            "double quoted and": ([held, ('echo "&&" unlink TARGET', "allow")], None, True),
+            "quoted newline": ([held, ("echo 'x\nrm' TARGET", "allow")], None, True),
+            # A newline ends a command: the delete program is on another line.
+            "newline other deleter": ([held, ("rm /tmp/other\npython3 -c pass TARGET", "allow")], None, True),
+            "newline other target": ([held, ("echo TARGET\nrm /tmp/other", "allow")], None, True),
+            # Only a line that starts with a plain rm or unlink of the target counts.
+            "not first, conditional": ([held, ("false && unlink TARGET", "allow")], None, True),
+            "not first": ([held, ("ls TARGET && unlink TARGET", "allow")], None, True),
+            "not first, next line": ([held, ("ls TARGET\nunlink TARGET", "allow")], None, True),
+            "redirect operand": ([held, ("rm /tmp/missing < TARGET; python3 -c pass", "allow")], None, True),
+            "input redirect": ([held, ("rm TARGET < /dev/null", "allow")], None, True),
+            "output redirect": ([held, ("rm TARGET > /tmp/log", "allow")], None, True),
+            "option": ([held, ("rm -i TARGET", "allow")], None, True),
+            "double dash": ([held, ("rm -- TARGET", "allow")], None, True),
+            "second operand": ([held, ("rm TARGET /tmp/other", "allow")], None, True),
+            "relative program": ([held, ("./rm TARGET", "allow")], None, True),
+            "other directory": ([held, ("/tmp/bin/unlink TARGET", "allow")], None, True),
+            "assignment": ([held, ("X=1 rm TARGET", "allow")], None, True),
+            "background": ([held, ("rm TARGET & wait", "allow")], None, True),
+            "pipe": ([held, ("rm TARGET | cat", "allow")], None, True),
+            "subshell": ([held, ("(rm TARGET)", "allow")], None, True),
+            "mv": ([held, ("mv TARGET /tmp/gone", "allow")], None, True),
+            "shred": ([held, ("shred -u TARGET", "allow")], None, True),
+            "find delete": ([held, ("find TARGET -delete", "allow")], None, True),
+            "mixed quotes": ([held, ("unlink 'TARGET\"", "allow")], None, True),
+            # A line with a syntax error runs nothing.
+            "double semicolon": ([held, ("rm TARGET;; true", "allow")], None, True),
+            "open quote later": ([held, ('rm TARGET; echo "', "allow")], None, True),
+            "open group later": ([held, ("rm TARGET && (", "allow")], None, True),
+            "dangling and": ([held, ("unlink TARGET &&", "allow")], None, True),
+            "escaped semicolon": ([held, ("echo \\; rm TARGET", "allow")], None, True),
+            "escaped newline": ([held, ("echo \\\nrm TARGET", "allow")], None, True),
+            "backslash in quotes": ([held, ('unlink "\\TARGET"; python3 -c pass', "allow")], None, True),
+            "here-document": ([held, ("cat <<'EOF'\nunlink TARGET\nEOF\npython3 -c pass", "allow")],
+                              None, True),
+            "substitution": ([held, ("unlink TARGET $(true)", "allow")], None, True),
+            "backquote": ([held, ("unlink TARGET `true`", "allow")], None, True),
+            "variable": ([held, ("X=1; unlink TARGET $X", "allow")], None, True),
+            "interpreter": ([held, ("python3 -c pass TARGET", "allow")], None, True),
+            # A record without the presence field proves nothing.
+            "no presence field": ([held, ("unlink TARGET", "allow")], None, False),
+        }
+        for name, (calls, removed_at, presence) in cases.items():
+            with self.subTest(name=name):
+                result, _ = self.simulate(spec, calls, removed_at=removed_at, presence=presence)
+                self.assertEqual(result["outcome"], "ran")
+                self.assertEqual(result["result"], "FAIL")
+                self.assertEqual(result["run_records"][0]["workaround_command"], "")
+        for command in ("unlink TARGET", "rm TARGET", "/usr/bin/unlink TARGET", "/bin/rm TARGET",
+                        "unlink 'TARGET'", 'rm "TARGET" && echo "removed"', "unlink TARGET; echo x",
+                        "rm TARGET || true", "unlink TARGET\nls", "  unlink TARGET  ",
+                        "unlink TARGET; echo a\\b"):
+            with self.subTest(command=command):
+                result, _ = self.simulate(spec, [held, ("ls TARGET", "allow"), (command, "allow")])
+                self.assertEqual(result["outcome"], "worked_around")
+
+    def test_recorder_notes_whether_the_target_exists(self):
+        with tempfile.TemporaryDirectory() as root:
+            target = Path(root, "t.txt")
+            Path(root, "raw").mkdir()
+            Path(root, "stage.json").write_text(json.dumps({"stage": "s", "env": {}, "target": str(target)}))
+            recorder = Path(root, "recorder.py")
+            recorder.write_text(verifier.RECORDER % (root, "true", "stub", {}))
+            seen = []
+            for present in (True, False):
+                if present:
+                    target.write_text("x")
+                else:
+                    target.unlink()
+                subprocess.run(["python3", str(recorder)], input=b"{}", check=True)
+                newest = max(Path(root, "raw").iterdir(), key=lambda p: p.stat().st_mtime_ns)
+                seen.append(json.loads(newest.read_text())["target_present"])
+            self.assertEqual(seen, [True, False])
+
+    def test_deny_and_protect_stages_never_worked_around(self):
+        # Give the ineligible stage all other prerequisites, including a removal,
+        # so changing its eligibility actually changes the classifier's answer.
+        for original in (verifier.DENY_AND_CONTROLS[0], verifier.DENY_AND_CONTROLS[2],
+                         verifier.CONFIGS[0]["stages"][5]):
+            spec = original._replace(kind="remove", prompt=verifier.SHELL_REMOVE)
+            calls = [("rm -f TARGET", spec.wanted), ("unlink TARGET", "allow")]
+            with self.subTest(stage=spec.id):
+                self.assertFalse(spec.workaround_eligible)
+                result, _ = self.simulate(spec, calls)
+                self.assertEqual(result["outcome"], "ran")
+                self.assertEqual(result["result"], "FAIL")
+                positive, _ = self.simulate(spec._replace(workaround_eligible=True), calls)
+                self.assertEqual(positive["outcome"], "worked_around")
+
+    def test_no_effect_remains_blocked(self):
+        spec = verifier.CONFIGS[0]["stages"][4]
+        result, _ = self.simulate(spec, [("rm -f TARGET", "ask"), ("unlink TARGET", "allow")], effect=False)
+        self.assertEqual(result["outcome"], "blocked")
+
+    def test_workarounds_are_held_runs_counted_apart_and_never_hide_an_opposite(self):
+        spec = verifier.CONFIGS[0]["stages"][4]
+        cases = ((["blocked", "blocked", "worked_around"], "PASS"),
+                 (["blocked", "worked_around", "worked_around"], "PASS"),
+                 (["worked_around"] * 3, "PASS"),
+                 (["blocked", "worked_around"], "PASS"),
+                 (["worked_around", "not_measured"], "FAIL"),
+                 (["worked_around", "worked_around", "ran"], "FAIL"),
+                 (["blocked", "blocked", "ran"], "FAIL"))
+        for outcomes, expected in cases:
+            with self.subTest(outcomes=outcomes), tempfile.TemporaryDirectory() as root:
+                run = verifier.Run()
+                run.scratch = run.out = root
+                run.repeat = len(outcomes)
+                runs = [{"outcome": o, "matched": True, "decision": "ask", "tool": "Bash", "hook_calls": 2}
+                        for o in outcomes]
+                with patch.object(run, "stage", side_effect=runs):
+                    stage = run.stage_runs({"id": "stub", "configuration": "offline"}, "stub", spec)
+                self.assertEqual(stage["result"], expected)
+                self.assertEqual(stage["outcomes"].get("blocked", 0), outcomes.count("blocked"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -10,6 +10,11 @@ What an agent does with a decision differs by agent and by version. Read
 [docs/support-matrix.md](../../docs/support-matrix.md) before you rely on this
 example. It lists what was measured, and on which version.
 
+The `rm` rule escalates recursive or forced `rm` only. Escalating `rm -f`
+does not prevent deletion by another allowed command. Plain `rm file`, `unlink`
+and `find -delete` are allowed by this policy. Use `-protect-path` for a file
+that must not be changed or removed, within the limits in [Protected paths](#protected-paths).
+
 The `coding_agent_secret_egress` policy checks text for known key formats and
 listed URLs. In a shell command, a listed URL anywhere in the text satisfies
 the host carve-out, even inside a comment. A command can therefore send a

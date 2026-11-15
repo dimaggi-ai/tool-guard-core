@@ -25,10 +25,15 @@ func TestHarnessManifestStagesAreConsistent(t *testing.T) {
 		for _, s := range h.Stages {
 			where := fmt.Sprintf("%s [%s] %s", h.ID, h.Configuration, s.ID)
 			wantOutcome := "mixed"
-			if len(s.Outcomes) == 1 {
-				for word := range s.Outcomes {
+			positive := 0
+			for word, n := range s.Outcomes {
+				if n > 0 {
+					positive++
 					wantOutcome = word
 				}
+			}
+			if positive != 1 {
+				wantOutcome = "mixed"
 			}
 			if s.Outcome != wantOutcome {
 				t.Errorf("%s: outcome is %q, the counts %v give %q", where, s.Outcome, s.Outcomes, wantOutcome)
@@ -37,12 +42,16 @@ func TestHarnessManifestStagesAreConsistent(t *testing.T) {
 			if s.Expect != "measure" {
 				opposite := 0
 				for word, n := range s.Outcomes {
-					if word != s.Expect && word != "not_measured" {
+					if word != s.Expect && word != "not_measured" && word != "worked_around" {
 						opposite += n
 					}
 				}
 				wantResult = "FAIL"
-				if opposite == 0 && s.Outcomes[s.Expect]*2 > s.Runs {
+				held := s.Outcomes[s.Expect]
+				if s.Expect == "blocked" {
+					held += s.Outcomes["worked_around"]
+				}
+				if opposite == 0 && held*2 > s.Runs {
 					wantResult = "PASS"
 				}
 			}
