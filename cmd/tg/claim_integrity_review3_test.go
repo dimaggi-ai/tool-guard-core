@@ -252,23 +252,61 @@ func TestMatrixRunSizeMatchesManifest(t *testing.T) {
 
 // TestChangelogAgyFlagProtectionMatchesManifest: the changelog tells an
 // operator what the flag --dangerously-skip-permissions leaves them with.
+// The "no escalation protection" sentence is required when the manifest
+// shows the escalated call running with the flag in every run, and rejected
+// otherwise. A run in which some calls ran and some did not needs other words.
 func TestChangelogAgyFlagProtectionMatchesManifest(t *testing.T) {
 	m := loadHarnessManifest(t)
-	outcome := map[string]string{}
+	// The stages come from the one Antigravity entry started with the flag.
+	// A second entry or a repeated stage ID would let one record hide another.
+	const flagged = "agy --dangerously-skip-permissions --print"
+	stage := map[string]harnessManifestStage{}
+	entries := 0
 	for _, h := range m.Harnesses {
-		if strings.Contains(h.Configuration, "--dangerously-skip-permissions") {
-			for _, s := range h.Stages {
-				outcome[s.ID] = s.Outcome
+		if h.Configuration != flagged {
+			continue
+		}
+		entries++
+		if h.ID != "antigravity-cli" {
+			t.Fatalf("manifest: the entry with configuration %q has ID %q, not \"antigravity-cli\"", flagged, h.ID)
+		}
+		for _, s := range h.Stages {
+			if _, dup := stage[s.ID]; dup {
+				t.Fatalf("manifest: the entry with configuration %q has stage %s twice", flagged, s.ID)
 			}
+			stage[s.ID] = s
 		}
 	}
-	for id, want := range map[string]string{"shell_deny": "blocked", "escalation_shell": "ran", "escalation_shell_as_deny": "blocked"} {
-		if outcome[id] != want {
-			t.Fatalf("manifest: stage %s with the flag has outcome %q; the changelog sentence needs %q", id, outcome[id], want)
+	if entries != 1 {
+		t.Fatalf("manifest: %d entries with configuration %q; the test needs exactly one", entries, flagged)
+	}
+	// The deny stages must hold in every run. A run that the verifier counts
+	// as worked_around is a held run: the denied call did not run.
+	for _, id := range []string{"shell_deny", "escalation_shell_as_deny"} {
+		s, ok := stage[id]
+		if !ok {
+			t.Fatalf("manifest: no stage %s with the flag", id)
+		}
+		if held := s.Outcomes["blocked"] + s.Outcomes["worked_around"]; s.Result != "PASS" || s.Runs == 0 || held != s.Runs {
+			t.Fatalf("manifest: stage %s with the flag has result %q and outcomes %v in %d runs; the changelog sentence needs the call held in every run", id, s.Result, s.Outcomes, s.Runs)
 		}
 	}
 	want := "gets deny protection and no escalation protection unless `TG_ESCALATE_AS=deny` is set."
-	if !strings.Contains(oneLine(readRepoFile(t, "CHANGELOG.md")), want) {
+	has := strings.Contains(oneLine(readRepoFile(t, "CHANGELOG.md")), want)
+	// The sentence is a claim about the measured version. It says "no"
+	// protection, so it needs the escalated call to run in every run.
+	esc, ok := stage["escalation_shell"]
+	if !ok {
+		t.Fatal("manifest: no stage escalation_shell with the flag")
+	}
+	if esc.Runs == 0 || esc.Outcomes["ran"] != esc.Runs {
+		if has {
+			t.Errorf("CHANGELOG.md holds the sentence ending %q; in the manifest stage escalation_shell with the flag ran in %d of %d runs (outcomes %v), not in every run",
+				want, esc.Outcomes["ran"], esc.Runs, esc.Outcomes)
+		}
+		return
+	}
+	if !has {
 		t.Errorf("CHANGELOG.md does not hold the sentence ending %q", want)
 	}
 }

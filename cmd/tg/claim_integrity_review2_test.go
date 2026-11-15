@@ -4,7 +4,9 @@ package main
 // (2026-11-10). Each one closes a mutation that the suite accepted before.
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -146,16 +148,52 @@ func TestChangelogStatesTheVariantLimit(t *testing.T) {
 
 // TestChangelogAntigravityRunCountsMatchManifest compares the two run counts
 // that CHANGELOG.md gives for Antigravity CLI started with
-// --dangerously-skip-permissions with the manifest.
+// --dangerously-skip-permissions with the manifest. The sentence names a
+// run and a version. "the release run" is the run in the release manifest.
+// "an earlier run" is the run of 2026-11-10 on commit 24eafd647ce3, whose
+// manifest is retained as docs/evidence/harness-manifest-24eafd6.json. The
+// test pins that file by its commit and its SHA-256. The version and the
+// counts in the sentence are compared with the manifest that the words select.
 func TestChangelogAntigravityRunCountsMatchManifest(t *testing.T) {
 	text := strings.Join(strings.Fields(readRepoFile(t, "CHANGELOG.md")), " ")
-	re := regexp.MustCompile("answered `ask` in (\\d+) of (\\d+) runs and after it answered `force_ask` in (\\d+) of (\\d+) runs")
-	got := re.FindStringSubmatch(text)
-	if got == nil {
-		t.Fatal("CHANGELOG.md no longer has the sentence with the two Antigravity run counts")
+	re := regexp.MustCompile("In (the release run|an earlier run) on Antigravity CLI (\\d+\\.\\d+\\.\\d+), started with `--dangerously-skip-permissions` in headless print mode, " +
+		"a `run_command` call ran after the hook answered `ask` in (\\d+) of (\\d+) runs and after it answered `force_ask` in (\\d+) of (\\d+) runs")
+	all := re.FindAllStringSubmatch(text, -1)
+	if len(all) != 1 {
+		t.Fatalf("CHANGELOG.md has %d sentences with the two Antigravity run counts; the test checks exactly one", len(all))
 	}
+	got := all[0]
+	// Outside that sentence no text may put a run count next to `ask` or
+	// `force_ask`. Such text would be a second claim that this test does
+	// not compare with a manifest.
+	rest := strings.Replace(text, got[0], "", 1)
+	loose := regexp.MustCompile("`(?:force_)?ask`[^.]{0,120}\\d+ of \\d+|\\d+ of \\d+[^.]{0,120}`(?:force_)?ask`")
+	if extra := loose.FindString(rest); extra != "" {
+		t.Fatalf("CHANGELOG.md has a second run count for an escalation answer: %q; the test checks the one sentence only", extra)
+	}
+	// The retained manifest is checked whichever run the sentence names.
+	const name, digest = "harness-manifest-24eafd6.json", "6e979b4946b3bae5346ba20be75038dacafdba04c68b0c063d0a46a2f0e21aea"
+	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "evidence", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum := fmt.Sprintf("%x", sha256.Sum256(raw)); sum != digest {
+		t.Fatalf("docs/evidence/%s has SHA-256 %s; the retained manifest of the earlier run has %s", name, sum, digest)
+	}
+	earlier := loadHarnessManifestFile(t, name)
+	if earlier.Commit != legacyHarnessCommit {
+		t.Fatalf("docs/evidence/%s measured commit %s; the earlier run measured %s", name, earlier.Commit, legacyHarnessCommit)
+	}
+	manifest := loadHarnessManifest(t)
+	if got[1] == "an earlier run" {
+		manifest = earlier
+	}
+	if measured := manifestVersion(t, manifest, "agy"); got[2] != measured {
+		t.Fatalf("CHANGELOG.md gives counts for %s on Antigravity CLI %s; the manifest of that run holds version %s", got[1], got[2], measured)
+	}
+	got = append(got[:1], got[3:]...)
 	want := map[string][2]int{}
-	for _, h := range loadHarnessManifest(t).Harnesses {
+	for _, h := range manifest.Harnesses {
 		if h.Configuration != "agy --dangerously-skip-permissions --print" {
 			continue
 		}
