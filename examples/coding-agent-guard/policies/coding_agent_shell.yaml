@@ -14,8 +14,10 @@
 # Plain rm, unlink and find -delete are allowed by these rules.
 # Use -protect-path for a file that must not be changed or removed. Shell
 # protection covers delete forms the hook reads; see README.md for its limits.
-# Flags must be separate option words in the same command segment as rm.
-# A flag-like operand after --, such as rm -- -f, may still match (fails closed).
+# A flag must be an option word in the same command segment as rm. The match
+# is loose on purpose and fails closed: quotes and backslashes in the word
+# (\-rf, -"rf", $'-rf'), a backslash-newline before it, GNU long-option
+# prefixes (--r, --f), and a flag-like operand after -- (rm -- -f) all match.
 # This is why `rm -rf /`, `rm -r -f /`, `rm --recursive --force /`, and
 # `rm -fR /home` are all caught — bundled, separated, long-form, or uppercase.
 schema_version: 1
@@ -44,7 +46,7 @@ rules:
           value: '(^|[\s;&|(])(\S+/)?rm(\s|$)'
         - field: parameters.command
           operator: regex
-          value: '(^|[\s;&|(])(\S+/)?rm[ \t\r\f]+(([^ \t\r\f\n;&|"''\\]|\\[^\n]|"([^"\\\n]|\\[^\n])*"|''[^''\n]*'')+[ \t\r\f]+)*((-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)|"(-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)"|''(-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)'')([\s;&|)]|$)'
+          value: '(^|[\s;&|(])(\S+/)?rm([ \t\r\f\v]|\\\n)+(([^ \t\r\f\v\n;&|"''\\]|\\[^\n]|"([^"\\\n]|\\[^\n])*"|''[^''\n]*'')+([ \t\r\f\v]|\\\n)+)*(\$?["''\\]*-[a-zA-Z"''\\]*[rR][a-zA-Z"''\\]*|\$?["''\\]*--r[a-z"''\\]*)([\s;&|)]|$)'
         - field: parameters.command
           operator: regex
           value: '(\s|["''=])(/\*?|/(bin|boot|dev|etc|home|lib|lib64|opt|proc|root|sbin|srv|sys|usr|var)/?|\$\{?HOME\}?|~)(\s|["'';&|]|$)'
@@ -63,10 +65,10 @@ rules:
         - or:
             - field: parameters.command
               operator: regex
-              value: '(^|[\s;&|(])(\S+/)?rm[ \t\r\f]+(([^ \t\r\f\n;&|"''\\]|\\[^\n]|"([^"\\\n]|\\[^\n])*"|''[^''\n]*'')+[ \t\r\f]+)*((-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)|"(-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)"|''(-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)'')([\s;&|)]|$)'
+              value: '(^|[\s;&|(])(\S+/)?rm([ \t\r\f\v]|\\\n)+(([^ \t\r\f\v\n;&|"''\\]|\\[^\n]|"([^"\\\n]|\\[^\n])*"|''[^''\n]*'')+([ \t\r\f\v]|\\\n)+)*(\$?["''\\]*-[a-zA-Z"''\\]*[rR][a-zA-Z"''\\]*|\$?["''\\]*--r[a-z"''\\]*)([\s;&|)]|$)'
             - field: parameters.command
               operator: regex
-              value: '(^|[\s;&|(])(\S+/)?rm[ \t\r\f]+(([^ \t\r\f\n;&|"''\\]|\\[^\n]|"([^"\\\n]|\\[^\n])*"|''[^''\n]*'')+[ \t\r\f]+)*((-[a-zA-Z]*f[a-zA-Z]*|--force)|"(-[a-zA-Z]*f[a-zA-Z]*|--force)"|''(-[a-zA-Z]*f[a-zA-Z]*|--force)'')([\s;&|)]|$)'
+              value: '(^|[\s;&|(])(\S+/)?rm([ \t\r\f\v]|\\\n)+(([^ \t\r\f\v\n;&|"''\\]|\\[^\n]|"([^"\\\n]|\\[^\n])*"|''[^''\n]*'')+([ \t\r\f\v]|\\\n)+)*(\$?["''\\]*-[a-zA-Z"''\\]*f[a-zA-Z"''\\]*|\$?["''\\]*--f[a-z"''\\]*)([\s;&|)]|$)'
     effect: escalate
     citation:
       excerpt: "A recursive or forced rm requires manual review before it runs."

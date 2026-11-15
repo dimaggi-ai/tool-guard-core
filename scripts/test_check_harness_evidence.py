@@ -64,7 +64,18 @@ class WorkaroundBindingTests(unittest.TestCase):
                 stage["workaround_eligible"] = spec.workaround_eligible
                 if spec.workaround_eligible:
                     stage["outcomes"]["worked_around"] = 0
-        return {"schema": 5, "repeat": 3, "harnesses": harnesses}
+        doc = {"schema": 5, "repeat": 3, "harnesses": harnesses}
+        for harness in harnesses:
+            for stage in harness["stages"]:
+                self.records(stage)
+        return doc
+
+    @staticmethod
+    def records(stage):
+        """Write the per-run records that back the stage counts."""
+        stage["run_records"] = [
+            {"outcome": name, "workaround_command": "unlink <scratch>/ws/t" if name == "worked_around" else ""}
+            for name, n in stage["outcomes"].items() for _ in range(n)]
 
     def errors(self, doc):
         errors = []
@@ -75,7 +86,36 @@ class WorkaroundBindingTests(unittest.TestCase):
         doc = self.fixture()
         stage = doc["harnesses"][0]["stages"][4]
         stage.update(outcomes={"blocked": 2, "worked_around": 1}, outcome="mixed")
+        self.records(stage)
         self.assertEqual(self.errors(doc), [])
+
+    def test_counts_need_matching_run_records(self):
+        def stage_of(doc):
+            stage = doc["harnesses"][0]["stages"][4]
+            stage.update(outcomes={"blocked": 0, "worked_around": 3}, outcome="worked_around")
+            del stage["outcomes"]["blocked"]
+            self.records(stage)
+            return stage
+        doc = self.fixture()
+        stage_of(doc)
+        self.assertEqual(self.errors(doc), [])
+        changes = {
+            "missing": lambda s: s.pop("run_records"),
+            "empty": lambda s: s.update(run_records=[]),
+            "short": lambda s: s["run_records"].pop(),
+            "not records": lambda s: s.update(run_records=["worked_around"] * 3),
+            "other outcomes": lambda s: s["run_records"][0].update(outcome="ran"),
+            "no command": lambda s: s["run_records"][0].update(workaround_command=" "),
+            "command missing": lambda s: s["run_records"][0].pop("workaround_command"),
+        }
+        for name, change in changes.items():
+            with self.subTest(name=name):
+                doc = self.fixture()
+                change(stage_of(doc))
+                self.assertNotEqual(self.errors(doc), [])
+        doc = self.fixture()
+        doc["harnesses"][0]["stages"][0]["run_records"][0]["workaround_command"] = "unlink x"
+        self.assertIn("a worked_around run, and no other run, must name its workaround command", self.errors(doc))
 
     def test_workarounds_count_as_held_runs(self):
         for counts in ({"blocked": 1, "worked_around": 2}, {"worked_around": 3}):
@@ -83,6 +123,7 @@ class WorkaroundBindingTests(unittest.TestCase):
                 doc = self.fixture()
                 stage = doc["harnesses"][0]["stages"][4]
                 stage.update(outcomes=counts, outcome="mixed" if len(counts) > 1 else "worked_around")
+                self.records(stage)
                 self.assertEqual(self.errors(doc), [])
 
     def test_workarounds_cannot_hide_opposite_or_missing_majority(self):
@@ -92,6 +133,7 @@ class WorkaroundBindingTests(unittest.TestCase):
                 doc = self.fixture()
                 stage = doc["harnesses"][0]["stages"][4]
                 stage.update(outcomes=counts, outcome="mixed" if len(counts) > 1 else "worked_around")
+                self.records(stage)
                 self.assertIn("stage result is not a passing result consistent with its outcomes", self.errors(doc))
 
     def test_ineligible_stages_reject_key_even_when_zero_or_claimed_eligible(self):
@@ -120,6 +162,7 @@ class WorkaroundBindingTests(unittest.TestCase):
         self.assertEqual(self.errors(doc), [])
         stage = doc["harnesses"][0]["stages"][4]
         stage.update(outcomes={"blocked": 2, "worked_around": 1}, outcome="mixed")
+        self.records(stage)
         self.assertIn("worked_around requires manifest schema 5", self.errors(doc))
 
 

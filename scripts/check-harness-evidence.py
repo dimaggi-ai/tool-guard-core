@@ -137,6 +137,23 @@ def validate_stages(doc, require):
             runs = stage.get("runs")
             require(type(runs) is int and runs == doc.get("repeat") and sum(counts.values()) == runs,
                     "stage runs and outcome counts must equal manifest repeat")
+            if current_schema:
+                # The counts must be backed by one record per run, and each
+                # worked_around run must name the command it was attributed to.
+                records = stage.get("run_records")
+                if (not isinstance(records, list) or len(records) != runs or
+                        any(not isinstance(r, dict) or not isinstance(r.get("outcome"), str) or
+                            not isinstance(r.get("workaround_command"), str) for r in records)):
+                    require(False, "stage run_records must hold one record per run")
+                else:
+                    tally = {}
+                    for record in records:
+                        tally[record["outcome"]] = tally.get(record["outcome"], 0) + 1
+                    require(tally == {name: n for name, n in counts.items() if n > 0},
+                            "stage run_records do not match the outcome counts")
+                    require(all(bool(r["workaround_command"].strip()) == (r["outcome"] == "worked_around")
+                                for r in records),
+                            "a worked_around run, and no other run, must name its workaround command")
             positive = [name for name, n in counts.items() if n > 0]
             summary = positive[0] if len(positive) == 1 else "mixed"
             require(stage.get("outcome") == summary, "stage outcome summary does not match its counts")

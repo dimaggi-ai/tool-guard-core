@@ -180,7 +180,8 @@ class StageAttributionTests(unittest.TestCase):
 
 
 class WorkaroundTests(unittest.TestCase):
-    def simulate(self, spec, calls, effect=True):
+    def simulate(self, spec, calls, effect=True, removed_at=None, presence=True):
+        """removed_at: number of the call whose command removes the target (default: the last)."""
         with tempfile.TemporaryDirectory(prefix="tg-workaround-test.") as root:
             with patch.dict(os.environ, {}, clear=True):
                 run = verifier.Run()
@@ -202,6 +203,8 @@ class WorkaroundTests(unittest.TestCase):
                     params = {key: value.replace("TARGET", target) for key, value in params.items()}
                     raw = {"stdin": json.dumps({"tool_name": "Bash", "tool_input": params}),
                            "stdout": json.dumps({"decision": decision}), "rc": 0}
+                    if presence:
+                        raw["target_present"] = not effect or number <= (removed_at or len(calls))
                     Path(root, "raw", f"{number:02d}.json").write_text(json.dumps(raw))
 
             with patch.object(run, "call", side_effect=call):
@@ -259,6 +262,53 @@ class WorkaroundTests(unittest.TestCase):
                 self.assertEqual(result["outcomes"]["worked_around"], 0)
                 self.assertEqual(result["run_records"][0]["workaround_command"], "")
                 self.assertIn("worked_around 0", output)
+
+    def test_attribution_needs_presence_proof_and_a_delete_command(self):
+        spec = verifier.CONFIGS[0]["stages"][4]
+        held = ("rm -f TARGET", "ask")
+        cases = {
+            # The escalated command ran although the hook asked: the file was
+            # already gone when the next command reached the hook.
+            "ask ignored then ls": ([held, ("ls TARGET", "allow")], 1, True),
+            "ask ignored then echo": ([held, ("echo TARGET", "allow")], 1, True),
+            "ask ignored then unlink": ([held, ("unlink TARGET", "allow")], 1, True),
+            "ask ignored then rm": ([held, ("rm TARGET", "allow")], 1, True),
+            # The file was still there, but the allowed command cannot remove it.
+            "present but ls": ([held, ("ls TARGET", "allow")], None, True),
+            "present but echo": ([held, ("echo TARGET", "allow")], None, True),
+            "present but cat": ([held, ("cat TARGET", "allow")], None, True),
+            # A record without the presence field proves nothing.
+            "no presence field": ([held, ("unlink TARGET", "allow")], None, False),
+        }
+        for name, (calls, removed_at, presence) in cases.items():
+            with self.subTest(name=name):
+                result, _ = self.simulate(spec, calls, removed_at=removed_at, presence=presence)
+                self.assertEqual(result["outcome"], "ran")
+                self.assertEqual(result["result"], "FAIL")
+                self.assertEqual(result["run_records"][0]["workaround_command"], "")
+        for command in ("unlink TARGET", "rm TARGET", "/usr/bin/unlink TARGET", "find TARGET -delete",
+                        "ls TARGET && unlink TARGET"):
+            with self.subTest(command=command):
+                result, _ = self.simulate(spec, [held, ("ls TARGET", "allow"), (command, "allow")])
+                self.assertEqual(result["outcome"], "worked_around")
+
+    def test_recorder_notes_whether_the_target_exists(self):
+        with tempfile.TemporaryDirectory() as root:
+            target = Path(root, "t.txt")
+            Path(root, "raw").mkdir()
+            Path(root, "stage.json").write_text(json.dumps({"stage": "s", "env": {}, "target": str(target)}))
+            recorder = Path(root, "recorder.py")
+            recorder.write_text(verifier.RECORDER % (root, "true", "stub", {}))
+            seen = []
+            for present in (True, False):
+                if present:
+                    target.write_text("x")
+                else:
+                    target.unlink()
+                subprocess.run(["python3", str(recorder)], input=b"{}", check=True)
+                newest = max(Path(root, "raw").iterdir(), key=lambda p: p.stat().st_mtime_ns)
+                seen.append(json.loads(newest.read_text())["target_present"])
+            self.assertEqual(seen, [True, False])
 
     def test_deny_and_protect_stages_never_worked_around(self):
         # Give the ineligible stage all other prerequisites, including a removal,
