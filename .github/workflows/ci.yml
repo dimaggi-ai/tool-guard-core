@@ -91,6 +91,13 @@ jobs:
       - name: Integration tests
         run: go test -race -count=1 -tags=integration ./cmd/tg/... ./cmd/tg-proxy/...
 
+      # The PostgreSQL parse-tree walker (and its protobuf dependency) builds
+      # only under the opt-in pg_strict tag, so the default test run above
+      # never compiles it.
+      - name: PostgreSQL strict parser tests
+        if: matrix.os == 'ubuntu-latest'
+        run: go test -race -count=1 -tags=pg_strict ./pkg/sqlguard/postgres
+
       - name: Exported Go API matches reviewed baseline
         if: matrix.os == 'ubuntu-latest'
         run: ./scripts/check-api.sh
