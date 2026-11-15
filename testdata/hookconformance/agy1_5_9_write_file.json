@@ -1,0 +1,44 @@
+{
+  "name": "agy1_5_9_write_file",
+  "description": "Antigravity CLI 1.5.9 (`agy --version`: 1.5.9) write_file call captured from a real install with a capture-only hook. The replay expects allow. Envelope and parameter fields match the 1.5.4 capture.",
+  "harness": "antigravity-cli",
+  "harness_version": "1.5.9",
+  "capture": {
+    "captured_from": "real install",
+    "captured_on": "2026-11-15",
+    "sanitisation": "conversation and call ids replaced with cap-* markers; directories collapsed to /cap and model names replaced with cap-model; tool names, parameter names and casing preserved exactly as emitted"
+  },
+  "payload": {
+    "artifactDirectoryPath": "/cap/brain",
+    "conversationId": "cap-conv",
+    "cwd": "/cap",
+    "hookEventName": "PreToolUse",
+    "lastUserInput": "Perform these three actions in this workspace: use run_command to run echo probe; use native write_file to create captured.txt containing capture-probe; use native read_file to read note.txt. Do not use a shell for the file write or read. Do not do anything else.",
+    "modelName": "cap-model",
+    "stepIdx": 3,
+    "toolCall": {
+      "args": {
+        "Content": "capture-probe",
+        "Overwrite": true,
+        "Path": "/cap/captured.txt"
+      },
+      "id": "cap-call",
+      "name": "write_file"
+    },
+    "transcriptPath": "/cap/transcript.jsonl",
+    "workspacePaths": [
+      "/cap"
+    ]
+  },
+  "hook_args": [
+    "-policy-dir",
+    "POLICIES",
+    "-mode",
+    "enforcement"
+  ],
+  "expect": {
+    "decision": "allow",
+    "cites": ""
+  },
+  "output_dialect": "antigravity"
+}
