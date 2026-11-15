@@ -351,18 +351,24 @@ A `gh_read` rule can only match or not match, and an unmatched Bash command
 returns allow from `tg hook`. On its own, a hook allow skips the client's
 permission prompt. With `-dispatch gh_read`, `tg hook` first applies
 protected paths and every loaded enforcing rule. If they allow a Bash call,
-the hook classifies the complete command into one of three outcomes:
+the hook classifies every distinct command alias value. Every value must be
+a verified read for the hook to allow. If any value is unverified, the hook
+asks. Otherwise, if any value is proven unrelated, the hook returns no
+permission decision for Claude and asks for other dialects. Missing or
+non-string commands and truncated alias variants ask:
 
 | Outcome | Commands | Hook output |
 |---|---|---|
 | Verified read | Every segment is a supported gh read, the `jq .title` helper or a proven unrelated segment, and at least one is a read or the helper. A command with only the helper, such as `jq .title`, is a verified read. | `allow` |
-| Proven unrelated | Every segment is the bare program `pwd` (no arguments, `-L` or `-P`) or `ls` with literal words only | No permission decision, so the client's own permission rules apply |
+| Proven unrelated | Every segment is the bare program `pwd` (no arguments, `-L` or `-P`) or `ls` with literal words only | Claude: no permission decision, so the client's own permission rules apply. Other dialects: `ask`. |
 | Unverified | Everything else, including a missing command | `ask` |
 
 Proven unrelated segments must have no redirection, expansion, substitution,
 glob, tilde, backslash, assignment or gh mention. Other Bash commands ask, so
-dispatch alone does not reduce prompts for them. Tools other than Bash keep the
-engine decision.
+dispatch alone does not reduce prompts for them. Dispatch asks obey
+`-escalate-as`: `deny` returns a denial instead of a prompt, and an invalid
+value is treated as `deny`. Tools other than Bash keep the engine decision,
+subject to the same escalation setting.
 
 Load the dispatcher without a broad rule that escalates gh commands. Escalate
 outranks allow, so such a rule still asks for every verified read.
@@ -375,10 +381,9 @@ with the dispatch reason; an ask is recorded as escalated. The hook evaluates
 in a child process of the same binary. The parent denies unless stdin closes
 and the child finishes within 10 seconds in total, exits 0 and writes exactly
 one well-formed PreToolUse object: string values only, no duplicate or unknown
-keys. An object without a decision writes nothing. Denials by the parent
-itself, and denials before the tool call is parsed (flag, configuration or
-input errors) or after an internal failure outside policy evaluation, are not
-written to the audit log. The parent itself can still be stopped by
+keys in the selected dialect. Only Claude can omit the permission decision;
+other dialects ask for proven unrelated commands. Denials by the parent
+itself are not written to the audit log. The parent itself can still be stopped by
 the client's own hook timeout or a signal; how the client treats that is
 outside this hook and must be tested with the actual client.
 
@@ -534,7 +539,7 @@ conditions:
 
 `not:` may wrap a leaf condition (as above) but **not** a classifier
 (`sql_classify` / `path_classify` / `shell_classify` / `command_classify` / `llm_classify` /
-`write_classify` / `http_classify`).
+`write_classify` / `http_classify` / `secret_classify`).
 Classifiers are fail-closed - they fire on malformed or adversarial input
 so a deny rule trips - and negating one inverts that into fail-OPEN.
 `ValidatePolicy` rejects any classifier under a `not:` node; express the
@@ -636,3 +641,46 @@ refuse:
 
 A policy that fails any of these gates is rejected at load; the
 previously loaded policy set stays live.
+
+
+## Secret classification
+
+`secret_classify` scans a field using the pinned gitleaks rules. It applies
+case-insensitive keyword checks, regex capture groups, Shannon entropy
+thresholds, global and rule allowlist regexes, and stopwords. Rule data comes
+from `third_party/gitleaks/gitleaks.toml`; regenerate it with
+`python3 scripts/gen-secret-formats.py`. Use `--check` to detect drift.
+
+```yaml
+conditions:
+  secret_classify:
+    field: parameters.command
+    classes: [provider]
+    max_bytes: 65536
+```
+
+`classes` must contain `provider`, `generic`, or both. `generic` is the
+`generic-api-key` rule; all other text rules are `provider`. These classes
+select findings, not effects. Use a separate low-severity `flag` rule for
+`generic` when a generic assignment needs review rather than denial.
+`exclude_rules` can list pinned rule IDs to omit from this condition.
+
+The default scan limit is 65,536 bytes. `max_bytes` accepts 0 for the default
+or 1 through 1,048,576. Bytes after the limit are not scanned. Successful scan diagnostics
+include `scanned_bytes`, `truncated`, and matched rule IDs, without captured
+values. Truncation alone does not match the condition. Logical conditions
+short-circuit, so a leaf that is not reached produces no diagnostic.
+
+Missing fields, nulls, scalar values other than strings, and invalid
+configuration match the condition. Guard optional fields with an `exists`
+condition in an `and` node. Arrays and objects are serialized as JSON before
+scanning; the byte cap applies to that serialization, not its memory cost.
+The condition cannot appear under `not`.
+
+This is text-only detection. Path-dependent rules do not run; path allowlists
+cannot suppress a match. Inline gitleaks suppression comments are ignored.
+The scanner does not decode values or join shell variables. It does not
+redact tool parameters or audit records. A generic finding contained in a
+provider finding on the same line is suppressed, as in gitleaks v8.30.1.
+Class selection and `exclude_rules` apply after this suppression. Excluding
+a provider rule does not restore a generic finding that it suppressed.

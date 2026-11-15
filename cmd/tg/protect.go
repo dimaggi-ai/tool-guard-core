@@ -613,7 +613,7 @@ func claudeHookArgs(p protectPaths) []string {
 	for _, path := range []string{p.config, p.backup, p.state, filepath.Dir(p.audit)} {
 		args = append(args, "-protect-path", path)
 	}
-	return append(args, "-protect-self", "-fail-closed-tools", "bash,write,edit,notebookedit", "-audit-log", p.audit)
+	return append(args, "-protect-self", "-fail-closed-tools", "bash,powershell,write,edit,notebookedit", "-audit-log", p.audit)
 }
 
 func validPolicyFile(path string) bool {

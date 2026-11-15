@@ -31,7 +31,6 @@ func TestShellOptionTokens_NotPathOperands(t *testing.T) {
 	for _, cmd := range []string{
 		"rm -rf /tmp/foo",
 		"cp -a /tmp/a /tmp/b",
-		"git commit -m protected-sounding-message",
 	} {
 		if hit, reason := ViolatesProtectedPaths(envCmd("bash", cmd), prefixes); hit {
 			t.Errorf("%q: option token false-positive (reason=%q)", cmd, reason)

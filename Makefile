@@ -5,6 +5,8 @@
 
 GO      ?= go
 BIN     ?= bin
+TG      ?= $(BIN)/tg
+HARNESS_MANIFEST ?= docs/evidence/harness-manifest.json
 PKGS    := ./pkg/... ./cmd/... ./api/... ./examples/mcp-server
 
 .DEFAULT_GOAL := help
@@ -20,6 +22,16 @@ build: ## Build all binaries into ./bin (tg, tg-proxy, battle-test, example-chai
 	CGO_ENABLED=0 $(GO) build -o $(BIN)/tg-proxy ./cmd/tg-proxy
 	CGO_ENABLED=0 $(GO) build -o $(BIN)/battle-test ./cmd/battle-test
 	CGO_ENABLED=0 $(GO) build -o $(BIN)/example-chain ./cmd/example-chain
+
+.PHONY: verify-harnesses
+verify-harnesses: ## Maintainer check: run the shipped hooks against the installed coding agents (paid model calls)
+	@mkdir -p $(BIN)
+	CGO_ENABLED=0 $(GO) build -trimpath -o $(BIN)/tg ./cmd/tg
+	TG=$(CURDIR)/$(BIN)/tg TG_VERIFY_RELEASE=1 TG_VERIFY_REPEAT=3 TG_VERIFY_REQUIRE=claude,codex,agy ./examples/coding-agent-guard/verify-harnesses.sh
+
+.PHONY: release-binding
+release-binding: ## Bind harness evidence to this release and the original measured binary (no model calls)
+	python3 scripts/check-harness-evidence.py --tg "$(TG)" --manifest "$(HARNESS_MANIFEST)"
 
 .PHONY: sample
 sample: build ## Run the hand-coded sample app (refund-tool + tg-proxy + Go agent)

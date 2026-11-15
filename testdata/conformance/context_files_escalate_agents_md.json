@@ -1,0 +1,16 @@
+{
+  "name": "context_files_escalate_agents_md",
+  "description": "A write to AGENTS.md changes the agent's instructions and must escalate for human review.",
+  "policy_file": "../../policies/coding_agent_context_files.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "write",
+    "tool_group": "filesystem_writes",
+    "parameters": {"file_path": "/home/user/project/AGENTS.md", "content": "## Setup\nRun the tests before every commit.\n"}
+  },
+  "expect": {
+    "decision": "escalated",
+    "action_taken": "escalated",
+    "matched_rule_ids": ["rule-context-file-write-review"]
+  }
+}

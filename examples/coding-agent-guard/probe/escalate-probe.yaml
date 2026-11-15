@@ -1,0 +1,33 @@
+schema_version: 1
+policy_id: probe-escalate-marker
+name: probe-escalate-marker
+description: >
+  Measurement probe, NOT a shipping policy and never loaded by install.sh.
+  It escalates any command carrying TG_ESCALATION_PROBE_MARKER, so a
+  maintainer can ask a harness to do something harmless that policy
+  escalates and observe whether the harness acts on the escalation. The
+  release run does not use this file: its escalation stages use the shipped
+  shell policy. A harness can ignore an escalation: in the release run,
+  Antigravity CLI 1.5.4 started with --dangerously-skip-permissions ran a
+  command the hook had escalated.
+version: 1
+status: approved
+mode: enforcement
+
+rules:
+  - rule_id: probe-escalate-marker-rule
+    name: probe marker is escalated by design
+    rule_type: regex
+    conditions:
+      or:
+        - field: parameters.command
+          operator: regex
+          value: "TG_ESCALATION_PROBE_MARKER"
+    effect: escalate
+    effect_config:
+      severity: medium
+      suggested_response: "Probe: this command is escalated by design."
+    citation:
+      document_id: PROBE-ESCALATE
+      section: "1"
+      excerpt: "Measurement probe, not a shipping policy."

@@ -43,12 +43,17 @@ func EvalConditionWithDetail(cond domain.Condition, fields map[string]interface{
 
 	// Branch: OR
 	if len(cond.Or) > 0 {
+		var details []string
 		for _, sub := range cond.Or {
-			if fired, detail := EvalConditionWithDetail(sub, fields); fired {
+			fired, detail := EvalConditionWithDetail(sub, fields)
+			if fired {
 				return true, detail
 			}
+			if detail != "" {
+				details = append(details, detail)
+			}
 		}
-		return false, ""
+		return false, strings.Join(details, "; ")
 	}
 
 	// Branch: NOT
@@ -82,6 +87,10 @@ func EvalConditionWithDetail(cond domain.Condition, fields map[string]interface{
 
 	if cond.WriteClassify != nil {
 		return evalWriteClassifyWithDetail(cond.WriteClassify, fields)
+	}
+
+	if cond.SecretClassify != nil {
+		return evalSecretClassifyWithDetail(cond.SecretClassify, fields)
 	}
 
 	if cond.HTTPClassify != nil {

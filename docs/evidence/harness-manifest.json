@@ -1,0 +1,384 @@
+{
+  "schema": 4,
+  "generated_at": "2026-11-10T15:18:00Z",
+  "commit": "24eafd647ce3fabebe0837df540340ed31b30829",
+  "working_tree_dirty": false,
+  "tg_sha256": "fa2308b9f1fb1e67367a4371633dfc09fa36d5586e4d8c0d45154dfbf1956e45",
+  "tg_build_trimpath": true,
+  "wiring_sha256": "0222a7e55e5a685827c9f2d5701e0eb683740279282d94f27b57df1eb71122fa",
+  "policy_dir_is_shipped": true,
+  "harness_filter": "all",
+  "repeat": 3,
+  "signin_mode": "link",
+  "retention": "Kept: manifest.json, results.txt, reduced hook records, filtered harness output. Not kept: harness homes, sign-in files, session files, raw hook payloads.",
+  "failures": 0,
+  "harnesses": [
+    {
+      "id": "claude-code",
+      "configuration": "claude -p",
+      "installed": true,
+      "version": "2.1.321 (Claude Code)",
+      "version_number": "2.1.321",
+      "stages": [
+        {
+          "id": "shell_deny",
+          "expect": "blocked",
+          "wanted_decision": "deny",
+          "decision": "deny",
+          "tool": "Bash",
+          "hook_calls": 1,
+          "runs": 3,
+          "outcomes": {
+            "blocked": 3
+          },
+          "outcome": "blocked",
+          "result": "PASS"
+        },
+        {
+          "id": "shell_allow_control",
+          "expect": "ran",
+          "wanted_decision": "allow",
+          "decision": "allow",
+          "tool": "Bash",
+          "hook_calls": 1,
+          "runs": 3,
+          "outcomes": {
+            "ran": 3
+          },
+          "outcome": "ran",
+          "result": "PASS"
+        },
+        {
+          "id": "write_tool_deny",
+          "expect": "blocked",
+          "wanted_decision": "deny",
+          "decision": "deny",
+          "tool": "Write",
+          "hook_calls": 1,
+          "runs": 3,
+          "outcomes": {
+            "blocked": 3
+          },
+          "outcome": "blocked",
+          "result": "PASS"
+        },
+        {
+          "id": "write_tool_allow_control",
+          "expect": "ran",
+          "wanted_decision": "allow",
+          "decision": "allow",
+          "tool": "Write",
+          "hook_calls": 1,
+          "runs": 3,
+          "outcomes": {
+            "ran": 3
+          },
+          "outcome": "ran",
+          "result": "PASS"
+        },
+        {
+          "id": "escalation_shell",
+          "expect": "blocked",
+          "wanted_decision": "ask",
+          "decision": "ask",
+          "tool": "Bash",
+          "hook_calls": 1,
+          "runs": 3,
+          "outcomes": {
+            "blocked": 3
+          },
+          "outcome": "blocked",
+          "result": "PASS"
+        },
+        {
+          "id": "escalation_write_tool",
+          "expect": "blocked",
+          "wanted_decision": "ask",
+          "decision": "ask",
+          "tool": "Write",
+          "hook_calls": 1,
+          "runs": 3,
+          "outcomes": {
+            "blocked": 3
+          },
+          "outcome": "blocked",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "id": "codex-cli",
+      "configuration": "codex exec, hook not trusted",
+      "installed": true,
+      "version": "codex-cli 0.166.0",
+      "version_number": "0.166.0",
+      "stages": [
+        {
+          "id": "untrusted_hook",
+          "expect": "measure",
+          "wanted_decision": "deny",
+          "decision": "",
+          "tool": "",
+          "hook_calls": 0,
+          "runs": 3,
+          "outcomes": {
+            "ran_without_hook": 3
+          },
+          "outcome": "ran_without_hook",
+          "result": "MEASURED"
+        }
+      ]
+    },
+    {
+      "id": "codex-cli",
+      "configuration": "codex exec",
+      "installed": true,
+      "version": "codex-cli 0.166.0",
+      "version_number": "0.166.0",
+      "stages": [
+        {
+          "id": "shell_deny",
+          "expect": "blocked",
+          "wanted_decision": "deny",
+          "decision": "deny",
+          "tool": "Bash",
+          "hook_calls": 1,
+          "runs": 3,
+          "outcomes": {
+            "blocked": 3
+          },
+          "outcome": "blocked",
+          "result": "PASS"
+        },
+        {
+          "id": "shell_allow_control",
+          "expect": "ran",
+          "wanted_decision": "allow",
+          "decision": "allow",
+          "tool": "Bash",
+          "hook_calls": 1,
+          "runs": 3,
+          "outcomes": {
+            "ran": 3
+          },
+          "outcome": "ran",
+          "result": "PASS"
+        },
+        {
+          "id": "write_tool_deny",
+          "expect": "measure",
+          "wanted_decision": "deny",
+          "decision": "deny",
+          "tool": "apply_patch",
+          "hook_calls": 2,
+          "runs": 3,
+          "outcomes": {
+            "blocked": 3
+          },
+          "outcome": "blocked",
+          "result": "MEASURED"
+        },
+        {
+          "id": "write_tool_allow_control",
+          "expect": "measure",
+          "wanted_decision": "allow",
+          "decision": "deny",
+          "tool": "apply_patch",
+          "hook_calls": 2,
+          "runs": 3,
+          "outcomes": {
+            "not_measured": 3
+          },
+          "outcome": "not_measured",
+          "result": "MEASURED"
+        },
+        {
+          "id": "escalation_shell",
+          "expect": "blocked",
+          "wanted_decision": "deny",
+          "decision": "deny",
+          "tool": "Bash",
+          "hook_calls": 1,
+          "runs": 3,
+          "outcomes": {
+            "blocked": 3
+          },
+          "outcome": "blocked",
+          "result": "PASS"
+        },
+        {
+          "id": "escalation_shell_raw_ask",
+          "expect": "measure",
+          "wanted_decision": "ask",
+          "decision": "ask",
+          "tool": "Bash",
+          "hook_calls": 1,
+          "runs": 3,
+          "outcomes": {
+            "blocked": 3
+          },
+          "outcome": "blocked",
+          "result": "MEASURED"
+        }
+      ]
+    },
+    {
+      "id": "antigravity-cli",
+      "configuration": "agy --dangerously-skip-permissions --print",
+      "installed": true,
+      "version": "1.5.4",
+      "version_number": "1.5.4",
+      "stages": [
+        {
+          "id": "shell_deny",
+          "expect": "blocked",
+          "wanted_decision": "deny",
+          "decision": "deny",
+          "tool": "run_command",
+          "hook_calls": 1,
+          "runs": 3,
+          "outcomes": {
+            "blocked": 3
+          },
+          "outcome": "blocked",
+          "result": "PASS"
+        },
+        {
+          "id": "shell_allow_control",
+          "expect": "ran",
+          "wanted_decision": "allow",
+          "decision": "allow",
+          "tool": "run_command",
+          "hook_calls": 1,
+          "runs": 3,
+          "outcomes": {
+            "ran": 3
+          },
+          "outcome": "ran",
+          "result": "PASS"
+        },
+        {
+          "id": "write_tool_deny",
+          "expect": "blocked",
+          "wanted_decision": "deny",
+          "decision": "deny",
+          "tool": "write_file",
+          "hook_calls": 1,
+          "runs": 3,
+          "outcomes": {
+            "blocked": 3
+          },
+          "outcome": "blocked",
+          "result": "PASS"
+        },
+        {
+          "id": "write_tool_allow_control",
+          "expect": "ran",
+          "wanted_decision": "allow",
+          "decision": "allow",
+          "tool": "write_file",
+          "hook_calls": 1,
+          "runs": 3,
+          "outcomes": {
+            "ran": 3
+          },
+          "outcome": "ran",
+          "result": "PASS"
+        },
+        {
+          "id": "escalation_shell",
+          "expect": "measure",
+          "wanted_decision": "force_ask",
+          "decision": "force_ask",
+          "tool": "run_command",
+          "hook_calls": 1,
+          "runs": 3,
+          "outcomes": {
+            "ran": 3
+          },
+          "outcome": "ran",
+          "result": "MEASURED"
+        },
+        {
+          "id": "escalation_shell_plain_ask",
+          "expect": "measure",
+          "wanted_decision": "ask",
+          "decision": "ask",
+          "tool": "run_command",
+          "hook_calls": 1,
+          "runs": 3,
+          "outcomes": {
+            "ran": 3
+          },
+          "outcome": "ran",
+          "result": "MEASURED"
+        },
+        {
+          "id": "escalation_shell_as_deny",
+          "expect": "blocked",
+          "wanted_decision": "deny",
+          "decision": "deny",
+          "tool": "run_command",
+          "hook_calls": 1,
+          "runs": 3,
+          "outcomes": {
+            "blocked": 3
+          },
+          "outcome": "blocked",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "id": "antigravity-cli",
+      "configuration": "agy --print",
+      "installed": true,
+      "version": "1.5.4",
+      "version_number": "1.5.4",
+      "stages": [
+        {
+          "id": "shell_allow_control",
+          "expect": "measure",
+          "wanted_decision": "allow",
+          "decision": "allow",
+          "tool": "run_command",
+          "hook_calls": 1,
+          "runs": 3,
+          "outcomes": {
+            "blocked": 3
+          },
+          "outcome": "blocked",
+          "result": "MEASURED"
+        },
+        {
+          "id": "write_tool_allow_control",
+          "expect": "measure",
+          "wanted_decision": "allow",
+          "decision": "allow",
+          "tool": "write_file",
+          "hook_calls": 1,
+          "runs": 3,
+          "outcomes": {
+            "blocked": 3
+          },
+          "outcome": "blocked",
+          "result": "MEASURED"
+        },
+        {
+          "id": "escalation_shell",
+          "expect": "measure",
+          "wanted_decision": "force_ask",
+          "decision": "force_ask",
+          "tool": "run_command",
+          "hook_calls": 1,
+          "runs": 3,
+          "outcomes": {
+            "blocked": 3
+          },
+          "outcome": "blocked",
+          "result": "MEASURED"
+        }
+      ]
+    }
+  ]
+}

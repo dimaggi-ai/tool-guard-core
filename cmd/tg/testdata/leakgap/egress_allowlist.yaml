@@ -1,0 +1,29 @@
+# Contract fixture for TestAuditRecordOmitsSecretFromDeniedEgressRuleDetails (T1).
+# An egress allow-list: any destination outside it, and any URL the classifier
+# cannot parse, is denied. The deny path is where http_classify writes the raw
+# URL into RuleResult.Details.
+schema_version: 1
+policy_id: leakgap-egress-allowlist
+name: leakgap-egress-allowlist
+version: 1
+status: approved
+mode: enforcement
+scope:
+  tool_names: [http, fetch, webfetch]
+  tool_groups: [network_egress]
+rules:
+  - rule_id: rule-egress-allowlist
+    name: outbound HTTP only to approved hosts over https
+    rule_type: http
+    conditions:
+      http_classify:
+        require:
+          allowed_hosts: [api.internal, .githubusercontent.com]
+          allowed_schemes: [https]
+    effect: deny
+    effect_config:
+      severity: high
+      suggested_response: "Egress blocked: destination is not on the approved list."
+    citation:
+      document_id: LEAKGAP-T1
+      excerpt: "Agent HTTP egress is limited to approved hosts."

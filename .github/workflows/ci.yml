@@ -19,7 +19,7 @@ jobs:
           - macos-latest
           - windows-latest
         go:
-          - "1.26.10"
+          - "1.26.11"
     # windows-latest's default shell is pwsh, not bash — the gofmt and
     # coverage-threshold steps below use bash syntax ($(...), [ -n ... ],
     # multi-line awk) that pwsh can't parse. Force bash everywhere (a no-op
@@ -30,7 +30,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # TestPolicyCompatCoverage needs the release tags (and their tree
           # objects, for git ls-tree/show) to assert every tag has a policy
@@ -91,6 +91,13 @@ jobs:
       - name: Integration tests
         run: go test -race -count=1 -tags=integration ./cmd/tg/... ./cmd/tg-proxy/...
 
+      # The PostgreSQL parse-tree walker (and its protobuf dependency) builds
+      # only under the opt-in pg_strict tag, so the default test run above
+      # never compiles it.
+      - name: PostgreSQL strict parser tests
+        if: matrix.os == 'ubuntu-latest'
+        run: go test -race -count=1 -tags=pg_strict ./pkg/sqlguard/postgres
+
       - name: Exported Go API matches reviewed baseline
         if: matrix.os == 'ubuntu-latest'
         run: ./scripts/check-api.sh
@@ -117,10 +124,10 @@ jobs:
           - "3.10"
           - "3.12"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26.10"
+          go-version: "1.26.11"
           cache: true
       - uses: actions/setup-python@v5
         with:
@@ -156,10 +163,10 @@ jobs:
     name: govulncheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26.10"
+          go-version: "1.26.11"
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
       - name: Run govulncheck
@@ -169,10 +176,10 @@ jobs:
     name: examples build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26.10"
+          go-version: "1.26.11"
           cache: true
       - name: Build all binaries (main + examples)
         run: |
@@ -214,17 +221,31 @@ jobs:
             fi
             echo "OK: $p"
           done
+      - name: Generated secret formats match third_party/gitleaks
+        run: python3 scripts/gen-secret-formats.py --check
+      # secret_classify must agree with the pinned upstream detector. The test
+      # skips without TG_GITLEAKS_BIN, so fetch the pinned release and check
+      # its published SHA-256 before running it.
+      - name: secret_classify agrees with gitleaks 8.30.1
+        run: |
+          gl_dir="${RUNNER_TEMP}/gitleaks"
+          mkdir -p "$gl_dir"
+          curl -fsSL -o "$gl_dir/gitleaks.tar.gz" \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  $gl_dir/gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf "$gl_dir/gitleaks.tar.gz" -C "$gl_dir" gitleaks
+          TG_GITLEAKS_BIN="$gl_dir/gitleaks" go test -count=1 -timeout 20m -run '^TestSecretDifferentialGitleaks$' -v ./pkg/engine
 
   goreleaser-validate:
     name: goreleaser config check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26.10"
+          go-version: "1.26.11"
       - name: Validate .goreleaser.yaml
         uses: goreleaser/goreleaser-action@v6
         with:
@@ -248,12 +269,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 75
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.26.10"
+          go-version: "1.26.11"
       - name: Install pinned GoReleaser
         uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
         with:

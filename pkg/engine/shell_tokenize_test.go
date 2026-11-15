@@ -232,7 +232,7 @@ func TestShellTouchesProtected_Adversarial(t *testing.T) {
 		{"echo redirect unprotected", "echo hello > /tmp/out.txt"},
 		// Input-redirect operand is read, not written: only the (unprotected)
 		// tee target is a write, so this must not fire on the protected input.
-		{"input redirect not a write", "tee /tmp/out < /protected/in"},
+		{"input redirect not a write", "cat < /protected/in > /tmp/out"},
 	}
 	for _, c := range nofire {
 		t.Run("nofire/"+c.name, func(t *testing.T) { mustNotFire(t, c.cmd) })
@@ -323,14 +323,20 @@ func TestShellTouchesProtected_HardeningEvasions(t *testing.T) {
 		{"assignment prefix + redirect", "FOO=bar echo x > /protected/f"},
 		{"ansi-c encoded path fails closed", `rm $'\x2fprotected\x2ff'`},
 		{"locale-quoted path fails closed", `rm $"/protected/f"`},
+		// Name rule: an assignment before a read-only program.
+		{"assignment + ls names protected", "FOO=bar ls /protected"},
+		{"assignment + cat names protected", "LANG=C cat /protected/policy.yaml"},
+		{"assignment from a substitution names protected", "x=$(ls /protected)"},
 	}
 	for _, c := range fire {
 		t.Run("fire/"+c.name, func(t *testing.T) { mustFire(t, c.cmd) })
 	}
 	nofire := []struct{ name, cmd string }{
-		// Assignment prefix in front of a non-mutating command must not fire.
-		{"assignment + ls not mutating", "FOO=bar ls /protected"},
-		{"assignment + cat read", "LANG=C cat /protected/policy.yaml"},
+		// An assignment in front of a read-only command fires when the text
+		// names a protected path (name rule: PATH=/x cat F runs another cat).
+		// Without such a name it does not.
+		{"assignment + ls, no protected name", "FOO=bar ls /tmp/x"},
+		{"assignment + cat, no protected name", "LANG=C cat /tmp/policy.yaml"},
 	}
 	for _, c := range nofire {
 		t.Run("nofire/"+c.name, func(t *testing.T) { mustNotFire(t, c.cmd) })
@@ -371,7 +377,8 @@ func TestShellTouchesProtected_ReviewRegressions(t *testing.T) {
 		// F3 precision: a substitution that only READS must not fire.
 		{"F3 read-only subst", "echo $(cat /protected/secret)"},
 		{"F3 benign subst", "echo $(date)"},
-		{"F3 assignment read", "x=$(ls /protected)"},
+		{"F3 assignment read", "x=$(ls /tmp/x)"},
+		{"F3 substitution read", "echo $(ls /protected)"},
 		// F2 precision: -t as a bare flag (path is next word, unprotected).
 		{"F2 -t unprotected", "cp -t /tmp secret.txt"},
 		// F3 precision: a substitution inside SINGLE quotes is literal, never

@@ -112,7 +112,7 @@ func TestProtectCleanProfileActivation(t *testing.T) {
 			"-protect-path", state.ConfigPath + ".tool-guard-state.json",
 			"-protect-path", filepath.Dir(state.AuditPath),
 			"-protect-self",
-			"-fail-closed-tools", "bash,write,edit,notebookedit",
+			"-fail-closed-tools", "bash,powershell,write,edit,notebookedit",
 			"-audit-log", state.AuditPath,
 		}
 		assertCleanProfileArgs(t, state.Args, expectedArgs)

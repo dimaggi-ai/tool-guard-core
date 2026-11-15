@@ -26,7 +26,7 @@ jobs:
             exit 1
           fi
       - name: Checkout (with tags)
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - name: Resolve release state
@@ -56,6 +56,8 @@ jobs:
             "${GITHUB_SHA}" origin/main "${GITHUB_REF_NAME}" \
             "${GITHUB_RUN_ATTEMPT}" "${{ steps.release-state.outputs.state }}" \
             refs/remotes/origin/release-preflight-tag
+      - name: Bind harness evidence to release source
+        run: python3 scripts/check-harness-evidence.py --source-only
 
   # Execute the exact workflow used as the merge gate at this tag. Keeping
   # verification in ci.yml means tag releases cannot silently omit a race,
@@ -72,7 +74,7 @@ jobs:
     needs: verify
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # setuptools-scm derives the SDK version from the release tag.
           fetch-depth: 0
@@ -137,7 +139,7 @@ jobs:
               ;;
           esac
       - name: Checkout (with tags)
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -146,17 +148,17 @@ jobs:
         with:
           # Keep in lockstep with go.mod and ci.yml — a release built on a
           # different toolchain than CI tested is untested code.
-          go-version: "1.26.10"
+          go-version: "1.26.11"
           cache: true
 
       - name: Set up QEMU (for cross-arch container builds)
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
@@ -271,7 +273,7 @@ jobs:
       id-token: write
     steps:
       - name: Checkout release verification code
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # SHA-pinned because this job can mint a PyPI OIDC token.
@@ -309,7 +311,7 @@ jobs:
       GH_REPO: ${{ github.repository }}
     steps:
       - name: Checkout release verification code
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Download the exact Python distributions sent to PyPI

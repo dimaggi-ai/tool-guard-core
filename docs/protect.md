@@ -26,7 +26,7 @@ hook -policy <absolute-policy> -agent-id tool-guard-claude \
   -protect-path <absolute-managed-state> \
   -protect-path <absolute-audit-directory> \
   -protect-self \
-  -fail-closed-tools bash,write,edit,notebookedit \
+  -fail-closed-tools bash,powershell,write,edit,notebookedit \
   -audit-log <absolute-audit-log>
 ```
 

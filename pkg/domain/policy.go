@@ -219,6 +219,8 @@ type Condition struct {
 	// (http/fetch): the destination host, scheme, port, and method. A
 	// COVERAGE rule for the egress surface. Returning true = "rule fires".
 	HTTPClassify *HTTPClassify `json:"http_classify,omitempty"`
+
+	SecretClassify *SecretClassify `json:"secret_classify,omitempty"`
 }
 
 // SQLClassify is the per-rule config for a SQL-aware leaf condition.
@@ -439,7 +441,7 @@ type ShellRequire struct {
 // or a sql/path/shell/llm/write/http classify leaf).
 func (c *Condition) IsLeaf() bool {
 	return c.CommandClassify != nil || c.SQLClassify != nil || c.PathClassify != nil || c.ShellClassify != nil ||
-		c.LLMClassify != nil || c.WriteClassify != nil || c.HTTPClassify != nil ||
+		c.LLMClassify != nil || c.WriteClassify != nil || c.HTTPClassify != nil || c.SecretClassify != nil ||
 		(c.Field != "" && c.Operator != "")
 }
 
@@ -594,4 +596,14 @@ type Citation struct {
 	Page          int    `json:"page,omitempty"`
 	Line          int    `json:"line,omitempty"`
 	Excerpt       string `json:"excerpt"`
+}
+
+// SecretClassify scans text for the pinned gitleaks formats. Classes selects
+// provider or generic findings. Missing fields and invalid types fail closed.
+// Arrays and objects are scanned as JSON, for structured edit parameters.
+type SecretClassify struct {
+	Field        string   `json:"field"`
+	Classes      []string `json:"classes"`
+	MaxBytes     int      `json:"max_bytes,omitempty"`
+	ExcludeRules []string `json:"exclude_rules,omitempty"`
 }

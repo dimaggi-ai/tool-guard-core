@@ -1,0 +1,41 @@
+{
+  "name": "agy_write_context_file",
+  "description": "Antigravity CLI write_file at an agent instruction file. The escalation is emitted as force_ask, the stricter of the two approval values this harness reads. docs/support-matrix.md holds what the harness did with each value in the release run.",
+  "harness": "antigravity-cli",
+  "harness_version": "1.5.3",
+  "capture": {
+    "captured_from": "real install",
+    "captured_on": "2026-11-09",
+    "sanitisation": "session ids, transcript paths, model names and tool_use ids replaced with cap-* placeholders; tool names and parameter names and their casing are exactly as emitted"
+  },
+  "payload": {
+    "artifactDirectoryPath": "/cap/brain",
+    "conversationId": "cap-conv",
+    "lastUserInput": "capture probe",
+    "modelName": "cap-model",
+    "stepIdx": 2,
+    "toolCall": {
+      "name": "write_file",
+      "args": {
+        "Content": "package main",
+        "Overwrite": true,
+        "Path": "/cap/AGENTS.md"
+      }
+    },
+    "transcriptPath": "/cap/transcript.jsonl",
+    "workspacePaths": [
+      "/cap"
+    ]
+  },
+  "hook_args": [
+    "-policy-dir",
+    "POLICIES",
+    "-mode",
+    "enforcement"
+  ],
+  "expect": {
+    "decision": "force_ask",
+    "cites": "instruct or configure an agent"
+  },
+  "output_dialect": "antigravity"
+}

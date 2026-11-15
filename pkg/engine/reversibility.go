@@ -1548,7 +1548,7 @@ var shellWrapperProgs = map[string]bool{
 	"env": true, "sudo": true, "doas": true, "nice": true, "ionice": true,
 	"nohup": true, "setsid": true, "stdbuf": true, "timeout": true,
 	"chroot": true, "command": true, "exec": true, "xargs": true, "time": true,
-	"proxychains": true, "proxychains4": true,
+	"proxychains": true, "proxychains4": true, "builtin": true,
 }
 
 // wrapperValueOpts lists, per wrapper, the SHORT options that consume the NEXT
@@ -1559,13 +1559,14 @@ var shellWrapperProgs = map[string]bool{
 // region, so a missed option here still cannot auto-allow a catastrophe.
 var wrapperValueOpts = map[string]map[string]bool{
 	"sudo":    {"-u": true, "-g": true, "-U": true, "-p": true, "-C": true, "-h": true, "-r": true, "-t": true, "-T": true},
-	"env":     {"-u": true, "-C": true, "-S": true},
+	"env":     {"-u": true, "-C": true, "-S": true, "--unset": true, "--chdir": true, "--split-string": true},
 	"doas":    {"-u": true, "-C": true},
-	"timeout": {"-s": true, "-k": true},
-	"nice":    {"-n": true},
+	"timeout": {"-s": true, "-k": true, "--signal": true, "--kill-after": true},
+	"nice":    {"-n": true, "--adjustment": true},
 	"ionice":  {"-c": true, "-n": true, "-p": true},
 	"xargs":   {"-I": true, "-i": true, "-n": true, "-P": true, "-s": true, "-L": true, "-l": true, "-d": true, "-E": true, "-e": true, "-a": true},
-	"stdbuf":  {"-i": true, "-o": true, "-e": true},
+	"stdbuf":  {"-i": true, "-o": true, "-e": true, "--input": true, "--output": true, "--error": true},
+	"exec":    {"-a": true},
 }
 
 // unwrapShellWrappers peels leading command wrappers so the real program is

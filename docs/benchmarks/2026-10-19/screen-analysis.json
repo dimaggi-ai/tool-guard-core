@@ -1,0 +1,38 @@
+{
+  "n_blocks": 12,
+  "primary_mean_log_ratio_difference": -0.14183354651718993,
+  "bootstrap_95_log_interval": [
+    -0.19447897427185892,
+    -0.09698175610860837
+  ],
+  "bootstrap_seed": 20261019,
+  "bootstrap_resamples": 10000,
+  "adjusted_loss_pct": 13.22343129140291,
+  "adjusted_loss_95_interval_pct": [
+    9.24274363624834,
+    17.67365122111675
+  ],
+  "signal_separated": true,
+  "limitations": [
+    "local shared workstation, not GitHub calibration",
+    "exploratory bootstrap interval, 12 paired blocks",
+    "harness outputs RPS rounded to 0.1",
+    "historical relative phase, not full nightly QA"
+  ],
+  "AA": {
+    "n": 12,
+    "mean_loss_pct": 1.1475,
+    "sd_pp": 2.546256164360816,
+    "min_loss_pct": -4.53,
+    "max_loss_pct": 5.68,
+    "mean_log_ratio": -0.011838927177822511
+  },
+  "AB": {
+    "n": 12,
+    "mean_loss_pct": 13.9275,
+    "sd_pp": 7.5112765226691,
+    "min_loss_pct": 6.84,
+    "max_loss_pct": 27.31,
+    "mean_log_ratio": -0.15367247369501244
+  }
+}

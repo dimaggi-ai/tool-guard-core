@@ -78,6 +78,9 @@ pypi_publisher_indices = matching_step_indices(
 pypi_verifier_indices = matching_step_indices(
     python_publish_steps, pypi_verifier_name
 )
+binding_name = "      - name: Bind harness evidence to release source\n"
+preflight_steps = steps(preflight)
+binding_indices = matching_step_indices(preflight_steps, binding_name)
 active_finalizer = active(finalizer)
 
 resolve_body = """        id: release-state
@@ -157,6 +160,16 @@ tag_push_index = runbook.find("git push origin vX.Y.Z")
 installer = step(release_job, "Install pinned GoReleaser")
 rebuild = step(release_job, "Compare clean tagged builds")
 checks = {
+    "Go release requires harness evidence before publication": (
+        len(binding_indices) == 1
+        and binding_indices[0] == len(preflight_steps) - 1
+        and step(preflight, "Bind harness evidence to release source").strip()
+        == "run: python3 scripts/check-harness-evidence.py --source-only"
+        and active(workflow).count("scripts/check-harness-evidence.py") == 1
+        and "    needs: preflight" in region(workflow, "\n  verify:\n", "\n  python-package:\n")
+        and "    needs: verify" in region(workflow, "\n  python-package:\n", "\n  release:\n")
+        and "    needs: [preflight, verify, python-package]" in release_job
+    ),
     "Go release checks upload archives before generating SBOMs": (
         region(goreleaser, "\nsboms:\n", "\nrelease:\n").strip() == """- artifacts: archive
     # This stage runs before publication. Check the actual upload bytes,

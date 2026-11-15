@@ -3,6 +3,12 @@
 A reference for setting up, monitoring, and maintaining a Tool Guard
 proxy under production load.
 
+The `coding_agent_secret_egress` policy checks text for known key formats and
+listed URLs. In a shell command, a listed URL anywhere in the text satisfies
+the host carve-out, even inside a comment. A command can therefore send a
+known key to an unlisted host while naming a listed host in a comment.
+Do not rely on this policy to restrict shell network destinations.
+
 ## Deployment shapes
 
 ### Single-binary on a VM
@@ -228,15 +234,30 @@ are resolved before matching. The guard fires on writes (tools carrying
 `sed -i`, `dd of=`, and similar mutating commands). Read-only tools
 (`read`, `glob`, `grep`, `ls`, …) are explicitly excluded.
 
-**Shell paths: use literal paths.** Quotes and escapes are tokenized, but
-variables and substitutions are never evaluated. Unresolved redirect targets
-and arguments to recognized mutating commands are denied, including
+**Shell limitation**: variable expansion and command substitution in
+`bash` / `run_command` commands are not resolved; a write target built from
+one is denied. A command whose text names a protected path is denied unless every
+program in it is in a fixed list of read-only programs such as `cat` and
+`grep`, or is `sort` or `uniq` with words that cannot name an output file.
+The example README lists the programs and the words. A write is not seen when the command
+text does not name the path and the write is not a known form: a program
+outside the lists gets the path from a variable other than `HOME`, from the
+output of another command, from a file or from its input (`xargs`), reaches
+the file through a hard link or through a symbolic link that a program other than `ln` makes in the same command, goes to a directory that the command text does not name (`cd $DIR`) and writes a relative path there, or changes a whole directory above the
+path (`find DIR -delete`). A script that a shell runs from a file is not
+read. That list is not complete. On macOS and Windows, and where the directory of
+a protected path is found to ignore letter case, protected paths are compared
+without letter case. The path conditions of a policy compare letters exactly. A path that starts with `~` is checked under the home
+directory of the `tg` process. A word that starts with `~+`, `~-` or `~NAME`
+counts as the name of a protected path, because the hook does not know its
+directory. A word that holds `/proc/NAME/cwd` counts in the same way. So does a word that holds `/dev/fd/N/` or `/proc/NAME/fd/N/` before a file name. A symbolic link that stands before `..` in a path is followed. A word that holds `/proc/NAME/root` counts too. A link is followed when it exists at the time of the check. A command that makes a link to a protected path with `ln`, and also runs a program that is not read-only or writes with a redirection, is denied. A brace list that makes more than 64 words counts as the name of a protected path when one of its words can be the path, and so does the word `nocaseglob`. A relative path is read under the working directory in the call (`cwd` or `workdir`), and after `cd DIR` under `DIR`. For a tool that is in the group `shell` only because its name is not known, the shell rules deny the call only when the command text names a protected path. A command is read under `command` and its aliases, and not under another key such as `input` or `args`. A check that does not end in 10 seconds denies the call. Use `-protect-paths`
+for the policy and audit paths; keep `bash` out of the write-capable policy
+scope if you need stronger shell containment.
+
+Quotes and escapes are tokenized. Examples of denied unresolved write targets include
 `X=/etc; rm $X/passwd`, `X=/etc rm $X/passwd`, `export X=/etc; rm $X/f`,
 `(X=/etc; rm $X/f)`, `rm "$X"/f`, `rm ${X:-/etc}/f`, and
-`rm $(echo /etc)/f`. Assignment order and scope do not establish a literal
-path. `echo $HOME` remains allowed by this path check. No static expansion
-has been added. Keep shell tools out of the write-capable policy scope if
-you need stronger shell containment.
+`rm $(echo /etc)/f`. `echo $HOME` remains allowed by this path check.
 
 When the guard fires, the proxy returns **HTTP 403** and records a
 boundary-deny trace in the audit chain so `tg verify` remains intact.

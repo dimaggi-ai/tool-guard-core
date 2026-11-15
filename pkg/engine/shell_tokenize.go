@@ -88,30 +88,18 @@ import "strings"
 // keep bash OUT of the write-capable policy scope (tg hook/-proxy -protect-paths
 // runs regardless of policy).
 //
-//   - An UNRESOLVED argv[0] (`$CMD /protected/f`) is not classified as
-//     mutating: we can't know whether $CMD is `rm`. Failing closed on every
-//     command whose program name is a variable would block essentially all
-//     dynamic invocations, so — exactly like an unknown binary that isn't in
-//     mutatingProgs — such a command is not fired on.
-//   - Command WRAPPERS (sudo/env/xargs/nice/timeout/command/exec …) are not
-//     unwrapped: `sudo rm /protected/f` is classified on argv[0]=`sudo`, which
-//     is not in mutatingProgs, so it is not fired on. Leading variable
-//     ASSIGNMENTS (`FOO=bar rm …`) ARE stripped before argv[0] is chosen (a
-//     distinct POSIX grammar production), so that specific prefix does not hide
-//     the real command; general wrappers are out of scope by design.
-//   - TILDE (`~/…`, `~user/…`) and GLOB (`rm /prot*/f`) expansion are not
-//     performed: both depend on runtime state we don't have ($HOME, the live
-//     filesystem), and failing closed on every `~` or `*` would block extremely
-//     common benign commands. They are left literal (so they simply don't match
-//     a protected prefix) rather than guessed.
-//   - `#` COMMENTS are not stripped; a `>`/verb inside a trailing comment can
-//     raise a spurious hit. This is an over-approximation (safe): treating a
-//     comment as live can only add a deny, and mis-detecting a comment could
-//     drop live text, so we deliberately never treat `#` as a comment.
-//   - Here-document BODIES are not parsed specially; a body line that looks like
-//     `rm /protected/f` is tokenized as an ordinary command. The old scanner had
-//     the same property (it split on the newline) — an over-approximation, never
-//     a bypass.
+//   - The tokenizer does not unwrap command WRAPPERS, expand a GLOB, or
+//     resolve an UNRESOLVED argv[0]. Its callers in protect.go do: they strip
+//     wrappers (shellWrapperProgs), match file name patterns against the
+//     protected paths (globTouchesProtected), and fail closed on a program
+//     name that is not a literal. The tokenizer leaves a TILDE literal;
+//     matchLiteralPath places a leading tilde, alone or before a slash, under
+//     the home directory of this process and fails closed on any other tilde
+//     form.
+//   - A # COMMENT is not stripped and a here-document BODY is not parsed
+//     specially: the text is tokenized as ordinary commands. The name rule in
+//     protect_mention.go denies a command that holds either one when its text
+//     names a protected path.
 //   - Arithmetic `$((…))` is flagged `unresolved` like any other `$(`-form. It
 //     cannot yield a path, so the only effect is a possible conservative hit if
 //     such a word is a mutating-command argument — the safe direction.
@@ -136,6 +124,8 @@ type shellToken struct {
 	value      string
 	raw        string
 	unresolved bool
+	// marked is value with shellUnresolvedMark at each unresolved expansion.
+	marked string
 }
 
 // tokenizeShell lexes a raw shell command string into a flat token stream.
@@ -146,6 +136,11 @@ type shellToken struct {
 // than rejected: this is a detector, so degrading to "one long literal word"
 // is safe (it can only over-match), whereas erroring out would let a
 // deliberately-malformed command dodge the check entirely.
+// shellUnresolvedMark stands in the marked text of a word for each expansion
+// the tokenizer could not evaluate. A NUL byte cannot be part of a real
+// command argument.
+const shellUnresolvedMark = 0
+
 func tokenizeShell(cmd string) []shellToken {
 	var toks []shellToken
 
@@ -162,11 +157,17 @@ func tokenizeShell(cmd string) []shellToken {
 	}
 	flush := func(end int) {
 		if started {
+			marked := wb.String()
+			value := strings.ReplaceAll(marked, string(rune(shellUnresolvedMark)), "")
 			toks = append(toks, shellToken{
-				kind:       tokWord,
-				value:      wb.String(),
-				raw:        cmd[wordStart:end],
-				unresolved: unresolved,
+				kind:  tokWord,
+				value: value,
+				raw:   cmd[wordStart:end],
+				// A mark that came in with the input also makes the word
+				// unresolved: that is how the argument of sh -c carries the
+				// expansions of the outer command into the inner check.
+				unresolved: unresolved || len(value) != len(marked),
+				marked:     marked,
 			})
 		}
 		wb.Reset()
@@ -241,10 +242,12 @@ func tokenizeShell(cmd string) []shellToken {
 						wb.WriteByte('$')
 					} else if isExp {
 						unresolved = true
+						wb.WriteByte(shellUnresolvedMark)
 					}
 					i = newi
 				case cmd[i] == '`':
 					unresolved = true
+					wb.WriteByte(shellUnresolvedMark)
 					i = skipBacktick(cmd, i)
 				default:
 					wb.WriteByte(cmd[i])
@@ -260,6 +263,7 @@ func tokenizeShell(cmd string) []shellToken {
 			// Backtick command substitution outside quotes: unresolved.
 			begin(i)
 			unresolved = true
+			wb.WriteByte(shellUnresolvedMark)
 			i = skipBacktick(cmd, i)
 			continue
 
@@ -274,11 +278,13 @@ func tokenizeShell(cmd string) []shellToken {
 			// here in the unquoted branch and not in consumeDollar.
 			if i+1 < n && cmd[i+1] == '\'' {
 				unresolved = true
+				wb.WriteByte(shellUnresolvedMark)
 				i = skipDollarSingleQuote(cmd, i+1)
 				continue
 			}
 			if i+1 < n && cmd[i+1] == '"' {
 				unresolved = true
+				wb.WriteByte(shellUnresolvedMark)
 				i = skipDoubleQuoteRaw(cmd, i+1)
 				continue
 			}
@@ -287,6 +293,7 @@ func tokenizeShell(cmd string) []shellToken {
 				wb.WriteByte('$')
 			} else if isExp {
 				unresolved = true
+				wb.WriteByte(shellUnresolvedMark)
 			}
 			i = newi
 			continue
@@ -622,8 +629,9 @@ func isRedirKind(k shellTokenKind) bool {
 //
 // Substitutions inside SINGLE quotes are literal (not executed) and skipped;
 // inside double quotes they ARE active and collected. Arithmetic $((…)) runs no
-// command and is skipped. ${…} parameter expansion is skipped (its rarely-used
-// funsub/`${ …;}` form is out of scope, noted in the file header's limits).
+// command and is skipped. A substitution inside a ${…} parameter expansion is
+// collected (the funsub form `${ …;}` is out of scope, noted in the file
+// header's limits).
 // Nested substitutions are reached by the caller's recursion on each body.
 func extractCommandSubsts(cmd string) []string {
 	var out []string
@@ -654,7 +662,9 @@ func extractCommandSubsts(cmd string) []string {
 		case c == '$' && i+1 < n && cmd[i+1] == '(': // $(( … )) arithmetic: no command
 			i = skipCommandSubst(cmd, i+1)
 		case c == '$' && i+1 < n && cmd[i+1] == '{':
-			i = skipParamExpansion(cmd, i+1)
+			// A substitution in the word of ${x:-$(cmd)} runs, so the
+			// text of the expansion is read on.
+			i += 2
 		default:
 			i++
 		}

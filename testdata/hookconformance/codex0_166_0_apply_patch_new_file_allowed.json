@@ -1,0 +1,34 @@
+{
+  "name": "codex0_166_0_apply_patch_new_file_allowed",
+  "description": "Codex CLI 0.166.0 apply_patch call for a new file in the working tree. The call has no path parameter: the patch text in command names the file. The hook reads the file from the line '*** Add File:' and places it under cwd, and no rule denies that path. The patch text is the one the release run recorded for the stage write_tool_allow_control.",
+  "harness": "codex-cli",
+  "harness_version": "0.166.0",
+  "capture": {
+    "captured_from": "captured shape",
+    "captured_on": "2026-11-10",
+    "sanitisation": "tool name, parameter name and patch text are from the reduced hook record of the release run; the envelope fields are those of codex_bash_shell, because the release run does not keep them"
+  },
+  "payload": {
+    "session_id": "cap-session",
+    "turn_id": "cap-turn",
+    "transcript_path": "/cap/rollout.jsonl",
+    "cwd": "/cap",
+    "hook_event_name": "PreToolUse",
+    "model": "cap-model",
+    "permission_mode": "bypassPermissions",
+    "tool_name": "apply_patch",
+    "tool_input": {
+      "command": "*** Begin Patch\n*** Add File: allowed-by-tool.txt\n+written-by-write-tool\n*** End Patch"
+    },
+    "tool_use_id": "cap-exec"
+  },
+  "hook_args": [
+    "-policy-dir",
+    "POLICIES",
+    "-mode",
+    "enforcement"
+  ],
+  "expect": {
+    "decision": "allow"
+  }
+}

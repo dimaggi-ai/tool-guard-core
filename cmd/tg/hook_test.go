@@ -6,6 +6,8 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -713,5 +715,236 @@ rules:
 	}
 	if d := hookDecision(t, out); d != "deny" {
 		t.Errorf("a shadow-only tool_names declaration must not count as 'known'; expected deny, got %q; output=%s", d, out)
+	}
+}
+
+// ── LG-F6a: a flag parse error must not silently drop fail-closed ─────────
+//
+// Go's flag package stops parsing at the first unrecognised flag, so
+// "-nope -fail-closed-tools bash" leaves failTools EMPTY and the hook fails
+// OPEN on an unparseable payload. Measured 2026-11-09: the same stdin was
+// denied with -fail-closed-tools bash and allowed with a stray flag in front.
+// A mistyped flag must never be able to disarm fail-closed.
+
+func TestHookFlagParseErrorHonoursLaterFailClosedFlag(t *testing.T) {
+	cases := []struct {
+		name    string
+		args    []string
+		dialect string
+	}{
+		{"unknown flag before -fail-closed-tools", []string{"-nope", "-fail-closed-tools", "bash"}, "both"},
+		{"unknown flag before -fail-closed", []string{"-nope", "-fail-closed"}, "both"},
+		{"unknown flag before -fail-closed-tools with =", []string{"-nope", "-fail-closed-tools=bash"}, "both"},
+		{"control: flag parses normally", []string{"-fail-closed-tools", "bash"}, "both"},
+		{"antigravity dialect before unknown flag", []string{"-dialect", "antigravity", "-nope", "-fail-closed-groups", "shell"}, "antigravity"},
+		{"antigravity dialect after unknown flag", []string{"-nope", "-dialect", "antigravity", "-fail-closed-groups", "shell"}, "antigravity"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, code := runHookStr(t, "not-json", tc.args...)
+			if code != 0 {
+				t.Fatalf("hook must always exit 0, got %d; output=%s", code, out)
+			}
+			d, dialect := exampleDecision(t, out)
+			if dialect != tc.dialect {
+				t.Errorf("dialect = %q, want %q; output=%s", dialect, tc.dialect, out)
+			}
+			if d != "deny" {
+				t.Errorf("a flag parse error with a fail-closed flag anywhere in args must deny, got %q; args=%v output=%s", d, tc.args, out)
+			}
+		})
+	}
+}
+
+// ── LG-F6b: a payload with no tool_name is unattributable, not "bash" ─────
+//
+// A payload shaped like another harness's hook contract (no tool_name key)
+// used to default to tool_name "bash" and be evaluated as if it were a shell
+// command. That silently mis-attributes a call the hook cannot understand.
+// Such a payload must go through the same unattributable path as malformed
+// JSON: fail closed when any fail-closed mode is engaged, and documented
+// fail-open otherwise.
+
+func TestHookUnattributablePayloadFailsClosed(t *testing.T) {
+	payloads := map[string]string{
+		"antigravity shape":  `{"tool":"run_command","parameters":{"command":"rm -rf /"}}`,
+		"copilot-ish shape":  `{"name":"shell","arguments":{"command":"rm -rf /"}}`,
+		"empty object":       `{}`,
+		"tool_name not text": `{"tool_name":42,"tool_input":{"command":"rm -rf /"}}`,
+	}
+	for name, stdin := range payloads {
+		t.Run(name+" fail-closed", func(t *testing.T) {
+			out, code := runHookStr(t, stdin, "-policy-dir", "../../policies", "-fail-closed-tools", "bash")
+			if code != 0 {
+				t.Fatalf("hook must always exit 0, got %d; output=%s", code, out)
+			}
+			if d := hookDecision(t, out); d != "deny" {
+				t.Errorf("payload with no usable tool_name must be unattributable and deny under fail-closed, got %q; output=%s", d, out)
+			}
+		})
+		t.Run(name+" fail-open default", func(t *testing.T) {
+			out, code := runHookStr(t, stdin, "-policy-dir", "../../policies")
+			if code != 0 {
+				t.Fatalf("hook must always exit 0, got %d; output=%s", code, out)
+			}
+			if d := hookDecision(t, out); d != "allow" {
+				t.Errorf("with no fail-closed mode an unattributable payload documents the fail-open default (allow), got %q; output=%s", d, out)
+			}
+		})
+	}
+}
+
+// ── LG-F7: a write to an agent instruction file must be caught regardless of
+// which harness's tool name the call arrives under.
+//
+// The context-files policy is scoped to the filesystem_writes tool group and
+// matches parameters.file_path / parameters.path. hookToolGroup's default
+// bucket is "shell", so a harness write tool whose name is not in the table
+// never reaches the policy at all. Tool names below are taken from the
+// Gemini CLI and Antigravity tool contracts; they are not invented here.
+// Parameter names other than file_path/path are NOT sourced and are covered
+// only where a normalizer exists — see TestHookHarnessPathParameterAliases.
+
+func TestHookHarnessWriteToolNamesReachContextFilePolicy(t *testing.T) {
+	tools := []string{"write_file", "replace", "write_to_file", "replace_file_content", "multi_replace_file_content"}
+	for _, tool := range tools {
+		t.Run(tool, func(t *testing.T) {
+			stdin := `{"tool_name":"` + tool + `","tool_input":{"file_path":"AGENTS.md","content":"package main"}}`
+			out, code := runHookStr(t, stdin, "-policy-dir", "../../policies", "-mode", "enforcement")
+			if code != 0 {
+				t.Fatalf("hook must always exit 0, got %d; output=%s", code, out)
+			}
+			dec, reason := hookDecisionReason(t, out)
+			// Asserting the citing policy, not merely "not allow": an
+			// unrelated shipped rule can deny an absolute path outside the
+			// working tree, which would make a weaker assertion pass while
+			// the context-files policy never fired.
+			if !strings.Contains(reason, "instruct or configure an agent") {
+				t.Errorf("coding-agent-context-files must be the rule that answers a write to AGENTS.md under tool name %q, got decision=%q reason=%q", tool, dec, reason)
+			}
+		})
+	}
+}
+
+// The policy matches parameters.file_path and parameters.path. A harness that
+// names its path parameter something else never matches, whatever the tool
+// name. The normalizer adds canonical aliases when no canonical key exists.
+func TestHookHarnessPathParameterAliasesReachContextFilePolicy(t *testing.T) {
+	params := []string{
+		`"TargetFile":"AGENTS.md","Content":"package main"`,
+		`"target_file":"AGENTS.md","content":"package main"`,
+		`"filePath":"AGENTS.md","content":"package main"`,
+		`"path":"AGENTS.md","content":"package main"`,
+		`"file":"AGENTS.md","content":"package main"`,
+	}
+	for _, p := range params {
+		t.Run(p, func(t *testing.T) {
+			stdin := `{"tool_name":"write_to_file","tool_input":{` + p + `}}`
+			out, code := runHookStr(t, stdin, "-policy-dir", "../../policies", "-mode", "enforcement")
+			if code != 0 {
+				t.Fatalf("hook must always exit 0, got %d; output=%s", code, out)
+			}
+			dec, reason := hookDecisionReason(t, out)
+			if !strings.Contains(reason, "instruct or configure an agent") {
+				t.Errorf("a write to AGENTS.md must reach the context-files policy whatever the path parameter is named, got decision=%q reason=%q params=%s", dec, reason, p)
+			}
+		})
+	}
+}
+
+// ── LG-F8: -protect-path must not be bypassable by naming the shell tool
+// PowerShell. Measured 2026-11-09: `echo x > <protected>` was denied as a
+// Bash tool call and allowed as a PowerShell tool call.
+
+func TestHookPowerShellProtectedPath(t *testing.T) {
+	dir := t.TempDir()
+	guarded := filepath.Join(dir, "settings.json")
+	shellGuarded := "'" + filepath.ToSlash(guarded) + "'"
+
+	cases := []struct {
+		tool, command, want string
+	}{
+		{"PowerShell", "echo x > " + shellGuarded, "deny"},
+		{"pwsh", "echo x > " + shellGuarded, "deny"},
+		{"PowerShell", "Set-Content -Path " + shellGuarded + " -Value x", "not-allow"},
+		{"PowerShell", "Out-File -FilePath " + shellGuarded, "not-allow"},
+		{"PowerShell", "Remove-Item -Recurse -Force " + shellGuarded, "not-allow"},
+		// legitimate-use control: reading an unrelated file must not be
+		// denied by protected-path matching.
+		{"PowerShell", "Get-Content /etc/hostname", "not-deny"},
+		{"Bash", "echo x > " + shellGuarded, "deny"},
+	}
+	if runtime.GOOS == "windows" {
+		for _, tool := range []string{"PowerShell", "pwsh", "Bash"} {
+			cases = append(cases, struct{ tool, command, want string }{
+				tool, `echo x > "` + guarded + `"`, "deny",
+			})
+		}
+	}
+	for _, tc := range cases {
+		name := tc.tool + " :: " + tc.command
+		t.Run(name, func(t *testing.T) {
+			stdin := `{"tool_name":"` + tc.tool + `","tool_input":{"command":` +
+				jsonMarshalString(tc.command) + `}}`
+			out, code := runHookStr(t, stdin, "-policy-dir", "../../policies",
+				"-mode", "enforcement", "-fail-closed-tools", "bash,write,edit",
+				"-protect-path", guarded)
+			if code != 0 {
+				t.Fatalf("hook must always exit 0, got %d; output=%s", code, out)
+			}
+			d := hookDecision(t, out)
+			switch tc.want {
+			case "deny":
+				if d != "deny" {
+					t.Errorf("expected deny, got %q; output=%s", d, out)
+				}
+			case "not-allow":
+				if d == "allow" {
+					t.Errorf("a write to a protected path must never be allowed, got %q; output=%s", d, out)
+				}
+			case "not-deny":
+				if d == "deny" {
+					t.Errorf("a read of an unrelated file must not be denied by protected-path matching, got %q; output=%s", d, out)
+				}
+			}
+		})
+	}
+}
+
+func jsonMarshalString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+// TestHookUsageDocumentsEveryFlag keeps the hand-written usage block from
+// drifting behind the flag set. Measured 2026-11-09: -dialect,
+// -antigravity-escalation and -audit-log were accepted and used by the shipped
+// example while the usage text still listed only the 0.8-era flags, so an
+// operator reading `tg hook -h` could not discover the dialect controls. The
+// flags are declared inline in runHook, so this reads the source of truth: the
+// flag declarations themselves.
+func TestHookUsageDocumentsEveryFlag(t *testing.T) {
+	src, err := os.ReadFile("hook.go")
+	if err != nil {
+		t.Fatalf("read hook.go: %v", err)
+	}
+	decl := regexp.MustCompile(`fs\.(?:String|Bool)\("([a-z-]+)"|Var\(&[A-Za-z]+, "([a-z-]+)"`)
+	names := map[string]bool{}
+	for _, m := range decl.FindAllStringSubmatch(string(src), -1) {
+		n := m[1]
+		if n == "" {
+			n = m[2]
+		}
+		if n != "" {
+			names[n] = true
+		}
+	}
+	if len(names) < 10 {
+		t.Fatalf("expected at least 10 hook flags from the declarations, found %d: %v", len(names), names)
+	}
+	for name := range names {
+		if !strings.Contains(hookUsage, "-"+name) {
+			t.Errorf("flag -%s is accepted by `tg hook` but is missing from its usage text", name)
+		}
 	}
 }

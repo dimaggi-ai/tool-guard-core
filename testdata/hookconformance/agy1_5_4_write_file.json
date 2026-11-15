@@ -1,0 +1,44 @@
+{
+  "name": "agy1_5_4_write_file",
+  "description": "Antigravity CLI 1.5.4 write_file call captured from a real run. The Path, Content and Overwrite fields are preserved.",
+  "harness": "antigravity-cli",
+  "harness_version": "1.5.4",
+  "capture": {
+    "captured_from": "real install",
+    "captured_on": "2026-11-10",
+    "sanitisation": "conversation and call ids, home paths, transcript paths, model names and workspace paths replaced with cap-* placeholders; tool names, parameter names, values and casing are exactly as emitted"
+  },
+  "payload": {
+    "artifactDirectoryPath": "/cap/brain",
+    "conversationId": "cap-conv",
+    "cwd": "/cap",
+    "hookEventName": "PreToolUse",
+    "lastUserInput": "Using your file-writing tool rather than a shell command, create the file captured.txt containing exactly: capture-probe",
+    "modelName": "cap-model",
+    "stepIdx": 2,
+    "toolCall": {
+      "args": {
+        "Content": "capture-probe",
+        "Overwrite": true,
+        "Path": "/cap/captured.txt"
+      },
+      "id": "cap-call",
+      "name": "write_file"
+    },
+    "transcriptPath": "/cap/transcript.jsonl",
+    "workspacePaths": [
+      "/cap"
+    ]
+  },
+  "hook_args": [
+    "-policy-dir",
+    "POLICIES",
+    "-mode",
+    "enforcement"
+  ],
+  "expect": {
+    "decision": "allow",
+    "cites": ""
+  },
+  "output_dialect": "antigravity"
+}

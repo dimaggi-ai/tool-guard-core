@@ -1,0 +1,70 @@
+schema_version: 1
+policy_id: coding-agent-context-files
+name: coding-agent-context-files
+description: >
+  Treat the files that instruct or configure a coding agent as privileged.
+  A write to AGENTS.md, CLAUDE.md, GEMINI.md, .cursorrules, .windsurfrules,
+  .github/copilot-instructions.md, .mcp.json, .cursor/mcp.json or
+  .claude/settings.json / settings.local.json needs human review. A write
+  whose content carries a known API-key or token format is denied. Scoped
+  by tool group only: the integration must send tool_group
+  filesystem_writes. tg hook maps the write tool names it knows (Write, Edit,
+  apply_patch, and the Gemini CLI and Antigravity write tools) to that group,
+  and canonicalises file_path and content from other spellings such as
+  TargetFile or filePath. A write tool name, or a path parameter name, that
+  is neither known nor canonicalisable is not covered by this policy: it
+  arrives as an unknown tool and no path is matched. Use -unknown-tools-deny
+  to deny unknown tools outright, or add the name to the classifier. A shell
+  command is not in the filesystem_writes group, so a redirect such as
+  "echo x >> AGENTS.md" is not covered by this policy; use -protect-path for a
+  named path.
+version: 1
+status: approved
+mode: enforcement
+
+scope:
+  tool_groups: [filesystem_writes]
+
+rules:
+  - rule_id: rule-context-file-write-review
+    name: agent instruction and config files need review
+    rule_type: regex
+    conditions:
+      or:
+        - field: parameters.file_path
+          operator: regex
+          value: '(?i)(^|/)(AGENTS\.md|CLAUDE\.md|GEMINI\.md|\.cursorrules|\.windsurfrules|\.github/copilot-instructions\.md|\.mcp\.json|\.cursor/mcp\.json|\.claude/settings(\.local)?\.json)$'
+        - field: parameters.path
+          operator: regex
+          value: '(?i)(^|/)(AGENTS\.md|CLAUDE\.md|GEMINI\.md|\.cursorrules|\.windsurfrules|\.github/copilot-instructions\.md|\.mcp\.json|\.cursor/mcp\.json|\.claude/settings(\.local)?\.json)$'
+    effect: escalate
+    effect_config:
+      severity: medium
+      suggested_response: "Review needed: this write changes a file that instructs or configures the agent."
+    citation:
+      document_id: SEC-CONTEXT
+      section: "1"
+      excerpt: "Files that instruct or configure an agent change only with human review."
+
+  - rule_id: rule-secret-in-write
+    name: no known credential format in written content
+    rule_type: regex
+    conditions:
+      or:
+        - field: parameters.content
+          operator: regex
+          value: '\b(sk-((proj|ant|svcacct|admin)-[A-Za-z0-9_-]{20,}|[A-Za-z0-9]{40,})|gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{60,}|(AKIA|ASIA)[0-9A-Z]{16}|xox[abposr]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35})'
+        - field: parameters.new_string
+          operator: regex
+          value: '\b(sk-((proj|ant|svcacct|admin)-[A-Za-z0-9_-]{20,}|[A-Za-z0-9]{40,})|gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{60,}|(AKIA|ASIA)[0-9A-Z]{16}|xox[abposr]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35})'
+        - field: parameters.edits
+          operator: regex
+          value: '\b(sk-((proj|ant|svcacct|admin)-[A-Za-z0-9_-]{20,}|[A-Za-z0-9]{40,})|gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{60,}|(AKIA|ASIA)[0-9A-Z]{16}|xox[abposr]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35})'
+    effect: deny
+    effect_config:
+      severity: high
+      suggested_response: "Write blocked: the content carries a value in a known API-key or token format."
+    citation:
+      document_id: SEC-SECRETS
+      section: "3"
+      excerpt: "Credentials may not be written into workspace files by an agent."

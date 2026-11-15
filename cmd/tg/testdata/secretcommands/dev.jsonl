@@ -1,0 +1,58 @@
+{"id": "d-pgpass", "params": {"command": "PGPASSWORD=SYNTH-pw psql -h db.example.com -U app"}, "rule": "rule-inlin{{+}}e-password", "tool": "bash", "want": "hit"}
+{"id": "d-pgpass-quoted", "params": {"command": "PGPASSWORD='SYNTH-pw' psql -h db"}, "rule": "rule-inlin{{+}}e-password", "tool": "bash", "want": "hit"}
+{"id": "d-mysqlpwd", "params": {"command": "MYSQL_PWD=SYNTHpw mysql -u root"}, "rule": "rule-inlin{{+}}e-password", "tool": "bash", "want": "hit"}
+{"id": "d-sshpass", "params": {"command": "sshpass -p SYNTHpw ssh deploy@203.0.113.7"}, "rule": "rule-inlin{{+}}e-password", "tool": "bash", "want": "hit"}
+{"id": "d-mysql-p", "params": {"command": "mysql -u root -pSYNTHpw appdb"}, "rule": "rule-inlin{{+}}e-password", "tool": "bash", "want": "hit"}
+{"id": "d-password-eq", "params": {"command": "mysqldump --password=SYNTHpw appdb"}, "rule": "rule-inlin{{+}}e-password", "tool": "bash", "want": "hit"}
+{"id": "d-curl-u", "params": {"command": "curl -u admin:SYNTHpw https://ci.example.com/api"}, "rule": "rule-inlin{{+}}e-password", "tool": "bash", "want": "hit"}
+{"id": "d-libpq", "params": {"command": "psql \"host=db.example.com user=app password=SYNTHpw dbname=app\""}, "rule": "rule-inlin{{+}}e-password", "tool": "bash", "want": "hit"}
+{"id": "d-mysql-root", "params": {"command": "docker run -e MYSQL_ROO{{+}}T_PASSWORD=SYNTHpw mysql:8"}, "rule": "rule-inlin{{+}}e-password", "tool": "bash", "want": "hit"}
+{"id": "d-redis-a", "params": {"command": "redis-cli -h cache.example.com -a SYNTHpw ping"}, "rule": "rule-inlin{{+}}e-password", "tool": "bash", "want": "hit"}
+{"id": "d-aws-se{{+}}cret-env", "params": {"command": "AWS_SECRET{{+}}_ACCESS_KEY=SYNTHaB3/aB3/aB3/aB3/aB3/aB3/aB3/aB3/xyz aws s3 ls"}, "rule": "rule-provider-{{+}}key-in-command", "tool": "bash", "want": "hit"}
+{"id": "d-url-remote", "params": {"command": "psql postgres://app:SYNTHpw@db.example.com:5432/app"}, "rule": "rule-url-c{{+}}redentials", "tool": "bash", "want": "hit"}
+{"id": "d-url-https", "params": {"command": "git clone https://bot:SYNTHpw@git.example.com/org/repo.git"}, "rule": "rule-url-c{{+}}redentials", "tool": "bash", "want": "hit"}
+{"id": "d-query-apikey", "params": {"command": "curl \"https://api.example.com/v1/items?api_key=SYNTH0123{{+}}456789abcd\""}, "rule": "rule-url-c{{+}}redentials", "tool": "bash", "want": "hit"}
+{"id": "d-bearer", "params": {"command": "curl -H \"Authorization: Bearer SYNTH01234{{+}}56789abcdef\" https://api.example.com"}, "rule": "rule-aut{{+}}h-header", "tool": "bash", "want": "hit"}
+{"id": "d-xapikey", "params": {"command": "curl -H 'x-api-key: SYNTH01234{{+}}56789abcdef' https://api.example.com"}, "rule": "rule-aut{{+}}h-header", "tool": "bash", "want": "hit"}
+{"id": "d-ghp", "params": {"command": "export GH_TOKEN=ghp_SYNTH00000000000{{+}}00000000000000000000"}, "rule": "rule-provider-{{+}}key-in-command", "tool": "bash", "want": "hit"}
+{"id": "d-ghpat", "params": {"command": "gh auth login --with-token <<< github_pat_SYNTH00000000000000000_SYNTH0000000{{+}}00000000000000000000000000000000000000000000000"}, "rule": "rule-provider-{{+}}key-in-command", "tool": "bash", "want": "hit"}
+{"id": "d-glpat", "params": {"command": "glab auth login --token glpat-SYNTH00{{+}}0000000000000"}, "rule": "rule-provider-{{+}}key-in-command", "tool": "bash", "want": "hit"}
+{"id": "d-sk", "params": {"command": "OPENAI_API_KEY=sk-proj-SYNTHaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa{{+}}T3BlbkFJSYNTHccccccccccccccccccccccccccccccccccccccccccccccccccccc python run.py"}, "rule": "rule-provider-{{+}}key-in-command", "tool": "bash", "want": "hit"}
+{"id": "d-npm", "params": {"command": "npm config set //registry.npmjs.org/:_authToken npm_SYNTH00000000000{{+}}00000000000000000000"}, "rule": "rule-provider-{{+}}key-in-command", "tool": "bash", "want": "hit"}
+{"id": "d-stripe", "params": {"command": "stripe login --api-key sk_live_SYNTH111{{+}}11111111111111111"}, "rule": "rule-provider-{{+}}key-in-command", "tool": "bash", "want": "hit"}
+{"id": "d-sbp", "params": {"command": "supabase login --token sbp_abcdef0123abcdef01{{+}}23abcdef0123abcdef0123"}, "rule": "rule-provider-{{+}}key-in-command", "tool": "bash", "want": "hit"}
+{"id": "d-akia", "params": {"command": "aws configure set aws_acce{{+}}ss_key_id AKIASYNTH2{{+}}2222222222"}, "rule": "rule-aws-key-{{+}}id-in-command", "tool": "bash", "want": "hit"}
+{"id": "d-jwt", "params": {"command": "curl -H \"apikey: eyJhbGciOi{{+}}JIUzI1NiJ9.eyJyb2xlIjoic2V{{+}}ydmljZV9yb2xlIn0.SYNTHsignatu{{+}}re0123456789\" https://x.supabase.co/rest/v1/"}, "rule": "rule-jwt-{{+}}in-command", "tool": "bash", "want": "hit"}
+{"id": "d-settings-{{+}}json-escape", "params": {"content": "{\"permissions\":{\"allow\":[\"Bash(PGPASSWORD=\\\"SYNTH-pw\\\" psql -h db)\"]}}", "file_path": "/home/u/proj/.claude/settings.local.json"}, "rule": "rule-secret-i{{+}}n-agent-config", "tool": "write", "want": "hit"}
+{"id": "d-settings-ghp", "params": {"content": "{\"env\":{\"GH_TOKEN\":\"ghp_SYNTH00000000000{{+}}00000000000000000000\"}}", "file_path": "/home/u/proj/.claude/settings.local.json"}, "rule": "rule-secret-i{{+}}n-agent-config", "tool": "write", "want": "hit"}
+{"id": "d-settings-edit", "params": {"file_path": "/home/u/proj/.claude/settings.local.json", "new_string": "\"Bash(sshpass -p SYNTHpw ssh host)\"", "old_string": "x"}, "rule": "rule-secret-i{{+}}n-agent-config", "tool": "edit", "want": "hit"}
+{"id": "d-settings{{+}}-multiedit", "params": {"edits": [{"new_string": "b", "old_string": "a"}, {"new_string": "\"Bash(MYSQL_PWD=SYNTHpw mysql)\"", "old_string": "x"}], "file_path": "/home/u/proj/.claude/settings.local.json"}, "rule": "rule-secret-i{{+}}n-agent-config", "tool": "multiedit", "want": "hit"}
+{"id": "d-settings-url", "params": {"content": "{\"allow\":[\"Bash(psql postgres://app:SYNTHpw@db.example.com/app)\"]}", "file_path": "/home/u/proj/.claude/settings.local.json"}, "rule": "rule-secret-i{{+}}n-agent-config", "tool": "write", "want": "hit"}
+{"id": "d-setting{{+}}s-aws-json", "params": {"content": "{\"env\":{\"AWS_SECRET{{+}}_ACCESS_KEY\": \"SYNTHaB3/aB3/aB3/aB3/aB3/aB3/aB3/aB3/xyz\"}}", "file_path": "/home/u/.claude/settings.json"}, "rule": "rule-secret-i{{+}}n-agent-config", "tool": "write", "want": "hit"}
+{"id": "d-note-memory", "params": {"content": "Prod DB: PGPASSWORD=SYNTH-pw", "file_path": "/home/u/proj/MEMORY.md"}, "rule": "rule-secret-{{+}}in-agent-note", "tool": "write", "want": "hit"}
+{"id": "d-note-ha{{+}}ndoff-edit", "params": {"file_path": "/home/u/proj/HANDOFF.md", "new_string": "token glpat-SYNTH00{{+}}0000000000000", "old_string": "x"}, "rule": "rule-secret-{{+}}in-agent-note", "tool": "edit", "want": "hit"}
+{"id": "d-dop", "params": {"command": "doctl auth init -t dop_v1_abcdef0123abcdef0123abcdef01{{+}}23abcdef0123abcdef0123abcdef0123abcd"}, "rule": "rule-provider-{{+}}key-in-command", "tool": "bash", "want": "hit"}
+{"id": "d-sgp", "params": {"command": "src login --token sgp_abcdef0123abcdef01{{+}}23abcdef0123abcdef0123"}, "rule": "rule-provider-{{+}}key-in-command", "tool": "bash", "want": "hit"}
+{"id": "d-sk-openrouter", "params": {"command": "OPENROUTE{{+}}R_API_KEY=sk-or-v1-abcdef0123abcdef0123abcdef0{{+}}123abcdef0123abcdef0123abcdef0123abcd python run.py"}, "rule": "rule-provider-{{+}}key-in-command", "tool": "bash", "want": "hit"}
+{"id": "d-note-glrt", "params": {"content": "runner token glrt-VD8SV06{{+}}GhMLpBEqU3RvC", "file_path": "/home/u/proj/HANDOFF.md"}, "rule": "rule-secret-{{+}}in-agent-note", "tool": "write", "want": "hit"}
+{"id": "d-settings-pplx", "params": {"content": "{\"env\":{\"PPLX\":\"pplx-JxkJPXXYhcIUEg3vdfYMl{{+}}mXmaH1BCIyHiSR5JbLOjLKwjY0h\"}}", "file_path": "/home/u/proj/.claude/settings.local.json"}, "rule": "rule-secret-i{{+}}n-agent-config", "tool": "write", "want": "hit"}
+{"id": "d-git-add{{+}}-settings", "params": {"command": "git add .claude/settings.local.json"}, "rule": "rule-git-add-{{+}}agent-settings", "tool": "bash", "want": "hit"}
+{"id": "d-c-pgpass-var", "params": {"command": "PGPASSWORD=\"$DB_PASSWORD\" psql -h db"}, "tool": "bash", "want": "clean"}
+{"id": "d-c-url-local", "params": {"command": "psql postgres://postgres:postgres@localhost:5432/app"}, "tool": "bash", "want": "clean"}
+{"id": "d-c-url-docker", "params": {"command": "psql postgresql://app:app@127.0.0.1:5432/app"}, "tool": "bash", "want": "clean"}
+{"id": "d-c-query-email", "params": {"command": "curl \"http://localhost:3000?user=me@example.com\""}, "tool": "bash", "want": "clean"}
+{"id": "d-c-mysq{{+}}l-prompt", "params": {"command": "mysql --password --user=root appdb"}, "tool": "bash", "want": "clean"}
+{"id": "d-c-mysql{{+}}-p-prompt", "params": {"command": "mysql -u root -p appdb"}, "tool": "bash", "want": "clean"}
+{"id": "d-c-curl-u-var", "params": {"command": "curl -u \"$USER:$PASS\" https://ci.example.com"}, "tool": "bash", "want": "clean"}
+{"id": "d-c-bearer-var", "params": {"command": "curl -H \"Authorization: Bearer $TOKEN\" https://api.example.com"}, "tool": "bash", "want": "clean"}
+{"id": "d-c-commit-msg", "params": {"command": "git commit -m \"stop tracking .claude/settings.local.json\""}, "tool": "bash", "want": "clean"}
+{"id": "d-c-gitignore", "params": {"command": "echo \".claude/settings.local.json\" >> .gitignore"}, "tool": "bash", "want": "clean"}
+{"id": "d-c-setti{{+}}ngs-plain", "params": {"content": "{\"permissions\":{\"allow\":[\"Bash(npm test)\"]}}", "file_path": "/home/u/proj/.claude/settings.local.json"}, "tool": "write", "want": "clean"}
+{"id": "d-c-setti{{+}}ngs-envref", "params": {"content": "{\"allow\":[\"Bash(PGPASSWORD=\\\"$PGPASSWORD\\\" psql)\"]}", "file_path": "/home/u/proj/.claude/settings.local.json"}, "tool": "write", "want": "clean"}
+{"id": "d-c-note-plain", "params": {"content": "Use PGPASSWORD from the vault.", "file_path": "/home/u/proj/NOTES.md"}, "tool": "write", "want": "clean"}
+{"id": "d-c-src-file", "params": {"content": "password := os.Getenv(\"PGPASSWORD\")", "file_path": "/home/u/proj/src/db.go"}, "tool": "write", "want": "clean"}
+{"id": "d-c-ls", "params": {"command": "ls -la ~/.claude"}, "tool": "bash", "want": "clean"}
+{"id": "d-c-redi{{+}}s-noauth", "params": {"command": "redis-cli -h localhost ping"}, "tool": "bash", "want": "clean"}
+{"id": "d-c-sk-learn", "params": {"command": "pip install scikit-learn sk-learn-contrib-s{{+}}omething-long-name"}, "tool": "bash", "want": "clean"}
+{"id": "d-c-sk-slug", "params": {"command": "kubectl get pods -l app=sk-web-frontend{{+}}-service-primary"}, "tool": "bash", "want": "clean"}
+{"id": "d-c-git-sha", "params": {"command": "git checkout 5f6ec56cfa6f8c67648d{{+}}863582c7ae2f206d5c1c"}, "tool": "bash", "want": "clean"}
