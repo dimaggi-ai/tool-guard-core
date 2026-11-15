@@ -158,10 +158,11 @@ func TestChangelogAntigravityRunCountsMatchManifest(t *testing.T) {
 	text := strings.Join(strings.Fields(readRepoFile(t, "CHANGELOG.md")), " ")
 	re := regexp.MustCompile("In (the release run|an earlier run) on Antigravity CLI (\\d+\\.\\d+\\.\\d+), started with `--dangerously-skip-permissions` in headless print mode, " +
 		"a `run_command` call ran after the hook answered `ask` in (\\d+) of (\\d+) runs and after it answered `force_ask` in (\\d+) of (\\d+) runs")
-	got := re.FindStringSubmatch(text)
-	if got == nil {
-		t.Fatal("CHANGELOG.md no longer has the sentence with the two Antigravity run counts")
+	all := re.FindAllStringSubmatch(text, -1)
+	if len(all) != 1 {
+		t.Fatalf("CHANGELOG.md has %d sentences with the two Antigravity run counts; the test checks exactly one", len(all))
 	}
+	got := all[0]
 	manifest := loadHarnessManifest(t)
 	if got[1] == "an earlier run" {
 		const name, digest = "harness-manifest-24eafd6.json", "6e979b4946b3bae5346ba20be75038dacafdba04c68b0c063d0a46a2f0e21aea"
