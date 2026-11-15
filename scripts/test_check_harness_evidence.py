@@ -65,6 +65,11 @@ class ReleaseBindingTests(unittest.TestCase):
         cls.repo = root / "repo"
         cls.repo.mkdir()
         command(cls.repo, "git", "init", "-q", "-b", "fix/leak-guards-portability")
+        # Text-mode writes produce CRLF on Windows, and a runner-wide
+        # core.autocrlf would store LF blobs. Keep blobs equal to the bytes on
+        # disk so the checker compares the same content (the real repository
+        # forces LF through .gitattributes).
+        command(cls.repo, "git", "config", "core.autocrlf", "false")
         (cls.repo / "go.mod").write_text("module binding.fixture\n\ngo 1.20\n")
         (cls.repo / "main.go").write_text('package main\nfunc main() {}\n')
         for name in (*binding.WIRING, "policies/example.yaml", "verify_harnesses.py"):
