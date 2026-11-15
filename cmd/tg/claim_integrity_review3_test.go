@@ -252,6 +252,8 @@ func TestMatrixRunSizeMatchesManifest(t *testing.T) {
 
 // TestChangelogAgyFlagProtectionMatchesManifest: the changelog tells an
 // operator what the flag --dangerously-skip-permissions leaves them with.
+// The "no escalation protection" sentence is allowed only while the manifest
+// shows the escalated call running with the flag.
 func TestChangelogAgyFlagProtectionMatchesManifest(t *testing.T) {
 	m := loadHarnessManifest(t)
 	outcome := map[string]string{}
@@ -262,13 +264,23 @@ func TestChangelogAgyFlagProtectionMatchesManifest(t *testing.T) {
 			}
 		}
 	}
-	for id, want := range map[string]string{"shell_deny": "blocked", "escalation_shell": "ran", "escalation_shell_as_deny": "blocked"} {
+	for id, want := range map[string]string{"shell_deny": "blocked", "escalation_shell_as_deny": "blocked"} {
 		if outcome[id] != want {
 			t.Fatalf("manifest: stage %s with the flag has outcome %q; the changelog sentence needs %q", id, outcome[id], want)
 		}
 	}
 	want := "gets deny protection and no escalation protection unless `TG_ESCALATE_AS=deny` is set."
-	if !strings.Contains(oneLine(readRepoFile(t, "CHANGELOG.md")), want) {
+	has := strings.Contains(oneLine(readRepoFile(t, "CHANGELOG.md")), want)
+	// The sentence is a claim about the measured version. It needs a run in
+	// which the escalated call ran.
+	if outcome["escalation_shell"] != "ran" {
+		if has {
+			t.Errorf("CHANGELOG.md holds the sentence ending %q; in the manifest stage escalation_shell with the flag has outcome %q, not \"ran\"",
+				want, outcome["escalation_shell"])
+		}
+		return
+	}
+	if !has {
 		t.Errorf("CHANGELOG.md does not hold the sentence ending %q", want)
 	}
 }

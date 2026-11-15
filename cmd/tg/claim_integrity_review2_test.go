@@ -146,16 +146,32 @@ func TestChangelogStatesTheVariantLimit(t *testing.T) {
 
 // TestChangelogAntigravityRunCountsMatchManifest compares the two run counts
 // that CHANGELOG.md gives for Antigravity CLI started with
-// --dangerously-skip-permissions with the manifest.
+// --dangerously-skip-permissions with the manifest. The sentence names a
+// version. When the manifest holds a run of another version, the counts
+// cannot be compared, and the sentence must say "an earlier run", not "the
+// release run".
 func TestChangelogAntigravityRunCountsMatchManifest(t *testing.T) {
 	text := strings.Join(strings.Fields(readRepoFile(t, "CHANGELOG.md")), " ")
-	re := regexp.MustCompile("answered `ask` in (\\d+) of (\\d+) runs and after it answered `force_ask` in (\\d+) of (\\d+) runs")
+	re := regexp.MustCompile("In (the release run|an earlier run) on Antigravity CLI (\\d+\\.\\d+\\.\\d+), started with `--dangerously-skip-permissions` in headless print mode, " +
+		"a `run_command` call ran after the hook answered `ask` in (\\d+) of (\\d+) runs and after it answered `force_ask` in (\\d+) of (\\d+) runs")
 	got := re.FindStringSubmatch(text)
 	if got == nil {
 		t.Fatal("CHANGELOG.md no longer has the sentence with the two Antigravity run counts")
 	}
+	manifest := loadHarnessManifest(t)
+	measured := manifestVersion(t, manifest, "agy")
+	if got[2] != measured {
+		if got[1] != "an earlier run" {
+			t.Fatalf("CHANGELOG.md calls the run on Antigravity CLI %s the release run; the manifest holds a run of %s", got[2], measured)
+		}
+		return
+	}
+	if got[1] != "the release run" {
+		t.Fatalf("CHANGELOG.md calls the run on Antigravity CLI %s an earlier run; the manifest holds that run", got[2])
+	}
+	got = append(got[:1], got[3:]...)
 	want := map[string][2]int{}
-	for _, h := range loadHarnessManifest(t).Harnesses {
+	for _, h := range manifest.Harnesses {
 		if h.Configuration != "agy --dangerously-skip-permissions --print" {
 			continue
 		}
