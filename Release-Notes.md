@@ -18,8 +18,8 @@ to Go 1.26.11.
 
 - **Go 1.26 is required.** The `go` line in `go.mod` moves from 1.25.0 to
   1.26.0, so a module that imports Core must build with Go 1.26 or later. The
-  preferred toolchain is Go 1.26.11, which fixes GO-2026-6809 and GO-2026-6859
-  in `net/http`.
+  preferred toolchain is Go 1.26.11. It includes the fixes for GO-2026-6809 in
+  `crypto/x509` and GO-2026-6859 in `net/http`.
 - **Two new policies enforce when you load the whole `policies/` directory.**
   `coding_agent_secret_egress` denies a call that carries a value in a known
   API-key or token format, unless the URL names a host in its carve-out list.

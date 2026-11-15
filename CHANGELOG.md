@@ -265,7 +265,8 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 ### Changed
 
 - Tool Guard now requires Go 1.26.0 and sets the preferred toolchain to Go 1.26.11,
-  which fixes [GO-2026-6809](https://pkg.go.dev/vuln/GO-2026-6809) and
+  which includes the fixes for
+  [GO-2026-6809](https://pkg.go.dev/vuln/GO-2026-6809) (crypto/x509) and
   [GO-2026-6859](https://pkg.go.dev/vuln/GO-2026-6859) (net/http) in the standard
   library. Tool Guard also includes the golang.org/x/sys v0.49.0 update from PR #51.
 - Three existing structural-validation messages now list `command_classify`: empty
