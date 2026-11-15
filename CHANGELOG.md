@@ -66,11 +66,10 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   instead of counting sampled envelopes as values.
 
 - The retained harness run measured commit
-  `24eafd647ce3fabebe0837df540340ed31b30829` on 2026-11-10. It does not
-  verify the current source end to end. `make release-binding` checks the
-  measured binary hash and Go VCS metadata, verifier hash, and source changes
-  since the measured commit. This gate fails for the retained historical
-  manifest. A new maintainer-run measurement is required before release.
+  `b7b3a1cb03fe3720c362d4369fa4e43c9439bc84` on 2026-11-15, on Claude Code 2.1.325,
+  Codex CLI 0.166.0 and Antigravity CLI 1.5.9. `make release-binding` checks
+  the measured binary hash and Go VCS metadata, verifier hash, and source
+  changes since the measured commit.
 - The harness verifier copies sign-in files with mode 0600 by default. It
   removes credential values, including short tokens and base64 punctuation,
   from retained evidence before writing it, and fails a run that exposes them.
@@ -505,8 +504,9 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   Codex never dispatched the hook at all; the script now fails when no hook call
   was recorded. For Antigravity the configuration without
   `--dangerously-skip-permissions` is reported as a measurement, not as a pass:
-  in the release run on 1.5.4 it ran no call at all, calls the hook allowed
-  included, so a blocked call there does not show a guard decision.
+  in an earlier run on 1.5.4 it ran no call at all, calls the hook allowed
+  included, so a blocked call there does not show a guard decision. In the
+  release run on 1.5.9 it ran the calls that the hook allowed.
 - Documentation about Antigravity escalation was wrong in both directions. An earlier entry
   claimed an escalated call is refused without `--dangerously-skip-permissions`
   with no evidence; a single re-measurement then withdrew the claim entirely,
@@ -540,11 +540,14 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   `hook_alias_variants_test.go`, with the corpus case
   `agy_write_two_alias_paths`.
 - Antigravity escalation is now returned as `force_ask`. This changes the
-  value the hook emits. It does not make an escalation stop a call. In the release run on
+  value the hook emits. It does not make an escalation stop a call. In an earlier run on
   Antigravity CLI 1.5.4, started with `--dangerously-skip-permissions` in
   headless print mode, a `run_command` call ran after the hook answered `ask`
   in 3 of 3 runs and after it answered `force_ask` in 3 of 3 runs. That flag
-  approves permission requests. On 1.5.3 without the flag, in four local runs whose records are not in the
+  approves permission requests. The release run used 1.5.9. With the flag, no
+  escalated call ran in it; the stage table in `docs/support-matrix.md` gives
+  the counts. On
+  1.5.3 without the flag, in four local runs whose records are not in the
   repository, the
   harness refused a `write_file` call that the hook answered `force_ask` to
   ("a tool required the `write_file` permission that headless mode cannot
@@ -552,12 +555,14 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   version does with `ask` without the flag. `tg hook` now maps an escalation
   to `force_ask`, the stricter of the two values, in the Antigravity dialect.
   `-antigravity-escalation ask` restores `ask`, and the case
-  `agy_write_context_file_ask_override` pins what that emits. An operator who
-  runs Antigravity with `--dangerously-skip-permissions` gets deny protection
-  and no escalation protection unless `TG_ESCALATE_AS=deny` is set.
+  `agy_write_context_file_ask_override` pins what that emits. The outcome of
+  an escalation with `--dangerously-skip-permissions` differs between these
+  versions. An operator who runs Antigravity with that flag gets deny
+  protection, and must set `TG_ESCALATE_AS=deny` to be sure an escalated call
+  does not run.
   `verify-harnesses.sh` measures both configurations each time a maintainer
   runs it.
-- Codex CLI 0.166.0 called `apply_patch` in the release run. An
+- Codex CLI 0.166.0 called `apply_patch` in the harness run of 2026-11-10. An
   `apply_patch` call has no path parameter: the patch text names the files.
   In that run `coding_agent_writes` denied every such call, also for a new
   file in the working tree that no rule protects.
@@ -575,8 +580,9 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   `codex_apply_patch_move_to_protected_denied`,
   `codex_apply_patch_second_file_protected_denied` and
   `codex_apply_patch_private_key_denied` pin this.
-  No harness run has measured the new reading: the stage table in
-  `docs/support-matrix.md` is from the run before this change.
+  The release run measured the new reading: Codex CLI 0.166.0 wrote the
+  allowed file with `apply_patch` in 3 of 3 runs, and the call for the
+  protected file was blocked in 3 of 3 runs.
 - The config templates in `examples/coding-agent-guard/config/` carry a
   `_comment` key. Codex CLI 0.166.0 rejects a `hooks.json` that has it: on
   start it warns `unknown field _comment` and loads no hook. Observed once on
