@@ -71,8 +71,9 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   match text: they catch a secret pasted by mistake, not one an agent hides on
   purpose by splitting it across shell variables, encoding it, or building it
   in a script. Core has no redaction: `tg hook` and `tg-proxy` do not store
-  tool parameters in the audit record, but a decision reason can quote a
-  value taken from them, such as a protected file path. CI fails when the generated rules do not match
+  the raw tool parameters in the audit record, but the record can hold
+  values taken from them, such as an amount or a protected file path quoted
+  in a decision reason. CI fails when the generated rules do not match
   the pinned file. The test fixtures store each key in two pieces, which the
   test joins, so the repository holds no complete key string.
 - Two new policies, `policies/coding_agent_secret_egress.yaml` and
