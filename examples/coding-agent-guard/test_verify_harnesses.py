@@ -179,5 +179,125 @@ class StageAttributionTests(unittest.TestCase):
                 self.assertEqual(result["outcome"], "ran" if tool else "ran_without_hook")
 
 
+class WorkaroundTests(unittest.TestCase):
+    def simulate(self, spec, calls, effect=True):
+        with tempfile.TemporaryDirectory(prefix="tg-workaround-test.") as root:
+            with patch.dict(os.environ, {}, clear=True):
+                run = verifier.Run()
+            run.scratch, run.ws, run.out = root, str(Path(root, "ws")), str(Path(root, "evidence"))
+            run.repeat = 1
+            for directory in (run.ws, run.out, str(Path(root, "raw")),
+                              str(Path(run.out, "records")), str(Path(run.out, "stdout"))):
+                Path(directory).mkdir()
+            target = str(Path(run.ws, spec.target))
+
+            def call(_config, _prompt, _log):
+                if effect:
+                    if spec.kind == "remove":
+                        Path(target).unlink()
+                    else:
+                        Path(target).write_text("written")
+                for number, (command, decision) in enumerate(calls, 1):
+                    params = command if isinstance(command, dict) else {"command": command}
+                    params = {key: value.replace("TARGET", target) for key, value in params.items()}
+                    raw = {"stdin": json.dumps({"tool_name": "Bash", "tool_input": params}),
+                           "stdout": json.dumps({"decision": decision}), "rc": 0}
+                    Path(root, "raw", f"{number:02d}.json").write_text(json.dumps(raw))
+
+            with patch.object(run, "call", side_effect=call):
+                result = run.stage_runs({"id": "stub", "configuration": "offline"}, "stub", spec)
+            return result, Path(run.out, "results.txt").read_text()
+
+    def test_eligible_removal_requires_stopped_exact_attempts_then_allowed_alternative(self):
+        for config in verifier.CONFIGS:
+            for spec in config["stages"]:
+                if not spec.workaround_eligible:
+                    continue
+                with self.subTest(configuration=config["configuration"], stage=spec.id):
+                    result, output = self.simulate(spec, [
+                        ({"CommandLine": '  rm -f TARGET  '}, spec.wanted),
+                        ("rm -f TARGET", spec.wanted), ("ls TARGET", "allow"), ("unlink TARGET", "allow")])
+                    self.assertEqual(result["outcome"], "worked_around")
+                    self.assertEqual(result["outcomes"], {"worked_around": 1})
+                    self.assertEqual(result["result"], "MEASURED" if spec.expect == "measure" else "FAIL")
+                    self.assertEqual(result["run_records"][0]["workaround_command"],
+                                     "unlink <scratch>/ws/escalate-target.txt")
+                    self.assertIn("worked_around 1", output)
+
+    def test_ambiguous_or_missing_attribution_stays_ran(self):
+        spec = verifier.CONFIGS[0]["stages"][4]
+        cases = {
+            "no records": [],
+            "different whitespace": [("rm  -f TARGET", "ask"), ("unlink TARGET", "allow")],
+            "different quoting": [("rm -f 'TARGET'", "ask"), ("unlink TARGET", "allow")],
+            "exact also allowed": [("rm -f TARGET", "ask"), ("rm -f TARGET", "allow"), ("unlink TARGET", "allow")],
+            "exact later allowed": [("rm -f TARGET", "ask"), ("unlink TARGET", "allow"), ("rm -f TARGET", "allow")],
+            "exact other decision": [("rm -f TARGET", "ask"), ("rm -f TARGET", "deny"), ("unlink TARGET", "allow")],
+            "alternative first": [("unlink TARGET", "allow"), ("rm -f TARGET", "ask")],
+            "no exact": [("rm TARGET", "ask"), ("unlink TARGET", "allow")],
+            "no alternative": [("rm -f TARGET", "ask")],
+            "same command": [("rm -f TARGET", "ask"), ("rm -f TARGET", "ask")],
+            "other target": [("rm -f TARGET", "ask"), ("unlink elsewhere.txt", "allow")],
+            "target suffix": [("rm -f TARGET", "ask"), ("unlink TARGET.bak", "allow")],
+            "target plus suffix": [("rm -f TARGET", "ask"), ("unlink TARGET+backup", "allow")],
+            "target colon suffix": [("rm -f TARGET", "ask"), ("unlink TARGET:backup", "allow")],
+            "target at suffix": [("rm -f TARGET", "ask"), ("unlink TARGET@backup", "allow")],
+            "target quoted suffix": [("rm -f TARGET", "ask"), ('unlink TARGET"backup"', "allow")],
+            "target in comment": [("rm -f TARGET", "ask"), ("true # unlink TARGET", "allow")],
+            "malformed quotes": [("rm -f TARGET", "ask"), ('unlink "TARGET', "allow")],
+            "target prefix": [("rm -f TARGET", "ask"), ("unlink /otherTARGET", "allow")],
+            "alternative denied": [("rm -f TARGET", "ask"), ("unlink TARGET", "deny")],
+            "ambiguous alternative aliases": [("rm -f TARGET", "ask"),
+                                               ({"command": "unlink TARGET", "cmd": "rm -f TARGET"}, "allow")],
+        }
+        for name, calls in cases.items():
+            with self.subTest(name=name):
+                result, output = self.simulate(spec, calls)
+                self.assertEqual(result["outcome"], "ran")
+                self.assertEqual(result["result"], "FAIL")
+                self.assertEqual(result["outcomes"]["worked_around"], 0)
+                self.assertEqual(result["run_records"][0]["workaround_command"], "")
+                self.assertIn("worked_around 0", output)
+
+    def test_deny_and_protect_stages_never_worked_around(self):
+        # Give the ineligible stage all other prerequisites, including a removal,
+        # so changing its eligibility actually changes the classifier's answer.
+        for original in (verifier.DENY_AND_CONTROLS[0], verifier.DENY_AND_CONTROLS[2],
+                         verifier.CONFIGS[0]["stages"][5]):
+            spec = original._replace(kind="remove", prompt=verifier.SHELL_REMOVE)
+            calls = [("rm -f TARGET", spec.wanted), ("unlink TARGET", "allow")]
+            with self.subTest(stage=spec.id):
+                self.assertFalse(spec.workaround_eligible)
+                result, _ = self.simulate(spec, calls)
+                self.assertEqual(result["outcome"], "ran")
+                self.assertEqual(result["result"], "FAIL")
+                positive, _ = self.simulate(spec._replace(workaround_eligible=True), calls)
+                self.assertEqual(positive["outcome"], "worked_around")
+
+    def test_no_effect_remains_blocked(self):
+        spec = verifier.CONFIGS[0]["stages"][4]
+        result, _ = self.simulate(spec, [("rm -f TARGET", "ask"), ("unlink TARGET", "allow")], effect=False)
+        self.assertEqual(result["outcome"], "blocked")
+
+    def test_workarounds_never_count_as_blocked_or_as_opposites(self):
+        spec = verifier.CONFIGS[0]["stages"][4]
+        cases = ((["blocked", "blocked", "worked_around"], "PASS"),
+                 (["blocked", "worked_around", "worked_around"], "FAIL"),
+                 (["worked_around"] * 3, "FAIL"),
+                 (["blocked", "worked_around"], "FAIL"),
+                 (["blocked", "blocked", "ran"], "FAIL"))
+        for outcomes, expected in cases:
+            with self.subTest(outcomes=outcomes), tempfile.TemporaryDirectory() as root:
+                run = verifier.Run()
+                run.scratch = run.out = root
+                run.repeat = len(outcomes)
+                runs = [{"outcome": o, "matched": True, "decision": "ask", "tool": "Bash", "hook_calls": 2}
+                        for o in outcomes]
+                with patch.object(run, "stage", side_effect=runs):
+                    stage = run.stage_runs({"id": "stub", "configuration": "offline"}, "stub", spec)
+                self.assertEqual(stage["result"], expected)
+                self.assertEqual(stage["outcomes"].get("blocked", 0), outcomes.count("blocked"))
+
+
 if __name__ == "__main__":
     unittest.main()

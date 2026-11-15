@@ -25,7 +25,7 @@ def measured_harnesses():
     entries = []
     for config in verifier.CONFIGS:
         stages = []
-        for sid, expect, _kind, _target, wanted, _cls, _prompt, _env in config["stages"]:
+        for sid, expect, _kind, _target, wanted, _cls, _prompt, _env, _eligible in config["stages"]:
             outcome = expect if expect != "measure" else "not_measured"
             stages.append({"id": sid, "expect": expect, "wanted_decision": wanted,
                            "runs": 3, "outcomes": {outcome: 3}, "outcome": outcome,
@@ -54,6 +54,65 @@ def commit(repo):
             "-c", "commit.gpgsign=false", "commit", "-qm",
             "fixture\n\nCo-Authored-By: Codex <noreply@openai.com>")
     return command(repo, "git", "rev-parse", "HEAD")
+
+
+class WorkaroundBindingTests(unittest.TestCase):
+    def fixture(self):
+        harnesses = measured_harnesses()
+        for harness, config in zip(harnesses, verifier.CONFIGS):
+            for stage, spec in zip(harness["stages"], config["stages"]):
+                stage["workaround_eligible"] = spec.workaround_eligible
+                if spec.workaround_eligible:
+                    stage["outcomes"]["worked_around"] = 0
+        return {"schema": 5, "repeat": 3, "harnesses": harnesses}
+
+    def errors(self, doc):
+        errors = []
+        binding.validate_stages(doc, lambda condition, message: None if condition else errors.append(message))
+        return errors
+
+    def test_eligible_majority_with_workaround_passes(self):
+        doc = self.fixture()
+        stage = doc["harnesses"][0]["stages"][4]
+        stage.update(outcomes={"blocked": 2, "worked_around": 1}, outcome="mixed")
+        self.assertEqual(self.errors(doc), [])
+
+    def test_workarounds_cannot_supply_majority_or_hide_opposite(self):
+        for counts in ({"blocked": 1, "worked_around": 2}, {"worked_around": 3},
+                       {"blocked": 1, "ran": 1, "worked_around": 1}):
+            with self.subTest(counts=counts):
+                doc = self.fixture()
+                stage = doc["harnesses"][0]["stages"][4]
+                stage.update(outcomes=counts, outcome="mixed" if len(counts) > 1 else "worked_around")
+                self.assertIn("stage result is not a passing result consistent with its outcomes", self.errors(doc))
+
+    def test_ineligible_stages_reject_key_even_when_zero_or_claimed_eligible(self):
+        for config_index, config in enumerate(verifier.CONFIGS):
+            for stage_index, spec in enumerate(config["stages"]):
+                if spec.workaround_eligible:
+                    continue
+                for count in (0, 1):
+                    with self.subTest(config=config_index, stage=spec.id, count=count):
+                        doc = self.fixture()
+                        stage = doc["harnesses"][config_index]["stages"][stage_index]
+                        stage["outcomes"]["worked_around"] = count
+                        stage["workaround_eligible"] = True
+                        errors = self.errors(doc)
+                        self.assertIn("worked_around is forbidden for an ineligible stage", errors)
+                        self.assertIn("stage workaround eligibility does not match the verifier", errors)
+
+    def test_eligible_zero_count_is_required_and_does_not_change_summary(self):
+        doc = self.fixture()
+        self.assertEqual(self.errors(doc), [])
+        del doc["harnesses"][0]["stages"][4]["outcomes"]["worked_around"]
+        self.assertIn("stage outcomes must store the worked_around count", self.errors(doc))
+
+    def test_legacy_counts_remain_valid_but_cannot_claim_workarounds(self):
+        doc = {"schema": 4, "repeat": 3, "harnesses": measured_harnesses()}
+        self.assertEqual(self.errors(doc), [])
+        stage = doc["harnesses"][0]["stages"][4]
+        stage.update(outcomes={"blocked": 2, "worked_around": 1}, outcome="mixed")
+        self.assertIn("worked_around requires manifest schema 5", self.errors(doc))
 
 
 class ReleaseBindingTests(unittest.TestCase):
@@ -154,11 +213,11 @@ class ReleaseBindingTests(unittest.TestCase):
 
     def test_malformed_stage_counts_results_and_expectations_are_rejected(self):
         cases = [
-            ({"outcomes": {"unknown": 3}}, "known names and positive integer"),
-            ({"outcomes": {"blocked": 4, "ran": -1}}, "known names and positive integer"),
-            ({"outcomes": {"blocked": True, "not_measured": 2}}, "known names and positive integer"),
-            ({"outcomes": {"blocked": 3.0}}, "known names and positive integer"),
-            ({"outcomes": {"blocked": 3, "ran": 0}}, "known names and positive integer"),
+            ({"outcomes": {"unknown": 3}}, "known names and valid integer"),
+            ({"outcomes": {"blocked": 4, "ran": -1}}, "known names and valid integer"),
+            ({"outcomes": {"blocked": True, "not_measured": 2}}, "known names and valid integer"),
+            ({"outcomes": {"blocked": 3.0}}, "known names and valid integer"),
+            ({"outcomes": {"blocked": 3, "ran": 0}}, "known names and valid integer"),
             ({"outcomes": {"blocked": 2}}, "counts must equal"),
             ({"runs": 4}, "counts must equal"),
             ({"result": "UNKNOWN"}, "stage result"),

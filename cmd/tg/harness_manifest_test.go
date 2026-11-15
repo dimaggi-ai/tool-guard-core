@@ -122,21 +122,42 @@ var manifestOutcomeWords = map[string]string{
 	"ran":              "ran",
 	"ran_without_hook": "ran, hook not called",
 	"not_measured":     "not measured",
+	"worked_around":    "worked around",
 }
 
 // manifestOutcomeCell words what the runs of one stage showed: every outcome
 // with the number of runs that had it.
 func manifestOutcomeCell(s harnessManifestStage) string {
 	keys := make([]string, 0, len(s.Outcomes))
-	for k := range s.Outcomes {
-		keys = append(keys, k)
+	for k, n := range s.Outcomes {
+		if n > 0 {
+			keys = append(keys, k)
+		}
 	}
 	sort.Strings(keys)
 	parts := make([]string, 0, len(keys))
 	for _, k := range keys {
-		parts = append(parts, fmt.Sprintf("%s in %d", manifestOutcomeWords[k], s.Outcomes[k]))
+		part := fmt.Sprintf("%s in %d", manifestOutcomeWords[k], s.Outcomes[k])
+		if s.Outcomes["worked_around"] > 0 {
+			part += fmt.Sprintf(" of %d", s.Runs)
+		}
+		parts = append(parts, part)
+	}
+	if s.Outcomes["worked_around"] > 0 {
+		return strings.Join(parts, ", ")
 	}
 	return fmt.Sprintf("%s of %d", strings.Join(parts, ", "), s.Runs)
+}
+
+func TestManifestOutcomeCellKeepsWorkaroundsSeparate(t *testing.T) {
+	stage := harnessManifestStage{Runs: 3, Outcomes: map[string]int{"blocked": 2, "worked_around": 1}}
+	if got, want := manifestOutcomeCell(stage), "blocked in 2 of 3, worked around in 1 of 3"; got != want {
+		t.Fatalf("outcome cell = %q, want %q", got, want)
+	}
+	stage.Outcomes = map[string]int{"blocked": 3, "worked_around": 0}
+	if got := manifestOutcomeCell(stage); got != "blocked in 3 of 3" {
+		t.Fatalf("zero workarounds changed outcome cell: %q", got)
+	}
 }
 
 // manifestSentences are the only operator statements about harness behaviour.
@@ -217,8 +238,8 @@ const legacyHarnessBinary = "fa2308b9f1fb1e67367a4371633dfc09fa36d5586e4d8c0d451
 
 func TestHarnessManifestIsHistoricalEvidence(t *testing.T) {
 	m := loadHarnessManifest(t)
-	if m.Schema != 4 {
-		t.Errorf("schema is %d, want 4", m.Schema)
+	if m.Schema != 4 && m.Schema != 5 {
+		t.Errorf("schema is %d, want 4 or 5", m.Schema)
 	}
 	if m.Repeat < manifestMinRuns {
 		t.Errorf("every stage was sent %d time(s), want at least %d: run make verify-harnesses", m.Repeat, manifestMinRuns)
@@ -240,6 +261,9 @@ func TestHarnessManifestIsHistoricalEvidence(t *testing.T) {
 	}
 	wantWiring := legacyHarnessWiring
 	if m.Commit == legacyHarnessCommit {
+		if m.Schema != 4 {
+			t.Errorf("historical schema changed: got %d, want 4", m.Schema)
+		}
 		if m.Binary != legacyHarnessBinary {
 			t.Errorf("historical binary hash changed: got %s, want %s", m.Binary, legacyHarnessBinary)
 		}

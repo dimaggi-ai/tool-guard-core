@@ -8,6 +8,16 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Review corrections
 
+- The example shell policy now matches recursive and force flags as separate
+  words of the `rm` command. Plain `rm` of a path with `-r` or `-f` letters
+  inside a word is no longer escalated or denied for those letters.
+- The harness verifier reports `worked_around` when it records the expected
+  non-allow decision for every attempt at the prompted escalation command,
+  then a later allowed command naming the target, and the file is removed.
+  This applies only to eligible shell escalation stages. It counts separately
+  from blocked and ran. A stage passes only with no opposite outcome and more
+  than half its runs showing the expected outcome. Two blocked runs and one
+  worked-around run pass; one blocked run and two worked-around runs fail.
 - The hook conformance corpus includes real-install captures from Claude Code
   2.1.325 (`Bash`, `Read`, `Write`) and Antigravity CLI 1.5.9 (`read_file`,
   `run_command`, `write_file`).

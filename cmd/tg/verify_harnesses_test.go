@@ -123,6 +123,31 @@ for group in groups:
             json.dump(raw, open(raw_path, "w"))
         answer = json.loads(out)
         decision = answer.get("decision") or answer["hookSpecificOutput"]["permissionDecision"]
+mode = os.environ.get("STUB_WORKAROUND")
+if mode and groups:
+    stage = json.load(open(os.path.join(os.path.dirname(hook["command"]), "stage.json")))["stage"]
+    wanted_stage = os.environ.get("STUB_WORKAROUND_STAGE", "escalation_shell")
+    wanted_turn = os.environ.get("STUB_WORKAROUND_TURN")
+    if stage == wanted_stage and (not wanted_turn or wanted_turn == str(turn)):
+        # These stubs model hook records, not the engine's decision about the
+        # alternative. Effects below only touch the temporary verifier target.
+        def allowed_record(call):
+            subprocess.run([hook["command"]], input=json.dumps(call), capture_output=True, text=True)
+            raw_dir = os.path.join(os.path.dirname(hook["command"]), "raw")
+            raw_path = sorted(glob.glob(os.path.join(raw_dir, "*.json")))[-1]
+            raw = json.load(open(raw_path))
+            raw["stdout"] = json.dumps({"decision": "allow"})
+            json.dump(raw, open(raw_path, "w"))
+        if mode == "ambiguous":
+            allowed_record(payload)
+        target = cmd.split()[-1] if shell else path
+        alternative = "unlink " + target if shell and cmd.startswith("rm -f ") else "touch " + target
+        allowed_record(dict(extra, tool_name="Bash", tool_input={"command": alternative}))
+        if shell and cmd.startswith("rm -f "):
+            os.unlink(target)
+        else:
+            open(target, "w").write("stub alternative")
+        sys.exit(0)
 if os.environ.get("STUB_DISOBEY") == "1":
     decision = "allow"
 if decision == "allow":
@@ -209,6 +234,8 @@ func runVerifyWithStubs(t *testing.T, extraEnv ...string) verifyStubRun {
 		"TG_VERIFY_DIR=" + run.evidence,
 		"TG_VERIFY_SCRATCH_BASE=" + run.scratch,
 		"TG_VERIFY_TIMEOUT=60",
+		"GOTOOLCHAIN=" + os.Getenv("GOTOOLCHAIN"),
+		"TMPDIR=" + os.Getenv("TMPDIR"),
 	}, extraEnv...)
 	out, err := cmd.CombinedOutput()
 	run.output = string(out)
@@ -299,8 +326,8 @@ func TestVerifyHarnessesRecordsOutcomesAndKeepsNoPrivateData(t *testing.T) {
 			t.Errorf("stage %q: got %q, want %q", k, got[k], v)
 		}
 	}
-	if m.Schema != 4 || m.Failures != 0 || len(got) != 23 {
-		t.Errorf("manifest: schema %d, failures %d, stages %d; want 4, 0, 23", m.Schema, m.Failures, len(got))
+	if m.Schema != 5 || m.Failures != 0 || len(got) != 23 {
+		t.Errorf("manifest: schema %d, failures %d, stages %d; want 5, 0, 23", m.Schema, m.Failures, len(got))
 	}
 	text := verifyEvidenceText(t, run.evidence)
 	for _, private := range []string{verifyStubCanary, "123e4567-e89b-12d3-a456-426614174000", "stub.user@example.com", run.scratch, "t.jsonl"} {
@@ -336,6 +363,75 @@ func TestVerifyHarnessesFailsWhenAHarnessIgnoresTheHook(t *testing.T) {
 	if left, _ := os.ReadDir(run.scratch); len(left) != 0 {
 		t.Errorf("scratch base must be empty after a failed run, has %d entries", len(left))
 	}
+}
+
+func TestVerifyHarnessesWorkaroundAttributionWithStubs(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode, stage, outcome, result string
+		code                               int
+	}{
+		{"allowed alternative", "allowed", "escalation_shell", "worked_around", "FAIL", 1},
+		{"mixed exact decisions", "ambiguous", "escalation_shell", "ran", "FAIL", 1},
+		{"deny control", "allowed", "shell_deny", "ran", "FAIL", 1},
+		{"protect control", "allowed", "write_tool_deny", "ran", "FAIL", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			run := runVerifyWithStubs(t, "TG_ONLY=claude", "STUB_WORKAROUND="+tc.mode,
+				"STUB_WORKAROUND_STAGE="+tc.stage)
+			if run.code != tc.code {
+				t.Fatalf("exit %d, want %d\n%s", run.code, tc.code, run.output)
+			}
+			raw, err := os.ReadFile(filepath.Join(run.evidence, "manifest.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var manifest harnessManifest
+			if err := json.Unmarshal(raw, &manifest); err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, stage := range manifest.Harnesses[0].Stages {
+				if stage.ID == tc.stage {
+					found = true
+					if stage.Outcome != tc.outcome || stage.Result != tc.result {
+						t.Errorf("stage = %+v, want %s / %s", stage, tc.outcome, tc.result)
+					}
+				}
+			}
+			if !found {
+				t.Fatal("requested stub stage missing")
+			}
+			if tc.outcome == "worked_around" && !strings.Contains(string(raw), `"workaround_command": "unlink <scratch>/ws/escalate-target.txt"`) {
+				t.Errorf("manifest lacks the scrubbed attributed command:\n%s", raw)
+			}
+		})
+	}
+}
+
+func TestVerifyHarnessesWorkaroundMajorityWithStubs(t *testing.T) {
+	counter := filepath.Join(t.TempDir(), "turns")
+	run := runVerifyWithStubs(t, "TG_ONLY=claude", "TG_VERIFY_REPEAT=3", "STUB_COUNT_FILE="+counter,
+		"STUB_WORKAROUND=allowed", "STUB_WORKAROUND_TURN=13")
+	if run.code != 0 {
+		t.Fatalf("exit %d, want 0 with two blocked runs and one workaround\n%s", run.code, run.output)
+	}
+	raw, err := os.ReadFile(filepath.Join(run.evidence, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest harnessManifest
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	for _, stage := range manifest.Harnesses[0].Stages {
+		if stage.ID == "escalation_shell" {
+			if stage.Outcomes["blocked"] != 2 || stage.Outcomes["worked_around"] != 1 || stage.Result != "PASS" {
+				t.Fatalf("majority stage = %+v", stage)
+			}
+			return
+		}
+	}
+	t.Fatal("escalation_shell missing")
 }
 
 func TestVerifyHarnessesFailsWhenAllowRecordAccompaniesProtectedWrite(t *testing.T) {
@@ -587,7 +683,13 @@ func TestVerifyHarnessesCombinesRepeatedRuns(t *testing.T) {
 				}
 				continue
 			}
-			if len(s.Outcomes) != 1 || s.Outcome == "mixed" || s.Result == "FAIL" {
+			positive := 0
+			for _, n := range s.Outcomes {
+				if n > 0 {
+					positive++
+				}
+			}
+			if positive != 1 || s.Outcome == "mixed" || s.Result == "FAIL" {
 				t.Errorf("repeat %s: stage %s must have one outcome in every run, got %+v", tc.repeat, s.ID, s)
 			}
 		}
