@@ -30,7 +30,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # TestPolicyCompatCoverage needs the release tags (and their tree
           # objects, for git ls-tree/show) to assert every tag has a policy
@@ -91,6 +91,13 @@ jobs:
       - name: Integration tests
         run: go test -race -count=1 -tags=integration ./cmd/tg/... ./cmd/tg-proxy/...
 
+      # The PostgreSQL parse-tree walker (and its protobuf dependency) builds
+      # only under the opt-in pg_strict tag, so the default test run above
+      # never compiles it.
+      - name: PostgreSQL strict parser tests
+        if: matrix.os == 'ubuntu-latest'
+        run: go test -race -count=1 -tags=pg_strict ./pkg/sqlguard/postgres
+
       - name: Exported Go API matches reviewed baseline
         if: matrix.os == 'ubuntu-latest'
         run: ./scripts/check-api.sh
@@ -117,7 +124,7 @@ jobs:
           - "3.10"
           - "3.12"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26.11"
@@ -156,7 +163,7 @@ jobs:
     name: govulncheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26.11"
@@ -169,7 +176,7 @@ jobs:
     name: examples build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26.11"
@@ -219,7 +226,7 @@ jobs:
     name: goreleaser config check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: actions/setup-go@v5
@@ -248,7 +255,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 75
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
