@@ -35,7 +35,7 @@ func TestSecretDifferentialGitleaks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 1,176 gitleaks runs take about 75 s here and about 3 minutes on a
+	// 1,176 gitleaks runs take about 90 s here and over 4 minutes on a
 	// hosted CI runner, so the whole comparison gets 15 minutes.
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
