@@ -35,7 +35,9 @@ func TestSecretDifferentialGitleaks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	// 1,176 gitleaks runs take about 75 s here and about 3 minutes on a
+	// hosted CI runner, so the whole comparison gets 15 minutes.
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	version, err := exec.CommandContext(ctx, binary, "version").CombinedOutput()
 	if err != nil || strings.TrimSpace(string(version)) != "8.30.1" {
