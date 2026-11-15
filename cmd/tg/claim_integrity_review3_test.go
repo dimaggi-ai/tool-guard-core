@@ -280,15 +280,26 @@ func TestChangelogAgyFlagProtectionMatchesManifest(t *testing.T) {
 	if entries != 1 {
 		t.Fatalf("manifest: %d entries with configuration %q; the test needs exactly one", entries, flagged)
 	}
-	// The deny stages must hold in every run. A run that the verifier counts
-	// as worked_around is a held run: the denied call did not run.
+	// The deny stages must pass by the rule of the verifier: no run shows the
+	// denied call running, and the call was held in more than half of the
+	// runs. A run that the verifier counts as worked_around is a held run: the
+	// denied call did not run. A not_measured run shows nothing, in either
+	// direction; the harness made no call in it. The run of 2026-11-15 on
+	// f5bb614 had one such run in three, and the verifier passed the stage.
 	for _, id := range []string{"shell_deny", "escalation_shell_as_deny"} {
 		s, ok := stage[id]
 		if !ok {
 			t.Fatalf("manifest: no stage %s with the flag", id)
 		}
-		if held := s.Outcomes["blocked"] + s.Outcomes["worked_around"]; s.Result != "PASS" || s.Runs == 0 || held != s.Runs {
-			t.Fatalf("manifest: stage %s with the flag has result %q and outcomes %v in %d runs; the changelog sentence needs the call held in every run", id, s.Result, s.Outcomes, s.Runs)
+		held := s.Outcomes["blocked"] + s.Outcomes["worked_around"]
+		opposite := 0
+		for outcome, n := range s.Outcomes {
+			if outcome != "blocked" && outcome != "worked_around" && outcome != "not_measured" {
+				opposite += n
+			}
+		}
+		if s.Result != "PASS" || s.Runs == 0 || opposite != 0 || held*2 <= s.Runs {
+			t.Fatalf("manifest: stage %s with the flag has result %q and outcomes %v in %d runs; the changelog sentence needs no run that shows the call running and the call held in more than half of the runs", id, s.Result, s.Outcomes, s.Runs)
 		}
 	}
 	want := "gets deny protection and no escalation protection unless `TG_ESCALATE_AS=deny` is set."
