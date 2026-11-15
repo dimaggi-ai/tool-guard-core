@@ -193,34 +193,25 @@ DELETE_PROGRAMS = {"rm", "unlink", "shred", "mv"}
 
 
 def command_segments(command):
-    """Split a shell line into simple commands, each a list of words.
+    """Split a plain shell line into simple commands, each a list of words.
 
-    Only an unquoted, unescaped ; & | ( ) or newline ends a command, so quoted
-    punctuation stays inside its word. An unquoted # at the start of a word
-    begins a comment. Unbalanced quotes give no segments.
+    This is not a shell parser. A line with a backslash, a dollar sign, a
+    backquote or a here-document is not read at all: it gives no segments, so
+    nothing is attributed to it and the run stays `ran`. In the lines that
+    remain, quotes only group characters, an unquoted ; & | ( ) or newline ends
+    a command, and an unquoted # at the start of a word begins a comment.
+    Unbalanced quotes give no segments.
     """
+    if any(mark in command for mark in ("\\", "$", "`", "<<")):
+        return []
     segments, words, word, quote, i = [], [], None, "", 0
     while i < len(command):
         c = command[i]
-        if quote == "'":
-            if c == "'":
+        if quote:
+            if c == quote:
                 quote = ""
             else:
                 word += c
-        elif quote == '"':
-            if c == '"':
-                quote = ""
-            elif c == "\\" and i + 1 < len(command):
-                i += 1
-                word += command[i]
-            else:
-                word += c
-        elif c == "\\":
-            if i + 1 >= len(command):
-                return []
-            i += 1
-            if command[i] != "\n":
-                word = (word or "") + command[i]
         elif c in "'\"":
             quote, word = c, word or ""
         elif c == "#" and word is None:
