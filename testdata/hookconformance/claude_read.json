@@ -1,0 +1,37 @@
+{
+  "name": "claude_read",
+  "description": "Claude Code Read call captured from a real run.",
+  "harness": "claude-code",
+  "harness_version": "2.1.316",
+  "capture": {
+    "captured_from": "real install",
+    "captured_on": "2026-11-09",
+    "sanitisation": "session ids, transcript paths, model names and tool_use ids replaced with cap-* placeholders; tool names and parameter names and their casing are exactly as emitted"
+  },
+  "payload": {
+    "session_id": "cap-session",
+    "transcript_path": "/cap/transcript.jsonl",
+    "cwd": "/cap",
+    "prompt_id": "cap-prompt",
+    "permission_mode": "default",
+    "effort": {
+      "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Read",
+    "tool_input": {
+      "file_path": "/cap/note.txt"
+    },
+    "tool_use_id": "cap-tooluse"
+  },
+  "hook_args": [
+    "-policy-dir",
+    "POLICIES",
+    "-mode",
+    "enforcement"
+  ],
+  "expect": {
+    "decision": "allow",
+    "cites": ""
+  }
+}

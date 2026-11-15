@@ -43,12 +43,14 @@ func evalHTTPClassifyWithDetail(h *domain.HTTPClassify, fields map[string]interf
 
 	u, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil || u.Host == "" {
-		return true, fmt.Sprintf("http_classify: unparseable url %q", rawURL)
+		// Report only the length: the raw URL can carry a credential, and
+		// rule details are written to the audit log.
+		return true, fmt.Sprintf("http_classify: unparseable url (%d bytes)", len(rawURL))
 	}
 	scheme := strings.ToLower(u.Scheme)
 	if scheme == "" && hasAllowList {
 		// A scheme-relative URL (//host/path) has an unverifiable destination.
-		return true, fmt.Sprintf("http_classify: url %q has no scheme and an allow-list is set", rawURL)
+		return true, fmt.Sprintf("http_classify: url (%d bytes) has no scheme and an allow-list is set", len(rawURL))
 	}
 	// Trim a trailing root dot so example.com. cannot dodge a .example.com rule.
 	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")

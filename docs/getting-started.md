@@ -207,8 +207,8 @@ target support.
 
 ## 6b. Wire another agent with `tg hook`
 
-`tg hook` is the batteries-included alternative to the hand-rolled shell
-adapters in `examples/coding-agent-guard/`. It reads one PreToolUse JSON
+`tg hook` is the command that `examples/coding-agent-guard/install.sh` wires
+into each harness. It reads one PreToolUse JSON
 object from stdin, evaluates it, and writes the hook response to stdout.
 **Always exits 0** — the hook signals via JSON, never via exit code.
 
@@ -223,7 +223,7 @@ Add it to your Claude Code `~/.claude/settings.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "bin/tg hook -policy-dir /path/to/policies -protect-self -fail-closed-tools bash,write,edit,notebookedit"
+            "command": "bin/tg hook -policy-dir /path/to/policies -protect-self -fail-closed-tools bash,powershell,write,edit,notebookedit"
           }
         ]
       }
@@ -238,11 +238,11 @@ Key flags:
 |---|---|
 | `-policy-dir DIR` | Load all `*.yaml` policies from this directory |
 | `-policy FILE` | Load a single policy file (mutually exclusive with `-policy-dir`) |
-| `-protect-self` | Unconditionally protect the policy dir and `$HOME/.claude` from writes — the agent cannot edit this away |
+| `-protect-self` | Deny writes to the policy dir and `$HOME/.claude` before policy evaluation; a policy cannot turn this off. The shell check has limits, see [operating.md](operating.md) |
 | `-protect-path PATH` | Protect one exact prefix; repeat for multiple paths (preserves commas in names) |
 | `-protect-paths P1,P2` | Additional prefixes to protect (comma-separated) |
 | `-fail-closed` | Deny on any internal error (tooling glitch, bad policy load) |
-| `-fail-closed-tools bash,write,edit,notebookedit` | Deny only these tools on error; others fail open |
+| `-fail-closed-tools bash,powershell,write,edit,notebookedit` | Deny only these tools on error; others fail open |
 | `-unknown-tools-deny` | Deny any tool_name not declared in `scope.tool_names` of a loaded enforcement policy — closes the gap where a new tool the agent starts calling matches no policy and is silently ungoverned |
 | `-mode shadow\|enforcement` | Call-site default (default: enforcement). Enforcement-mode policies still block under `-mode shadow`; observe-only staging requires `mode: shadow` in policy YAML. |
 

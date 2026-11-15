@@ -1,0 +1,35 @@
+{
+  "name": "codex_apply_patch_system_path_denied",
+  "description": "apply_patch that updates a file under /etc. The hook reads the file from the line '*** Update File:' and coding_agent_writes denies the path.",
+  "harness": "none",
+  "harness_version": "n/a",
+  "capture": {
+    "captured_from": "synthetic",
+    "captured_on": "2026-11-10",
+    "sanitisation": "hand-written patch text in the envelope of codex0_166_0_apply_patch_new_file_allowed"
+  },
+  "payload": {
+    "session_id": "cap-session",
+    "turn_id": "cap-turn",
+    "transcript_path": "/cap/rollout.jsonl",
+    "cwd": "/cap",
+    "hook_event_name": "PreToolUse",
+    "model": "cap-model",
+    "permission_mode": "bypassPermissions",
+    "tool_name": "apply_patch",
+    "tool_input": {
+      "command": "*** Begin Patch\n*** Update File: /etc/hosts\n@@\n+127.0.0.1 example.test\n*** End Patch"
+    },
+    "tool_use_id": "cap-exec"
+  },
+  "hook_args": [
+    "-policy-dir",
+    "POLICIES",
+    "-mode",
+    "enforcement"
+  ],
+  "expect": {
+    "decision": "deny",
+    "cites": "confined to the working tree"
+  }
+}

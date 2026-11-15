@@ -1,0 +1,42 @@
+{
+  "name": "claude2_1_321_shell_write_to_protected_path",
+  "description": "Claude Code 2.1.321 Bash payload, captured end-to-end by examples/coding-agent-guard/verify-harnesses.sh in a real run: the harness attempted the write and the call reached the guard. The CLI updates itself, so a claim must name the version the payload was captured at; the 2.1.316 captures cannot cover 2.1.321.",
+  "harness": "claude-code",
+  "harness_version": "2.1.321",
+  "capture": {
+    "captured_from": "real install",
+    "captured_on": "2026-11-09",
+    "sanitisation": "session/prompt/tool-use ids replaced with cap-* markers; only the containing directory collapsed to /cap, basenames, parameter names and casing preserved exactly as emitted"
+  },
+  "payload": {
+    "session_id": "cap-session_id",
+    "transcript_path": "/cap/transcript.jsonl",
+    "cwd": "/cap",
+    "prompt_id": "cap-prompt_id",
+    "permission_mode": "default",
+    "effort": {
+      "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "echo written > /cap/protected.txt",
+      "description": "Write text to protected.txt"
+    },
+    "tool_use_id": "cap-tool_use_id"
+  },
+  "hook_args": [
+    "-policy-dir",
+    "POLICIES",
+    "-mode",
+    "enforcement",
+    "-fail-closed-tools",
+    "bash,powershell,write,edit,notebookedit,run_command",
+    "-protect-path",
+    "/cap/protected.txt"
+  ],
+  "expect": {
+    "decision": "deny",
+    "cites": "protected path"
+  }
+}

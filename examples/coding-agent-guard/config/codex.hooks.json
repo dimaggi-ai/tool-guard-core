@@ -1,16 +1,18 @@
 {
-  "_comment": "Install at ~/.codex/hooks.json (user) or .codex/hooks.json (project). Replace __HOOK_DIR__ with the absolute path to examples/coding-agent-guard/hooks. `install.sh codex` does this for you. Codex shares Claude Code's hook protocol, so it reuses anthropic-hook.sh.",
-  "PreToolUse": [
-    {
-      "matcher": "^Bash$",
-      "hooks": [
-        {
-          "type": "command",
-          "command": "__HOOK_DIR__/anthropic-hook.sh",
-          "timeout": 30,
-          "statusMessage": "Tool Guard policy check"
-        }
-      ]
-    }
-  ]
+  "_comment": "Install at ~/.codex/hooks.json (user) or .codex/hooks.json (project). Replace __HOOK_DIR__ with the absolute path to examples/coding-agent-guard/hooks. `install.sh codex` does this for you. Codex reads a top-level \"hooks\" object, not a top-level PreToolUse key. Codex does not call a hook it has not been made to trust: start codex and accept the hook when it asks. The wrapper returns an escalation as a denial. docs/support-matrix.md lists what was measured and on which version.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__HOOK_DIR__/codex-hook.sh",
+            "timeout": 30,
+            "statusMessage": "Tool Guard policy check"
+          }
+        ]
+      }
+    ]
+  }
 }

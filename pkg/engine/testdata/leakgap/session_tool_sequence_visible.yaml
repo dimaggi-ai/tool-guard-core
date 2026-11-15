@@ -1,0 +1,23 @@
+# Contract fixture for TestSessionToolSequenceIsVisibleToPolicyConditions (T6).
+# The rule fires when the session's ordered tool history is present in the
+# flattened field map. It does not test ordering; T7 covers that.
+schema_version: 1
+policy_id: leakgap-session-tool-sequence-visible
+name: leakgap-session-tool-sequence-visible
+version: 1
+status: approved
+mode: enforcement
+scope:
+  intentionally_global: true
+rules:
+  - rule_id: rule-tool-sequence-present
+    name: session tool sequence is readable by a condition
+    rule_type: sanity
+    conditions:
+      field: context.session_state.tool_sequence
+      operator: exists
+      value: true
+    effect: deny
+    citation:
+      document_id: LEAKGAP-T6
+      excerpt: "A policy can read context.session_state.tool_sequence."

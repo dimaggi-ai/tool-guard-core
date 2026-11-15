@@ -1,0 +1,29 @@
+{
+  "name": "unattributable_foreign_shape",
+  "description": "A payload with no tool_name and no toolCall is unattributable, not a shell call.",
+  "harness": "none",
+  "harness_version": "n/a",
+  "capture": {
+    "captured_from": "synthetic",
+    "captured_on": "2026-11-09",
+    "sanitisation": "n/a"
+  },
+  "payload": {
+    "tool": "run_command",
+    "parameters": {
+      "command": "rm -rf /"
+    }
+  },
+  "hook_args": [
+    "-policy-dir",
+    "POLICIES",
+    "-mode",
+    "enforcement",
+    "-fail-closed-tools",
+    "bash"
+  ],
+  "expect": {
+    "decision": "deny",
+    "cites": "not recognised"
+  }
+}

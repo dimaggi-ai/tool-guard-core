@@ -1,0 +1,39 @@
+{
+  "name": "protectpath_powershell_redirect",
+  "description": "A redirection at a -protect-path target is denied whatever harness dialect carried it.",
+  "harness": "claude-code",
+  "harness_version": "2.1.316",
+  "capture": {
+    "captured_from": "captured shape",
+    "captured_on": "2026-11-09",
+    "sanitisation": "built from the parameter names and casing of a real capture of this harness; no session metadata"
+  },
+  "payload": {
+    "session_id": "cap-session",
+    "transcript_path": "/cap/transcript.jsonl",
+    "cwd": "/cap",
+    "prompt_id": "cap-prompt",
+    "permission_mode": "default",
+    "effort": {
+      "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "PowerShell",
+    "tool_input": {
+      "command": "echo x > /cap/protected/settings.json"
+    },
+    "tool_use_id": "cap-tooluse"
+  },
+  "hook_args": [
+    "-policy-dir",
+    "POLICIES",
+    "-mode",
+    "enforcement",
+    "-protect-path",
+    "/cap/protected/settings.json"
+  ],
+  "expect": {
+    "decision": "deny",
+    "cites": "protected path"
+  }
+}

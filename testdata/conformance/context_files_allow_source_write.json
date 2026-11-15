@@ -1,0 +1,12 @@
+{
+  "name": "context_files_allow_source_write",
+  "description": "A write to an ordinary source file with no credential-shaped content must allow.",
+  "policy_file": "../../policies/coding_agent_context_files.yaml",
+  "mode": "enforcement",
+  "envelope": {
+    "tool_name": "write",
+    "tool_group": "filesystem_writes",
+    "parameters": {"file_path": "/home/user/project/main.go", "content": "package main\n"}
+  },
+  "expect": {"decision": "allowed", "action_taken": "allowed"}
+}

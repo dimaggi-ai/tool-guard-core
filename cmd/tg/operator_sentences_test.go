@@ -1,0 +1,136 @@
+package main
+
+// Sentences an operator relies on. The third independent review changed each
+// of them to its opposite and the suite still passed. Each sentence is now
+// required as written, next to a check of the behaviour it states.
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func requireSentences(t *testing.T, text string, sentences ...string) {
+	t.Helper()
+	text = oneLine(text)
+	for _, s := range sentences {
+		if !strings.Contains(text, s) {
+			t.Errorf("the document no longer holds the sentence %q; when the behaviour changed, change the sentence and this test together", s)
+		}
+	}
+}
+
+func TestOperatorSentencesMatchBehaviour(t *testing.T) {
+	dir := exampleDir(t)
+	readme := readRepoFile(t, "examples", "coding-agent-guard", "README.md")
+	changelog := readRepoFile(t, "CHANGELOG.md")
+	matrix := readRepoFile(t, "docs", "support-matrix.md")
+
+	// An escalated command: the shell policy escalates an outbound git push.
+	want := map[string]string{"claude": "ask", "codex": "deny", "antigravity": "force_ask"}
+	for harness, wrapper := range exampleWrappers {
+		out := runExampleHook(t, filepath.Join(dir, "hooks", wrapper), t.TempDir(), exampleShellPayload(harness, "git push origin main"))
+		if got, _ := exampleDecision(t, out); got != want[harness] {
+			t.Fatalf("%s wrapper returned %q for an escalated command, want %q", harness, got, want[harness])
+		}
+	}
+	requireSentences(t, readme,
+		"The Claude Code and Antigravity CLI wrappers return a request for approval. The Codex wrapper returns a denial.",
+		"The first returns an escalation as a denial. The second returns it as `force_ask`.")
+	requireSentences(t, changelog, "The Codex wrapper of the example sets `deny`.")
+
+	// A missing tg binary: the wrapper prints a deny.
+	for harness, wrapper := range exampleWrappers {
+		out := runExampleHook(t, filepath.Join(dir, "hooks", wrapper), t.TempDir(), exampleShellPayload(harness, "ls"),
+			"TG_BIN="+filepath.Join(t.TempDir(), "no-such-tg"))
+		if got, _ := exampleDecision(t, out); got != "deny" {
+			t.Fatalf("%s wrapper returned %q without a tg binary, want deny", harness, got)
+		}
+	}
+	requireSentences(t, readme, "or `tg` prints no decision, it prints a deny.")
+
+	// TG_PROTECT_BASELINE=0 keeps the protect-paths file and drops the rest.
+	home := t.TempDir()
+	extra := filepath.Join(t.TempDir(), "extra.txt")
+	if err := os.MkdirAll(filepath.Join(home, ".tool-guard"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".tool-guard", "protect-paths"), []byte(extra+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	claude := filepath.Join(dir, "hooks", exampleWrappers["claude"])
+	for command, wantDecision := range map[string]string{
+		"echo x > " + extra:                                  "deny",
+		"echo x > " + home + "/.claude/settings.json":        "allow",
+		"echo x > " + home + "/.tool-guard/hook-audit.jsonl": "allow",
+	} {
+		out := runExampleHook(t, claude, home, exampleShellPayload("claude", command), "TG_PROTECT_BASELINE=0")
+		if got, _ := exampleDecision(t, out); got != wantDecision {
+			t.Fatalf("TG_PROTECT_BASELINE=0, %s: decision = %q, want %q", command, got, wantDecision)
+		}
+	}
+	requireSentences(t, readme, "`TG_PROTECT_BASELINE=0` turns off all of these except the paths in the `protect-paths` file.")
+
+	// The three config files the wrapper protects, and the backup suffix.
+	wrapper := readRepoFile(t, "examples", "coding-agent-guard", "hooks", "guard-hook.sh")
+	for _, line := range []string{
+		`protect+=("${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json")`,
+		`protect+=("${CODEX_HOME:-$HOME/.codex}/hooks.json")`,
+		`protect+=("$HOME/.gemini/config/hooks.json")`,
+	} {
+		if !strings.Contains(wrapper, line) {
+			t.Fatalf("guard-hook.sh no longer holds %s; update the changelog sentence and this test", line)
+		}
+	}
+	if n := strings.Count(wrapper, "protect+=(\""); n != 7 {
+		t.Fatalf("guard-hook.sh adds protected paths in %d lines, want 7; check the documented list", n)
+	}
+	requireSentences(t, changelog, "to three harness config files: `~/.claude/settings.json`, `~/.codex/hooks.json` and `~/.gemini/config/hooks.json`.")
+	installer := readRepoFile(t, "examples", "coding-agent-guard", "install.sh")
+	if !strings.Contains(installer, `cp -p "$1" "$1.bak-toolguard"`) {
+		t.Fatal("install.sh no longer writes a .bak-toolguard copy; update the README sentence and this test")
+	}
+	requireSentences(t, readme, "it copies the file to a file with the suffix `.bak-toolguard` next to it.")
+
+	// apply_patch: the corpus cases hold the reading of the patch text.
+	for _, name := range []string{
+		"codex0_166_0_apply_patch_new_file_allowed",
+		"codex_apply_patch_system_path_denied",
+		"codex_apply_patch_protected_path_denied",
+		"codex_apply_patch_move_to_protected_denied",
+		"codex_apply_patch_second_file_protected_denied",
+		"codex_apply_patch_private_key_denied",
+	} {
+		if _, err := os.Stat(filepath.Join("..", "..", "testdata", "hookconformance", name+".json")); err != nil {
+			t.Fatalf("the corpus case %s is gone: %v", name, err)
+		}
+		if !strings.Contains(changelog, "`"+name+"`") {
+			t.Errorf("CHANGELOG.md no longer names the corpus case %s", name)
+		}
+	}
+	requireSentences(t, changelog,
+		"`tg hook` now reads the files from the patch text,",
+		"A call that names more than 64 files is denied.",
+		"No harness run has measured the new reading:")
+	if maxApplyPatchTargets != 64 {
+		t.Fatalf("maxApplyPatchTargets is %d; CHANGELOG.md says 64", maxApplyPatchTargets)
+	}
+
+	// The trust flag of the release run.
+	m := loadHarnessManifest(t)
+	untrusted := false
+	for _, h := range m.Harnesses {
+		for _, s := range h.Stages {
+			if s.ID == "untrusted_hook" && s.Outcome == "ran_without_hook" {
+				untrusted = true
+			}
+		}
+	}
+	if !untrusted {
+		t.Fatal("the manifest no longer shows that Codex ran a command without calling an untrusted hook")
+	}
+	requireSentences(t, matrix,
+		"The flag `--dangerously-bypass-hook-trust` makes Codex call the hook without the trust step.",
+		"No stage accepted the hook at the interactive prompt, so the run does not show what Codex does after that step.")
+}

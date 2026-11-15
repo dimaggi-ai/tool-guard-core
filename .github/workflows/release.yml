@@ -56,6 +56,8 @@ jobs:
             "${GITHUB_SHA}" origin/main "${GITHUB_REF_NAME}" \
             "${GITHUB_RUN_ATTEMPT}" "${{ steps.release-state.outputs.state }}" \
             refs/remotes/origin/release-preflight-tag
+      - name: Bind harness evidence to release source
+        run: python3 scripts/check-harness-evidence.py --source-only
 
   # Execute the exact workflow used as the merge gate at this tag. Keeping
   # verification in ci.yml means tag releases cannot silently omit a race,

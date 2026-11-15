@@ -1,0 +1,44 @@
+{
+  "name": "agy1_5_4_run_command",
+  "description": "Antigravity CLI 1.5.4 run_command call captured from a real run. The toolCall envelope and PascalCase argument names are preserved.",
+  "harness": "antigravity-cli",
+  "harness_version": "1.5.4",
+  "capture": {
+    "captured_from": "real install",
+    "captured_on": "2026-11-10",
+    "sanitisation": "conversation and call ids, home paths, transcript paths, model names and workspace paths replaced with cap-* placeholders; tool names, parameter names, values and casing are exactly as emitted"
+  },
+  "payload": {
+    "artifactDirectoryPath": "/cap/brain",
+    "conversationId": "cap-conv",
+    "cwd": "/cap",
+    "hookEventName": "PreToolUse",
+    "lastUserInput": "Run exactly this shell command and nothing else: echo probe",
+    "modelName": "cap-model",
+    "stepIdx": 2,
+    "toolCall": {
+      "args": {
+        "CommandLine": "echo probe",
+        "WaitMsBeforeAsync": 5000,
+        "toolSummary": "Run echo probe command"
+      },
+      "id": "cap-call",
+      "name": "run_command"
+    },
+    "transcriptPath": "/cap/transcript.jsonl",
+    "workspacePaths": [
+      "/cap"
+    ]
+  },
+  "hook_args": [
+    "-policy-dir",
+    "POLICIES",
+    "-mode",
+    "enforcement"
+  ],
+  "expect": {
+    "decision": "allow",
+    "cites": ""
+  },
+  "output_dialect": "antigravity"
+}
