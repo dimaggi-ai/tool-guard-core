@@ -58,7 +58,7 @@ func TestApplyPatchTargets(t *testing.T) {
 // shipped policies and a protected path.
 func TestApplyPatchIsReadPerFile(t *testing.T) {
 	policies := filepath.Join("..", "..", "policies")
-	args := []string{"-policy-dir", policies, "-mode", "enforcement", "-protect-paths", "/w/.codex/hooks.json,/w/.tool-guard"}
+	args := []string{"-policy-dir", policies, "-mode", "enforcement", "-fail-closed-tools", "bash,powershell,write,edit,notebookedit", "-fail-closed-groups", "shell,filesystem_writes,network_egress", "-protect-paths", "/w/.codex/hooks.json,/w/.tool-guard"}
 	p := func(lines ...string) string {
 		return "*** Begin Patch\n" + strings.Join(lines, "\n") + "\n*** End Patch"
 	}
@@ -94,7 +94,7 @@ func TestApplyPatchIsReadPerFile(t *testing.T) {
 		{"relative path under a system directory", map[string]interface{}{"command": p("*** Update File: hosts", "@@", "+x")}, "/etc", "deny", "confined to the working tree"},
 		{"empty path", map[string]interface{}{"command": p("*** Add File:   ", "+x")}, "/w", "deny", "empty path"},
 		{"no file in the text", map[string]interface{}{"command": "*** Begin Patch\n*** End Patch"}, "/w", "deny", "confined to the working tree"},
-		{"text is not a string", map[string]interface{}{"command": 7}, "/w", "deny", "confined to the working tree"},
+		{"text is not a string", map[string]interface{}{"command": 7}, "/w", "deny", "not a string"},
 		{"no cwd, relative protected name", map[string]interface{}{"command": p("*** Add File: policies/x.yaml", "+x")}, "", "deny", ""},
 	}
 	for _, c := range cases {

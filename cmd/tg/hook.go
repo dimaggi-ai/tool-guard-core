@@ -227,8 +227,8 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	}
 
 	// A tool input that is not an object, or a command that is not a
-	// string, cannot be evaluated. Before, such a call got an empty
-	// parameter object and was allowed.
+	// string (or a string array for apply_patch), cannot be evaluated. Before,
+	// such a call got an empty parameter object and was allowed.
 	if why := hookInputMalformed(in); why != "" {
 		if d, reason := failDecide(tool); d == "deny" {
 			emitAudited(d, reason+": "+why, nil)
@@ -663,6 +663,7 @@ func hookParams(in hookInput) json.RawMessage {
 
 // hookInputMalformed returns why the tool input cannot be evaluated, or "".
 // It rejects non-object input and non-string values in typed alias families.
+// Only apply_patch accepts a command array, and every element must be a string.
 func hookInputMalformed(in hookInput) string {
 	raw := bytes.TrimSpace(in.ToolInput)
 	if len(raw) == 0 || string(raw) == "null" {
@@ -676,6 +677,18 @@ func hookInputMalformed(in hookInput) string {
 		name := normParamName(k)
 		isDirectory := name == "cwd" || name == "workdir" || name == "workingdir" || name == "workingdirectory"
 		if commandAliasNames[name] || pathAliasNames[name] || contentAliasNames[name] || isDirectory {
+			if k == "command" && strings.EqualFold(strings.TrimSpace(in.ToolName), "apply_patch") && bytes.HasPrefix(bytes.TrimSpace(v), []byte("[")) {
+				var elements []json.RawMessage
+				if json.Unmarshal(v, &elements) == nil {
+					for _, element := range elements {
+						var s string
+						if bytes.Equal(bytes.TrimSpace(element), []byte("null")) || json.Unmarshal(element, &s) != nil {
+							return fmt.Sprintf("the %s in the tool input is not a string array", k)
+						}
+					}
+					continue
+				}
+			}
 			var s string
 			if bytes.Equal(bytes.TrimSpace(v), []byte("null")) || json.Unmarshal(v, &s) != nil {
 				return fmt.Sprintf("the %s in the tool input is not a string", k)
@@ -993,17 +1006,17 @@ func hookParamVariants(raw json.RawMessage) ([]json.RawMessage, bool) {
 	seen := map[string]bool{}
 	total := 0
 	for _, fam := range families {
-		base := m[fam.canonical]
+		base := hookAliasValueKey(m[fam.canonical])
 		seenValues := map[string]bool{}
 		for _, k := range keys {
 			if !fam.aliases[norm(k)] {
 				continue
 			}
 			v := m[k]
-			if bytes.Equal(bytes.TrimSpace(v), bytes.TrimSpace(base)) {
+			value := hookAliasValueKey(v)
+			if value == base {
 				continue
 			}
-			value := string(bytes.TrimSpace(v))
 			if seenValues[value] {
 				continue
 			}
@@ -1026,6 +1039,18 @@ func hookParamVariants(raw json.RawMessage) ([]json.RawMessage, bool) {
 		}
 	}
 	return out, total > maxHookParamVariants
+}
+
+// hookAliasValueKey compares decoded strings, so JSON escape spellings do not
+// consume the variant limit. Other types retain their JSON identity; malformed
+// typed values are still rejected by hookInputMalformed when failing closed.
+func hookAliasValueKey(raw json.RawMessage) string {
+	var s string
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) > 0 && trimmed[0] == '"' && json.Unmarshal(trimmed, &s) == nil {
+		return "string:" + s
+	}
+	return "json:" + string(trimmed)
 }
 
 // hookVariantEnvelopes copies the base envelope once per candidate parameter

@@ -8,6 +8,12 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Review corrections
 
+- `tg hook` accepts a `command` array of strings for `apply_patch` with the
+  example wrapper's fail-closed flags. Null or non-string array elements
+  remain malformed input.
+- Parameter aliases with different JSON escape spellings of the same string
+  now count as one value toward the alias limit.
+
 - Release publication now requires the retained harness manifest to match the
   release source and verifier. The workflow checks source provenance without
   the original measured binary; `make release-binding` still checks that
