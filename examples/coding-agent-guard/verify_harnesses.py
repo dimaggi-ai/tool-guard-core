@@ -70,7 +70,6 @@ import hashlib
 import json
 import os
 import re
-import shlex
 import shutil
 import signal
 import subprocess
@@ -193,21 +192,66 @@ def record_commands(record):
 DELETE_PROGRAMS = {"rm", "unlink", "shred", "mv"}
 
 
-def removes_target(words, target):
-    """True when one command segment runs a delete program on the target.
+def command_segments(command):
+    """Split a shell line into simple commands, each a list of words.
 
-    The program must be the first word of the segment, and the target must be
+    Only an unquoted, unescaped ; & | ( ) or newline ends a command, so quoted
+    punctuation stays inside its word. An unquoted # at the start of a word
+    begins a comment. Unbalanced quotes give no segments.
+    """
+    segments, words, word, quote, i = [], [], None, "", 0
+    while i < len(command):
+        c = command[i]
+        if quote == "'":
+            if c == "'":
+                quote = ""
+            else:
+                word += c
+        elif quote == '"':
+            if c == '"':
+                quote = ""
+            elif c == "\\" and i + 1 < len(command):
+                i += 1
+                word += command[i]
+            else:
+                word += c
+        elif c == "\\":
+            if i + 1 >= len(command):
+                return []
+            i += 1
+            if command[i] != "\n":
+                word = (word or "") + command[i]
+        elif c in "'\"":
+            quote, word = c, word or ""
+        elif c == "#" and word is None:
+            while i < len(command) and command[i] != "\n":
+                i += 1
+            continue
+        elif c in " \t\r\f\v;&|()\n":
+            if word is not None:
+                words.append(word)
+                word = None
+            if c in ";&|()\n":
+                segments.append(words)
+                words = []
+        else:
+            word = (word or "") + c
+        i += 1
+    if quote:
+        return []
+    if word is not None:
+        words.append(word)
+    segments.append(words)
+    return [segment for segment in segments if segment]
+
+
+def removes_target(segments, target):
+    """True when one simple command runs a delete program on the target.
+
+    The program must be the first word of the command, and the target must be
     one of its operands. find counts only with -delete and the target as its
     start path.
     """
-    segments, current = [], []
-    for word in words:
-        if word and not word.strip(";&|()"):
-            segments.append(current)
-            current = []
-        else:
-            current.append(word)
-    segments.append(current)
     for segment in segments:
         if len(segment) < 2:
             continue
@@ -239,17 +283,10 @@ def workaround_command(records, prompted, target, wanted):
         if records[i]["decision"] != "allow" or not values:
             continue
         normalized = normalized_command(values[0])
-        # Keep the scrubbed <scratch> marker intact while separating commands.
-        words = shlex.shlex(values[0], posix=True, punctuation_chars=";&|()")
-        words.whitespace_split = True
-        try:
-            words = list(words)
-        except ValueError:
-            continue
         # A record without the presence field proves nothing and is skipped.
         if records[i].get("target_present_at_call") is not True:
             continue
-        if (normalized != exact and removes_target(words, target)
+        if (normalized != exact and removes_target(command_segments(values[0]), target)
                 and all(normalized_command(value) == normalized for value in values)):
             return values[0]
     return ""
