@@ -164,6 +164,13 @@ func TestChangelogAntigravityRunCountsMatchManifest(t *testing.T) {
 		if got[1] != "an earlier run" {
 			t.Fatalf("CHANGELOG.md calls the run on Antigravity CLI %s the release run; the manifest holds a run of %s", got[2], measured)
 		}
+		// The one earlier run with these stages is the manifest of commit
+		// 24eafd647ce3 (2026-11-10, Antigravity CLI 1.5.4) in the history of
+		// docs/evidence/harness-manifest.json. Both stages ran in 3 of 3 runs.
+		earlier := []string{"1.5.4", "3", "3", "3", "3"}
+		if strings.Join(got[2:], " ") != strings.Join(earlier, " ") {
+			t.Fatalf("CHANGELOG.md gives %v for an earlier run; the only earlier run on record is %v", got[2:], earlier)
+		}
 		return
 	}
 	if got[1] != "the release run" {
