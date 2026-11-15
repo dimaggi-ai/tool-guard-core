@@ -6,6 +6,7 @@ import (
 	"math"
 	"regexp"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 
@@ -215,6 +216,14 @@ func classifySecrets(text string, maxBytes int) secretResult {
 			candidates = append(candidates, candidate{r.ID, secret, lineNumber})
 		}
 	}
+	// Index provider findings by line once, so suppressing generic findings
+	// does not compare every candidate with every other one.
+	providerByLine := map[int][]string{}
+	for _, c := range candidates {
+		if c.id != "generic-api-key" {
+			providerByLine[c.line] = append(providerByLine[c.line], c.secret)
+		}
+	}
 	seen := map[string]bool{}
 	for _, c := range candidates {
 		if seen[c.id] {
@@ -225,8 +234,8 @@ func classifySecrets(text string, maxBytes int) secretResult {
 			class = "generic"
 			// Upstream suppresses generic findings contained in a provider
 			// finding on the same line. Independent generic findings remain.
-			if slices.ContainsFunc(candidates, func(other candidate) bool {
-				return other.id != c.id && other.line == c.line && strings.Contains(other.secret, c.secret)
+			if slices.ContainsFunc(providerByLine[c.line], func(other string) bool {
+				return strings.Contains(other, c.secret)
 			}) {
 				continue
 			}
@@ -244,21 +253,26 @@ func secretMatchLine(text string, newlines []int, start, end int) (string, int) 
 	if len(newlines) == 0 {
 		newlines = []int{len(text)}
 	}
-	previous, lineStart, lineEnd, startLine, lastLine := 0, 0, 0, 0, 0
-	lineSet := false
-	for lineNumber, newline := range newlines {
-		lastLine = lineNumber
-		if previous <= start && start < newline {
-			lineSet = true
-			startLine, lineStart, lineEnd = lineNumber, previous, newline
+	// Line k spans [newlines[k-1], newlines[k]); line 0 starts at 0. Binary
+	// search keeps each lookup O(log lines) instead of a scan of every line.
+	previous := func(k int) int {
+		if k == 0 {
+			return 0
 		}
-		if previous < end && end <= newline {
-			lineEnd = newline
-		}
-		previous = newline
+		return newlines[k-1]
+	}
+	n := len(newlines)
+	i := sort.Search(n, func(k int) bool { return newlines[k] > start })
+	lineSet := i < n
+	lineStart, lineEnd, startLine := 0, 0, 0
+	if lineSet {
+		startLine, lineStart, lineEnd = i, previous(i), newlines[i]
+	}
+	if j := sort.Search(n, func(k int) bool { return newlines[k] >= end }); j < n && previous(j) < end && (!lineSet || j >= i) {
+		lineEnd = newlines[j]
 	}
 	if !lineSet {
-		startLine = lastLine + 1
+		startLine = n
 		lineEnd = end
 		for lineEnd < len(text) && text[lineEnd] != '\n' && text[lineEnd] != '\r' {
 			lineEnd++
