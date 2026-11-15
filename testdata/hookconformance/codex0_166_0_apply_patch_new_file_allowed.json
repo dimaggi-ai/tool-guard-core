@@ -6,7 +6,7 @@
   "capture": {
     "captured_from": "captured shape",
     "captured_on": "2026-11-10",
-    "sanitisation": "tool name, parameter name and patch text are from the reduced hook record of the release run; the envelope fields are those of codex_bash_shell, because the release run does not keep them"
+    "sanitisation": "tool name, parameter name and patch text are from the reduced hook record of the harness run of 2026-11-10; the envelope fields are those of codex_bash_shell, because a harness run does not keep them"
   },
   "payload": {
     "session_id": "cap-session",

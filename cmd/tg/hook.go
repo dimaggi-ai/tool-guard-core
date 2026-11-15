@@ -500,7 +500,7 @@ func evalHook(policyDir, policyFile string, envs []*domain.ActionEnvelope, alias
 // for that with -escalate-as deny. Only the decision "ask" is converted, so an
 // allow and a real deny pass through unchanged. Every value other than the
 // literal "ask" converts: a mistyped value must not leave an escalation as a
-// prompt that a harness may ignore. In the release run of 2026-11-10, headless
+// prompt that a harness may ignore. In the harness run of 2026-11-10, headless
 // Codex CLI 0.166.0 did not run a call the hook answered ask to (3 of 3
 // runs). The Codex wrapper of the example still defaults to deny.
 func applyEscalateAs(flagVal, dec, reason string) (string, string) {
@@ -952,7 +952,7 @@ func resolveHookDialect(flagVal string, hasToolCall bool) string {
 // resolveAntigravityEscalation maps our "ask" onto "force_ask", the stricter
 // of the two approval values Antigravity CLI reads. Measurements. The 1.5.3 runs were local and
 // their records are not in the repository. The 1.5.4 runs are in
-// docs/evidence/harness-manifest.json.
+// docs/evidence/harness-manifest-24eafd6.json.
 //
 //	1.5.3, headless, no --dangerously-skip-permissions, four runs:
 //	  "force_ask" -> the write was refused in 4 of 4 runs; a write the hook
@@ -961,8 +961,8 @@ func resolveHookDialect(flagVal string, hasToolCall bool) string {
 //	  "ask"       -> the command ran in 3 of 3
 //	  "force_ask" -> the command ran in 3 of 3
 //
-// No retained record shows "ask" without the flag. With the flag neither
-// value stops a call; use -escalate-as deny there. -antigravity-escalation ask
+// No retained record shows "ask" without the flag. On 1.5.4 with the flag
+// neither value stops a call; use -escalate-as deny there. -antigravity-escalation ask
 // restores "ask" for an interactive operator who wants the "Always Allow"
 // cache respected.
 func resolveAntigravityEscalation(flagVal, decision string) string {

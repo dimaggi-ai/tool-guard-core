@@ -1,9 +1,9 @@
 package main
 
 // -escalate-as decides how a policy escalation is returned to the harness.
-// A harness can run a call the hook answered "ask" to: in the release run
-// Antigravity CLI 1.5.4 started with --dangerously-skip-permissions did so in
-// 3 of 3 runs. On such a harness an escalate rule stops nothing unless the
+// A harness can run a call the hook answered "ask" to: in the harness run of
+// 2026-11-10 Antigravity CLI 1.5.4 started with --dangerously-skip-permissions
+// did so in 3 of 3 runs. On such a harness an escalate rule stops nothing unless the
 // hook returns "deny" instead. These tests pin the conversion and its limits.
 
 import (

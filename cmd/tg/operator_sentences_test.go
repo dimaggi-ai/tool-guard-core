@@ -5,6 +5,7 @@ package main
 // required as written, next to a check of the behaviour it states.
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -111,8 +112,40 @@ func TestOperatorSentencesMatchBehaviour(t *testing.T) {
 	}
 	requireSentences(t, changelog,
 		"`tg hook` now reads the files from the patch text,",
-		"A call that names more than 64 files is denied.",
-		"No harness run has measured the new reading:")
+		"A call that names more than 64 files is denied.")
+	// What the changelog says about a harness run of the new reading follows
+	// the release manifest. The reading is measured when Codex CLI wrote the
+	// allowed file with apply_patch in every run and the call for the
+	// protected file was blocked in every run.
+	const notMeasured, measured = "No harness run has measured the new reading:", "The release run measured the new reading:"
+	patchStages := map[string]harnessManifestStage{}
+	for _, h := range loadHarnessManifest(t).Harnesses {
+		if h.ID != "codex-cli" || h.Configuration != "codex exec" {
+			continue
+		}
+		for _, s := range h.Stages {
+			if _, dup := patchStages[s.ID]; dup {
+				t.Fatalf("manifest: stage %s of codex exec is there twice", s.ID)
+			}
+			patchStages[s.ID] = s
+		}
+	}
+	allow, deny := patchStages["write_tool_allow_control"], patchStages["write_tool_deny"]
+	isMeasured := allow.Tool == "apply_patch" && allow.Runs > 0 && allow.Outcomes["ran"] == allow.Runs &&
+		deny.Tool == "apply_patch" && deny.Runs > 0 && deny.Outcomes["blocked"] == deny.Runs
+	required, banned := notMeasured, measured
+	if isMeasured {
+		required, banned = measured, notMeasured
+	}
+	requireSentences(t, changelog, required)
+	if strings.Contains(oneLine(changelog), banned) {
+		t.Errorf("CHANGELOG.md holds the sentence %q; the release manifest shows the opposite (write_tool_allow_control %v, write_tool_deny %v)", banned, allow.Outcomes, deny.Outcomes)
+	}
+	if isMeasured {
+		requireSentences(t, changelog, fmt.Sprintf(
+			"Codex CLI %s wrote the allowed file with `apply_patch` in %d of %d runs, and the call for the protected file was blocked in %d of %d runs.",
+			manifestVersion(t, loadHarnessManifest(t), "codex"), allow.Outcomes["ran"], allow.Runs, deny.Outcomes["blocked"], deny.Runs))
+	}
 	if maxApplyPatchTargets != 64 {
 		t.Fatalf("maxApplyPatchTargets is %d; CHANGELOG.md says 64", maxApplyPatchTargets)
 	}
