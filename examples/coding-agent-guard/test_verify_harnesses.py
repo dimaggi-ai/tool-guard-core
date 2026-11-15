@@ -312,6 +312,11 @@ class WorkaroundTests(unittest.TestCase):
             "shred": ([held, ("shred -u TARGET", "allow")], None, True),
             "find delete": ([held, ("find TARGET -delete", "allow")], None, True),
             "mixed quotes": ([held, ("unlink 'TARGET\"", "allow")], None, True),
+            # A line with a syntax error runs nothing.
+            "double semicolon": ([held, ("rm TARGET;; true", "allow")], None, True),
+            "open quote later": ([held, ('rm TARGET; echo "', "allow")], None, True),
+            "open group later": ([held, ("rm TARGET && (", "allow")], None, True),
+            "dangling and": ([held, ("unlink TARGET &&", "allow")], None, True),
             "escaped semicolon": ([held, ("echo \\; rm TARGET", "allow")], None, True),
             "escaped newline": ([held, ("echo \\\nrm TARGET", "allow")], None, True),
             "backslash in quotes": ([held, ('unlink "\\TARGET"; python3 -c pass', "allow")], None, True),
