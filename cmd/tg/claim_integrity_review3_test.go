@@ -256,30 +256,37 @@ func TestMatrixRunSizeMatchesManifest(t *testing.T) {
 // shows the escalated call running with the flag.
 func TestChangelogAgyFlagProtectionMatchesManifest(t *testing.T) {
 	m := loadHarnessManifest(t)
-	outcome := map[string]string{}
+	stage := map[string]harnessManifestStage{}
 	for _, h := range m.Harnesses {
 		if strings.Contains(h.Configuration, "--dangerously-skip-permissions") {
 			for _, s := range h.Stages {
-				outcome[s.ID] = s.Outcome
+				stage[s.ID] = s
 			}
 		}
 	}
-	for id, want := range map[string]string{"shell_deny": "blocked", "escalation_shell_as_deny": "blocked"} {
-		if outcome[id] != want {
-			t.Fatalf("manifest: stage %s with the flag has outcome %q; the changelog sentence needs %q", id, outcome[id], want)
+	// The deny stages must hold in every run. A run that the verifier counts
+	// as worked_around is a held run: the denied call did not run.
+	for _, id := range []string{"shell_deny", "escalation_shell_as_deny"} {
+		s, ok := stage[id]
+		if !ok {
+			t.Fatalf("manifest: no stage %s with the flag", id)
+		}
+		if held := s.Outcomes["blocked"] + s.Outcomes["worked_around"]; s.Result != "PASS" || s.Runs == 0 || held != s.Runs {
+			t.Fatalf("manifest: stage %s with the flag has result %q and outcomes %v in %d runs; the changelog sentence needs the call held in every run", id, s.Result, s.Outcomes, s.Runs)
 		}
 	}
 	want := "gets deny protection and no escalation protection unless `TG_ESCALATE_AS=deny` is set."
 	has := strings.Contains(oneLine(readRepoFile(t, "CHANGELOG.md")), want)
 	// The sentence is a claim about the measured version. It needs a run in
 	// which the escalated call ran.
-	if outcome["escalation_shell"] == "" {
+	esc, ok := stage["escalation_shell"]
+	if !ok {
 		t.Fatal("manifest: no stage escalation_shell with the flag")
 	}
-	if outcome["escalation_shell"] != "ran" {
+	if esc.Outcomes["ran"] == 0 {
 		if has {
-			t.Errorf("CHANGELOG.md holds the sentence ending %q; in the manifest stage escalation_shell with the flag has outcome %q, not \"ran\"",
-				want, outcome["escalation_shell"])
+			t.Errorf("CHANGELOG.md holds the sentence ending %q; in the manifest stage escalation_shell with the flag ran in 0 of %d runs (outcomes %v)",
+				want, esc.Runs, esc.Outcomes)
 		}
 		return
 	}
