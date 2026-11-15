@@ -4,6 +4,7 @@ import (
 	"os"
 	"runtime"
 	"testing"
+	"time"
 )
 
 // exampleWorkspaceTempDir keeps allow controls outside the shipped policy's
@@ -18,9 +19,17 @@ func exampleWorkspaceTempDir(t *testing.T) string {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := os.RemoveAll(dir); err != nil {
-			t.Error(err)
+		// A macOS background service can still be writing under a HOME
+		// inside dir when the test ends, so RemoveAll can find a directory
+		// that is not empty. Try again for up to 2 s.
+		var err error
+		for i := 0; i < 10; i++ {
+			if err = os.RemoveAll(dir); err == nil {
+				return
+			}
+			time.Sleep(200 * time.Millisecond)
 		}
+		t.Error(err)
 	})
 	return dir
 }
