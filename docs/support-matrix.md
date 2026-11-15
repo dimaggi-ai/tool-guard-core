@@ -31,9 +31,9 @@ carries. It cannot prove that a payload came from a harness.
 
 | Harness | Version | Status | Captured | What was captured | Deployment condition | Decision honoured end-to-end |
 |---|---|---|---|---|---|---|
-| Claude Code | 2.1.316, 2.1.321 | verified | 2026-11-09 | PreToolUse payloads. 2.1.316: `Bash`, `Read`, `Write`. 2.1.321: `Bash`, `Write` | The wrapper, config template and policies of the example, with the config file in a temporary directory. Stages ran on 2.1.321 only; see the stage table below | see the stage table below |
+| Claude Code | 2.1.316, 2.1.321, 2.1.325 | verified | 2026-11-15 | PreToolUse payloads. 2.1.316: `Bash`, `Read`, `Write`. 2.1.321: `Bash`, `Write`. 2.1.325: `Bash`, `Read`, `Write` | The wrapper, config template and policies of the example, with the config file in a temporary directory. Stages ran on 2.1.321 only; see the stage table below | see the stage table below |
 | OpenAI Codex CLI | 0.166.0 | verified | 2026-11-09 | `PreToolUse` payloads. 0.166.0: `Bash`. The parameter is `command`. In the capture runs of 2026-11-09 file writes went through `Bash` (`printf … > file`). In the release run of 2026-11-10 Codex CLI also called `apply_patch`; see the stage table. No `apply_patch` payload is in the corpus as a real-install capture | The wrapper, config template and policies of the example, with the config file in a temporary directory. The run started Codex with `--dangerously-bypass-hook-trust`. It did not accept the hook at the interactive prompt. See the stage table below | see the stage table below |
-| Antigravity CLI (`agy`) | 1.5.3, 1.5.4 | verified | 2026-11-10 | `PreToolUse` payloads. 1.5.3: `read_file`, `run_command`, `write_file`. 1.5.4: `read_file`, `run_command`, `write_file`. The parameters are `CommandLine`, `WaitMsBeforeAsync`, `toolSummary` for `run_command`, `Path`, `Content`, `Overwrite` for `write_file` and `Path` for `read_file`, in a `toolCall` envelope with PascalCase names, not `tool_name`/`tool_input` | The wrapper, config template and policies of the example, with the config file in the workspace (`.agents/hooks.json`). Stages ran on 1.5.4 only; see the stage table below | see the stage table below |
+| Antigravity CLI (`agy`) | 1.5.3, 1.5.4, 1.5.9 | verified | 2026-11-15 | `PreToolUse` payloads. 1.5.3: `read_file`, `run_command`, `write_file`. 1.5.4: `read_file`, `run_command`, `write_file`. 1.5.9: `read_file`, `run_command`, `write_file`. The parameters are `CommandLine`, `WaitMsBeforeAsync`, `toolSummary` for `run_command`, `Path`, `Content`, `Overwrite` for `write_file` and `Path` for `read_file`, in a `toolCall` envelope with PascalCase names, not `tool_name`/`tool_input` | The wrapper, config template and policies of the example, with the config file in the workspace (`.agents/hooks.json`). Stages ran on 1.5.4 only; see the stage table below | see the stage table below |
 | Gemini CLI | 0.34.0 | cannot verify | 2026-11-09 | Nothing. The CLI refuses to run: "This client is no longer supported for Gemini Code Assist for individuals. To continue using Gemini, please migrate to the Antigravity suite of products." | Not exercisable on this host. Do not claim Gemini CLI support | no — the CLI cannot be started |
 | OpenCode | 1.19.3 | not supported | 2026-11-09 | Nothing. No `PreToolUse` hook surface was found; OpenCode exposes a plugin API, which is a different integration | Would need a plugin, not a hook | no — no hook surface to install into |
 | Cursor, GitHub Copilot, Windsurf, Continue.dev, Cline, Aider | — | not supported | — | Nothing. Not installed here, no capture | Do not claim support | no |
@@ -139,7 +139,9 @@ named path.
   table above and is not part of the status.
 - The stages ran on one version of each harness: Claude Code 2.1.321, Codex
   CLI 0.166.0 and Antigravity CLI 1.5.4. On Claude Code 2.1.316 and
-  Antigravity CLI 1.5.3 the payload was captured and no stage ran.
+  Antigravity CLI 1.5.3 the payload was captured and no stage ran. On Claude
+  Code 2.1.325 and Antigravity CLI 1.5.9 the payload was captured and no stage
+  ran in the run recorded in the table.
 - The run is headless. It does not show what a harness does when a person
   answers an approval prompt.
 - The hook puts each tool name in a group. It knows the captured names and

@@ -1,0 +1,38 @@
+{
+  "name": "claude2_1_325_read",
+  "description": "Claude Code 2.1.325 Read call captured from a real run with a capture-only hook. Version 2.1.325 adds the top-level scratchpad_dir field, which 2.1.321 did not send.",
+  "harness": "claude-code",
+  "harness_version": "2.1.325",
+  "capture": {
+    "captured_from": "real install",
+    "captured_on": "2026-11-15",
+    "sanitisation": "session/prompt/tool-use ids replaced with cap-* markers; the workspace directory collapsed to /cap, transcript_path and scratchpad_dir replaced with /cap placeholders; basenames, parameter names and casing preserved exactly as emitted"
+  },
+  "payload": {
+    "session_id": "cap-session_id",
+    "transcript_path": "/cap/transcript.jsonl",
+    "cwd": "/cap",
+    "scratchpad_dir": "/cap/scratchpad",
+    "prompt_id": "cap-prompt_id",
+    "permission_mode": "default",
+    "effort": {
+      "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Read",
+    "tool_input": {
+      "file_path": "/cap/existing.txt"
+    },
+    "tool_use_id": "cap-tool_use_id"
+  },
+  "hook_args": [
+    "-policy-dir",
+    "POLICIES",
+    "-mode",
+    "enforcement"
+  ],
+  "expect": {
+    "decision": "allow",
+    "cites": ""
+  }
+}

@@ -8,6 +8,9 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Review corrections
 
+- The hook conformance corpus includes real-install captures from Claude Code
+  2.1.325 (`Bash`, `Read`, `Write`) and Antigravity CLI 1.5.9 (`read_file`,
+  `run_command`, `write_file`).
 - `tg hook` accepts a `command` array of strings for `apply_patch` with the
   example wrapper's fail-closed flags. Null or non-string array elements
   remain malformed input.
