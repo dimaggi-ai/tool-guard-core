@@ -4,7 +4,9 @@ package main
 // (2026-11-10). Each one closes a mutation that the suite accepted before.
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -147,10 +149,11 @@ func TestChangelogStatesTheVariantLimit(t *testing.T) {
 // TestChangelogAntigravityRunCountsMatchManifest compares the two run counts
 // that CHANGELOG.md gives for Antigravity CLI started with
 // --dangerously-skip-permissions with the manifest. The sentence names a
-// version. When the manifest holds a run of another version, the sentence must
-// say "an earlier run", not "the release run", and its version and counts are
-// compared with docs/evidence/harness-manifest-24eafd6.json: the retained
-// manifest of the run of 2026-11-10 on commit 24eafd647ce3.
+// run and a version. "the release run" is the run in the release manifest.
+// "an earlier run" is the run of 2026-11-10 on commit 24eafd647ce3, whose
+// manifest is retained as docs/evidence/harness-manifest-24eafd6.json. The
+// test pins that file by its commit and its SHA-256. The version and the
+// counts in the sentence are compared with the manifest that the words select.
 func TestChangelogAntigravityRunCountsMatchManifest(t *testing.T) {
 	text := strings.Join(strings.Fields(readRepoFile(t, "CHANGELOG.md")), " ")
 	re := regexp.MustCompile("In (the release run|an earlier run) on Antigravity CLI (\\d+\\.\\d+\\.\\d+), started with `--dangerously-skip-permissions` in headless print mode, " +
@@ -160,17 +163,22 @@ func TestChangelogAntigravityRunCountsMatchManifest(t *testing.T) {
 		t.Fatal("CHANGELOG.md no longer has the sentence with the two Antigravity run counts")
 	}
 	manifest := loadHarnessManifest(t)
-	measured := manifestVersion(t, manifest, "agy")
-	if got[2] != measured {
-		if got[1] != "an earlier run" {
-			t.Fatalf("CHANGELOG.md calls the run on Antigravity CLI %s the release run; the manifest holds a run of %s", got[2], measured)
+	if got[1] == "an earlier run" {
+		const name, digest = "harness-manifest-24eafd6.json", "6e979b4946b3bae5346ba20be75038dacafdba04c68b0c063d0a46a2f0e21aea"
+		raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "evidence", name))
+		if err != nil {
+			t.Fatal(err)
 		}
-		manifest = loadHarnessManifestFile(t, "harness-manifest-24eafd6.json")
-		if earlier := manifestVersion(t, manifest, "agy"); got[2] != earlier {
-			t.Fatalf("CHANGELOG.md gives counts for an earlier run on Antigravity CLI %s; the retained earlier manifest holds a run of %s", got[2], earlier)
+		if sum := fmt.Sprintf("%x", sha256.Sum256(raw)); sum != digest {
+			t.Fatalf("docs/evidence/%s has SHA-256 %s; the retained manifest of the earlier run has %s", name, sum, digest)
 		}
-	} else if got[1] != "the release run" {
-		t.Fatalf("CHANGELOG.md calls the run on Antigravity CLI %s an earlier run; the manifest holds that run", got[2])
+		manifest = loadHarnessManifestFile(t, name)
+		if manifest.Commit != legacyHarnessCommit {
+			t.Fatalf("docs/evidence/%s measured commit %s; the earlier run measured %s", name, manifest.Commit, legacyHarnessCommit)
+		}
+	}
+	if measured := manifestVersion(t, manifest, "agy"); got[2] != measured {
+		t.Fatalf("CHANGELOG.md gives counts for %s on Antigravity CLI %s; the manifest of that run holds version %s", got[1], got[2], measured)
 	}
 	got = append(got[:1], got[3:]...)
 	want := map[string][2]int{}

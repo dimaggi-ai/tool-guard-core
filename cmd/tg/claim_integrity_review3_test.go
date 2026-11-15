@@ -273,6 +273,9 @@ func TestChangelogAgyFlagProtectionMatchesManifest(t *testing.T) {
 	has := strings.Contains(oneLine(readRepoFile(t, "CHANGELOG.md")), want)
 	// The sentence is a claim about the measured version. It needs a run in
 	// which the escalated call ran.
+	if outcome["escalation_shell"] == "" {
+		t.Fatal("manifest: no stage escalation_shell with the flag")
+	}
 	if outcome["escalation_shell"] != "ran" {
 		if has {
 			t.Errorf("CHANGELOG.md holds the sentence ending %q; in the manifest stage escalation_shell with the flag has outcome %q, not \"ran\"",
