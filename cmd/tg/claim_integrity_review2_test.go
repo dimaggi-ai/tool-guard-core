@@ -163,6 +163,14 @@ func TestChangelogAntigravityRunCountsMatchManifest(t *testing.T) {
 		t.Fatalf("CHANGELOG.md has %d sentences with the two Antigravity run counts; the test checks exactly one", len(all))
 	}
 	got := all[0]
+	// Outside that sentence no text may put a run count next to `ask` or
+	// `force_ask`. Such text would be a second claim that this test does
+	// not compare with a manifest.
+	rest := strings.Replace(text, got[0], "", 1)
+	loose := regexp.MustCompile("`(?:force_)?ask`[^.]{0,120}\\d+ of \\d+|\\d+ of \\d+[^.]{0,120}`(?:force_)?ask`")
+	if extra := loose.FindString(rest); extra != "" {
+		t.Fatalf("CHANGELOG.md has a second run count for an escalation answer: %q; the test checks the one sentence only", extra)
+	}
 	manifest := loadHarnessManifest(t)
 	if got[1] == "an earlier run" {
 		const name, digest = "harness-manifest-24eafd6.json", "6e979b4946b3bae5346ba20be75038dacafdba04c68b0c063d0a46a2f0e21aea"
