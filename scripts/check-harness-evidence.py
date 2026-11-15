@@ -128,7 +128,7 @@ def validate_stages(doc, require):
                     "stage result is not a passing result consistent with its outcomes")
 
 
-def validate(repo, manifest, binary):
+def validate(repo, manifest, binary, *, source_only=False):
     doc = json.loads(manifest.read_text())
     errors = []
 
@@ -179,17 +179,18 @@ def validate(repo, manifest, binary):
         wiring_hash.update((name + "\n" + digest((repo / EXAMPLE / name).read_bytes()) + "\n").encode())
     require(wiring_hash.hexdigest() == doc["wiring_sha256"], "wiring_sha256 does not match the release wiring")
 
-    require(digest(binary.read_bytes()) == doc["tg_sha256"], "tg_sha256 does not match the supplied measured binary")
-    metadata = run(["go", "version", "-m", str(binary)], repo).decode()
-    settings = {}
-    for line in metadata.splitlines():
-        fields = line.strip().split(None, 1)
-        if len(fields) == 2 and fields[0] == "build" and "=" in fields[1]:
-            key, value = fields[1].split("=", 1)
-            settings[key] = value
-    require(settings.get("vcs.revision") == commit, "binary Go VCS revision does not match the measured commit")
-    require(settings.get("vcs.modified") == "false", "binary Go VCS metadata must record vcs.modified=false")
-    require(settings.get("-trimpath") == "true", "binary Go build metadata must record -trimpath=true")
+    if not source_only:
+        require(digest(binary.read_bytes()) == doc["tg_sha256"], "tg_sha256 does not match the supplied measured binary")
+        metadata = run(["go", "version", "-m", str(binary)], repo).decode()
+        settings = {}
+        for line in metadata.splitlines():
+            fields = line.strip().split(None, 1)
+            if len(fields) == 2 and fields[0] == "build" and "=" in fields[1]:
+                key, value = fields[1].split("=", 1)
+                settings[key] = value
+        require(settings.get("vcs.revision") == commit, "binary Go VCS revision does not match the measured commit")
+        require(settings.get("vcs.modified") == "false", "binary Go VCS metadata must record vcs.modified=false")
+        require(settings.get("-trimpath") == "true", "binary Go build metadata must record -trimpath=true")
     if errors:
         raise BindingError("\n".join(errors))
     return commit
@@ -200,14 +201,18 @@ def main():
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--manifest", type=Path, default=Path("docs/evidence/harness-manifest.json"))
     parser.add_argument("--tg", type=Path, default=Path("bin/tg"), help="original binary used for the measurement")
+    parser.add_argument("--source-only", action="store_true",
+                        help="check source provenance without verifying the original measured binary")
     args = parser.parse_args()
     repo = args.repo.resolve()
     try:
-        commit = validate(repo, (repo / args.manifest).resolve(), (repo / args.tg).resolve())
+        commit = validate(repo, (repo / args.manifest).resolve(), (repo / args.tg).resolve(),
+                          source_only=args.source_only)
     except (BindingError, OSError, ValueError, TypeError, KeyError) as exc:
         print("release-binding: FAIL\n" + str(exc), file=sys.stderr)
         return 1
-    print(f"release-binding: PASS (measured commit {commit})")
+    mode = "source provenance only" if args.source_only else "source and measured binary"
+    print(f"release-binding: PASS ({mode}; measured commit {commit})")
     return 0
 
 

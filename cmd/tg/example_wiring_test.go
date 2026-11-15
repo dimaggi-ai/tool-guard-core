@@ -151,7 +151,7 @@ func TestShippedExampleConfigsWireTheVerifiedPath(t *testing.T) {
 				t.Fatalf("read hooks/guard-hook.sh: %v", err)
 			}
 			guardCode := codeOnly(string(guard))
-			for _, need := range []string{"args=(hook)", `out="$("$TG_BIN" "${args[@]}")"`} {
+			for _, need := range []string{"args=(hook)", `out="$("$TG_BIN" "${args[@]}" | python3 -c '`} {
 				if !strings.Contains(guardCode, need) {
 					t.Errorf("hooks/guard-hook.sh no longer contains %q, so it does not run `tg hook`", need)
 				}
@@ -280,9 +280,9 @@ var installerPrintedLines = []string{
 	"[ \"$i\" -lt \"${#ARGS[@]}\" ] || { echo \"--protect needs a path\"; exit 2; }",
 	"*) echo \"unknown arg: $a (want: claude codex antigravity --protect PATH --uninstall)\"; exit 2 ;;",
 	"[ \"${#TARGETS[@]}\" -eq 0 ] && { echo \"no supported agent (claude/codex/agy) found on PATH\"; exit 1; }",
-	"echo \"install.sh cannot install from a path containing whitespace, a quote, a backslash or a dollar sign:\"",
+	"echo \"install.sh requires a repository path containing only ASCII letters, digits, slash, dot, underscore or hyphen:\"",
 	"echo \"  $HOOK_DIR\"",
-	"echo \"Move the repository to a path without those characters and run install.sh again.\"",
+	"echo \"Move the repository to a path using only those characters and run install.sh again.\"",
 	"*) echo \"--protect needs an absolute path, got: $pth\"; exit 2 ;;",
 	"*$'\\n'*) echo \"--protect rejects a path containing a newline\"; exit 2 ;;",
 	"grep -Fxq -- \"$pth\" \"$PROTECT_FILE\" || printf '%s\\n' \"$pth\" >> \"$PROTECT_FILE\"",

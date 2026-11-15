@@ -8,6 +8,20 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Review corrections
 
+- Release publication now requires the retained harness manifest to match the
+  release source and verifier. The workflow checks source provenance without
+  the original measured binary; `make release-binding` still checks that
+  binary. The historical manifest blocks release until a new measurement.
+- The example wrapper requires one JSON object with a valid decision in the
+  expected dialect field before returning a response.
+- Native-write allow controls require a matching hook record for the expected
+  tool class before the verifier reports that the write ran through the hook.
+- `tg hook` treats null typed fields as malformed input for configured
+  fail-closed tool groups.
+- The example installer rejects repository paths that are unsafe in shell
+  commands and removes its temporary config copies on exit and on HUP, INT,
+  or TERM signals.
+
 - `tg hook` reads the requested dialect even when an earlier flag is invalid.
   When the harness cannot be identified, early-error responses include both
   decision formats. Missing or null tool arguments now fail closed for

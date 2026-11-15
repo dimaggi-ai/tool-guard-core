@@ -121,5 +121,63 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(manifest["verifier_sha256"], hashlib.sha256(Path(verifier.__file__).read_bytes()).hexdigest())
 
 
+class StageAttributionTests(unittest.TestCase):
+    def stage_result(self, spec, tool, decision="allow", relevant=True):
+        with tempfile.TemporaryDirectory(prefix="c72-verifier-stage.") as root:
+            with patch.dict(os.environ, {}, clear=True):
+                run = verifier.Run()
+            run.scratch = root
+            run.ws = os.path.join(root, "ws")
+            run.out = os.path.join(root, "evidence")
+            run.repeat = 1
+            for directory in (run.ws, os.path.join(root, "raw"), run.out,
+                              os.path.join(run.out, "records"), os.path.join(run.out, "stdout")):
+                os.mkdir(directory)
+
+            def call(_cfg, _prompt, _log):
+                target = os.path.join(run.ws, spec[3])
+                Path(target).write_text("written\n")
+                if tool is not None:
+                    raw = {"stdin": json.dumps({"tool_name": tool, "tool_input": {
+                        "file_path": target if relevant else "unrelated.txt"}}),
+                        "stdout": json.dumps({"decision": decision}), "rc": 0}
+                    Path(root, "raw", "1.json").write_text(json.dumps(raw))
+
+            with patch.object(run, "call", side_effect=call):
+                return run.stage_runs({"id": "stub", "configuration": "offline"}, "stub", spec)
+
+    def test_native_allow_requires_matching_hook_evidence(self):
+        spec = verifier.DENY_AND_CONTROLS[3]
+        for tool, decision, relevant in (("Bash", "allow", True), ("run_command", "allow", True),
+                                          ("Read", "allow", True), ("unknown", "allow", True),
+                                          ("Write", "allow", False), ("Write", "deny", True),
+                                          (None, "allow", True)):
+            with self.subTest(tool=tool, decision=decision, relevant=relevant):
+                result = self.stage_result(spec, tool, decision, relevant)
+                self.assertEqual(result["result"], "FAIL")
+                self.assertEqual(result["outcome"], "ran_without_hook")
+
+    def test_native_allow_accepts_matching_native_hooks(self):
+        for tool in ("Write", "Edit", "NotebookEdit", "apply_patch", "MultiEdit", "create", "write_file",
+                     "write_to_file", "replace", "replace_file_content", "multi_replace_file_content"):
+            with self.subTest(tool=tool):
+                result = self.stage_result(verifier.DENY_AND_CONTROLS[3], tool)
+                self.assertEqual(result["result"], "PASS")
+                self.assertEqual(result["outcome"], "ran")
+
+    def test_any_class_allow_preserves_generic_tool_matching(self):
+        result = self.stage_result(verifier.DENY_AND_CONTROLS[1], "unknown")
+        self.assertEqual(result["result"], "PASS")
+        self.assertEqual(result["outcome"], "ran")
+
+    def test_native_deny_still_detects_unauthorized_effects(self):
+        for tool, decision, relevant in (("Bash", "allow", True), ("Write", "deny", True),
+                                          ("Write", "allow", False), (None, "allow", True)):
+            with self.subTest(tool=tool, decision=decision, relevant=relevant):
+                result = self.stage_result(verifier.DENY_AND_CONTROLS[2], tool, decision, relevant)
+                self.assertEqual(result["result"], "FAIL")
+                self.assertEqual(result["outcome"], "ran" if tool else "ran_without_hook")
+
+
 if __name__ == "__main__":
     unittest.main()

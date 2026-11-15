@@ -466,6 +466,41 @@ type hookInput struct {
 	} `json:"toolCall"`
 }
 
+// UnmarshalJSON preserves the distinction between an absent typed field and
+// JSON null, which encoding/json otherwise accepts as a zero string or pointer.
+func (in *hookInput) UnmarshalJSON(raw []byte) error {
+	type plain hookInput
+	var decoded plain
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return err
+	}
+	for key, value := range fields {
+		switch strings.ToLower(key) {
+		case "tool_name", "cwd", "toolcall":
+			if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+				return fmt.Errorf("%s must not be null", key)
+			}
+		}
+		if strings.EqualFold(key, "toolCall") {
+			var call map[string]json.RawMessage
+			if err := json.Unmarshal(value, &call); err != nil {
+				return err
+			}
+			for name, v := range call {
+				if strings.EqualFold(name, "name") && bytes.Equal(bytes.TrimSpace(v), []byte("null")) {
+					return fmt.Errorf("toolCall.name must not be null")
+				}
+			}
+		}
+	}
+	*in = hookInput(decoded)
+	return nil
+}
+
 // pathAliasNames and contentAliasNames are the parameter names harnesses use
 // for the same two things a policy matches on: the file being written, and
 // its new content. Matching is on the normalised name (case-folded, with
@@ -627,8 +662,7 @@ func hookParams(in hookInput) json.RawMessage {
 }
 
 // hookInputMalformed returns why the tool input cannot be evaluated, or "".
-// It names two cases: the input is not a JSON object, and a key of the
-// command family holds a value that is not a string.
+// It rejects non-object input and non-string values in typed alias families.
 func hookInputMalformed(in hookInput) string {
 	raw := bytes.TrimSpace(in.ToolInput)
 	if len(raw) == 0 || string(raw) == "null" {
@@ -639,10 +673,12 @@ func hookInputMalformed(in hookInput) string {
 		return "the tool input is not a JSON object"
 	}
 	for k, v := range obj {
-		if commandAliasNames[normParamName(k)] {
+		name := normParamName(k)
+		isDirectory := name == "cwd" || name == "workdir" || name == "workingdir" || name == "workingdirectory"
+		if commandAliasNames[name] || pathAliasNames[name] || contentAliasNames[name] || isDirectory {
 			var s string
-			if json.Unmarshal(v, &s) != nil {
-				return "the command in the tool input is not a string"
+			if bytes.Equal(bytes.TrimSpace(v), []byte("null")) || json.Unmarshal(v, &s) != nil {
+				return fmt.Sprintf("the %s in the tool input is not a string", k)
 			}
 		}
 	}

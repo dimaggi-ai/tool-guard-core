@@ -131,14 +131,33 @@ fi
 # tg hook always exits 0 and prints one decision. A binary at TG_BIN that exits
 # non-zero, prints nothing, or prints text with no decision would leave the
 # harness without an answer, and a harness that reads no answer runs the tool.
-out="$("$TG_BIN" "${args[@]}")"
+out="$("$TG_BIN" "${args[@]}" | python3 -c '
+import json
+import sys
+
+def reject_constant(value):
+    raise ValueError(value)
+
+try:
+    raw = sys.stdin.buffer.read().decode("utf-8")
+    doc = json.loads(raw, parse_constant=reject_constant)
+    valid = False
+    if isinstance(doc, dict):
+        if sys.argv[1] == "antigravity":
+            valid = doc.get("decision") in ("allow", "deny", "ask", "force_ask")
+        else:
+            output = doc.get("hookSpecificOutput")
+            valid = (isinstance(output, dict)
+                     and output.get("hookEventName") == "PreToolUse"
+                     and output.get("permissionDecision") in ("allow", "deny", "ask"))
+    if not valid:
+        sys.exit(1)
+    sys.stdout.write(raw)
+except (ValueError, TypeError):
+    sys.exit(1)
+' "$dialect" 2>/dev/null)"
 rc=$?
-if [ "$dialect" = antigravity ]; then
-  want='"decision":"'
-else
-  want='"permissionDecision":"'
-fi
-if [ "$rc" -ne 0 ] || [ "${out#*"$want"}" = "$out" ]; then
+if [ "$rc" -ne 0 ]; then
   static_deny "Tool Guard hook could not run: tg printed no decision"
 fi
 printf '%s\n' "$out"

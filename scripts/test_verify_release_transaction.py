@@ -46,6 +46,35 @@ class VerifyReleaseTransactionTests(unittest.TestCase):
         result = self.run_guard()
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_harness_source_gate_cannot_be_omitted_or_weakened(self) -> None:
+        original = self.workflow_path.read_text()
+        gate = ("      - name: Bind harness evidence to release source\n"
+                "        run: python3 scripts/check-harness-evidence.py --source-only\n")
+        mutations = (
+            "",
+            gate.replace("--source-only", "--source-only || true"),
+            gate.replace("        run:", "        if: false\n        run:"),
+            gate.replace("        run:", "        continue-on-error: true\n        run:"),
+        )
+        for replacement in mutations:
+            with self.subTest(replacement=replacement):
+                self.workflow_path.write_text(original.replace(gate, replacement))
+                result = self.run_guard()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("harness evidence", result.stderr)
+
+    def test_harness_source_gate_after_publication_is_rejected(self) -> None:
+        original = self.workflow_path.read_text()
+        gate = ("      - name: Bind harness evidence to release source\n"
+                "        run: python3 scripts/check-harness-evidence.py --source-only\n")
+        workflow = original.replace(gate, "")
+        workflow = workflow.replace("      - name: Attest build provenance\n",
+                                    gate + "      - name: Attest build provenance\n")
+        self.workflow_path.write_text(workflow)
+        result = self.run_guard()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("harness evidence", result.stderr)
+
     def test_missing_upload_archive_gate_is_rejected(self) -> None:
         config = self.repo / ".goreleaser.yaml"
         config.write_text(config.read_text().replace(

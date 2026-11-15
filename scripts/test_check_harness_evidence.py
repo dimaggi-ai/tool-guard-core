@@ -111,6 +111,21 @@ class ReleaseBindingTests(unittest.TestCase):
         self.manifest.write_text(json.dumps(doc))
         commit(self.checkout)
 
+    def test_source_only_does_not_require_measured_binary(self):
+        self.assertEqual(binding.validate(self.checkout, self.manifest, None, source_only=True),
+                         self.doc["commit"])
+
+    def test_source_only_still_rejects_source_changes(self):
+        (self.checkout / "main.go").write_text("changed\n")
+        commit(self.checkout)
+        with self.assertRaisesRegex(binding.BindingError, "source changed after measurement"):
+            binding.validate(self.checkout, self.manifest, None, source_only=True)
+
+    def test_source_only_still_checks_provenance(self):
+        self.update_manifest(tg_vcs_modified=True)
+        with self.assertRaisesRegex(binding.BindingError, "tg_vcs_modified must be false"):
+            binding.validate(self.checkout, self.manifest, None, source_only=True)
+
     def test_documentation_and_evidence_only_commit_passes(self):
         (self.checkout / "README.md").write_text("Release notes\n")
         commit(self.checkout)

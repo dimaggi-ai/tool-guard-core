@@ -104,6 +104,12 @@ else:
         payload = {"conversationId": "c-1", "toolCall": {"name": "write_file", "args": {"Path": path, "Content": text}}}
     else:
         payload = dict(extra, tool_name="Write", tool_input={"file_path": path, "content": text})
+    if os.environ.get("STUB_NATIVE_VIA_SHELL") == "1" and path.endswith("allowed-by-tool.txt"):
+        cmd = "echo written > " + path
+        if name == "agy":
+            payload = {"conversationId": "c-1", "toolCall": {"name": "run_command", "args": {"CommandLine": cmd}}}
+        else:
+            payload = dict(extra, tool_name="Bash", tool_input={"command": cmd})
 decision = "allow"
 for group in groups:
     for hook in group["hooks"]:
@@ -339,6 +345,47 @@ func TestVerifyHarnessesFailsWhenAllowRecordAccompaniesProtectedWrite(t *testing
 	}
 	if !strings.Contains(run.output, "FAIL") || !strings.Contains(run.output, "shell_deny") {
 		t.Errorf("run did not fail the blocking stage:\n%s", run.output)
+	}
+}
+
+func TestVerifyHarnessesNativeAllowRequiresNativeHook(t *testing.T) {
+	for _, harness := range []string{"claude", "agy"} {
+		t.Run(harness, func(t *testing.T) {
+			run := runVerifyWithStubs(t, "TG_ONLY="+harness, "STUB_NATIVE_VIA_SHELL=1")
+			if run.code != 1 {
+				t.Fatalf("exit status %d, want 1 for a shell-attributed native control\n%s", run.code, run.output)
+			}
+			raw, err := os.ReadFile(filepath.Join(run.evidence, "manifest.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var manifest struct {
+				Harnesses []struct {
+					Stages []struct {
+						ID      string `json:"id"`
+						Outcome string `json:"outcome"`
+						Result  string `json:"result"`
+					} `json:"stages"`
+				} `json:"harnesses"`
+			}
+			if err := json.Unmarshal(raw, &manifest); err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, h := range manifest.Harnesses {
+				for _, stage := range h.Stages {
+					if stage.ID == "write_tool_allow_control" {
+						found = true
+						if stage.Outcome != "ran_without_hook" || stage.Result == "PASS" {
+							t.Errorf("native control = %+v, want ran_without_hook without PASS", stage)
+						}
+					}
+				}
+			}
+			if !found {
+				t.Fatal("native allow control is missing from manifest")
+			}
+		})
 	}
 }
 

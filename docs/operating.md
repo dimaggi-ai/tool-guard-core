@@ -3,6 +3,12 @@
 A reference for setting up, monitoring, and maintaining a Tool Guard
 proxy under production load.
 
+The `coding_agent_secret_egress` policy checks text for known key formats and
+listed URLs. In a shell command, a listed URL anywhere in the text satisfies
+the host carve-out, even inside a comment. A command can therefore send a
+known key to an unlisted host while naming a listed host in a comment.
+Do not rely on this policy to restrict shell network destinations.
+
 ## Deployment shapes
 
 ### Single-binary on a VM

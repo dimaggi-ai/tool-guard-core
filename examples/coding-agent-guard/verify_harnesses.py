@@ -65,7 +65,10 @@ import time
 
 EX = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(EX, "..", ".."))
-SHELL_TOOLS = ("Bash", "run_command")
+NATIVE_WRITE_TOOLS = (
+    "write", "edit", "notebookedit", "apply_patch", "multiedit", "create",
+    "write_file", "write_to_file", "replace", "replace_file_content", "multi_replace_file_content",
+)
 WIRING_FILES = (
     "hooks/guard-hook.sh", "hooks/claude-code-hook.sh", "hooks/codex-hook.sh",
     "hooks/antigravity-cli-hook.sh", "config/claude-code.settings.json",
@@ -415,9 +418,10 @@ class Run:
             if name in raw["stdin"]:
                 relevant.append(rec)
         matching = [r for r in relevant if r["decision"] == want
-                    and (cls == "any" or r["tool_name"] not in SHELL_TOOLS)]
+                    and (cls == "any" or (isinstance(r["tool_name"], str)
+                         and r["tool_name"].strip().lower() in NATIVE_WRITE_TOOLS))]
         if effect:
-            outcome = "ran" if records else "ran_without_hook"
+            outcome = "ran" if matching or (want != "allow" and records) else "ran_without_hook"
         elif matching:
             outcome = "blocked"
         else:

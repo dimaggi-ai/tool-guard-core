@@ -58,10 +58,10 @@ fi
 # each harness passes that string to a shell was not measured, so a path that
 # would need quoting is refused instead of written.
 case "$HOOK_DIR" in
-  *[[:space:]]*|*'"'*|*"'"*|*'\'*|*'$'*)
-    echo "install.sh cannot install from a path containing whitespace, a quote, a backslash or a dollar sign:"
+  *[!abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/._-]*)
+    echo "install.sh requires a repository path containing only ASCII letters, digits, slash, dot, underscore or hyphen:"
     echo "  $HOOK_DIR"
-    echo "Move the repository to a path without those characters and run install.sh again."
+    echo "Move the repository to a path using only those characters and run install.sh again."
     exit 2
     ;;
 esac
@@ -137,6 +137,14 @@ check_target_path() {
 # each result and writes nothing, so a config file the installer cannot edit
 # stops the run before any config file is changed. The second pass writes.
 CHECK_ONLY=0
+INSTALL_SCRATCH=""
+cleanup_install_scratch() {
+  [ -z "$INSTALL_SCRATCH" ] || rm -rf -- "$INSTALL_SCRATCH"
+}
+trap cleanup_install_scratch EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # Run one jq program on a config file. When jq fails, or its output is not
 # one JSON object, the file is not changed and the installer stops: a success
@@ -148,7 +156,10 @@ apply_jq() {
   if [ "$CHECK_ONLY" -eq 1 ]; then
     check_target_path "$f" "the config file and its backup"
   fi
-  tmp="$(mktemp)"; src="$(mktemp)"
+  if [ -z "$INSTALL_SCRATCH" ]; then
+    INSTALL_SCRATCH="$(mktemp -d)"
+  fi
+  tmp="$INSTALL_SCRATCH/result"; src="$INSTALL_SCRATCH/source"
   # A missing file and a file of 0 bytes are read as the empty object.
   if [ -s "$f" ]; then cat "$f" > "$src"; else echo '{}' > "$src"; fi
   if ! jq "$@" "$src" > "$tmp" || ! jq -e -s 'length == 1 and (.[0] | type) == "object"' "$tmp" >/dev/null 2>&1; then
@@ -275,7 +286,10 @@ uninstall_one() {
       UNINSTALL_FAILED=1
     fi
   elif [ -s "$f" ]; then
-    tmp="$(mktemp)"
+    if [ -z "$INSTALL_SCRATCH" ]; then
+      INSTALL_SCRATCH="$(mktemp -d)"
+    fi
+    tmp="$INSTALL_SCRATCH/uninstall-result"
     if jq --arg dir "$HOOK_DIR/" '
          if type != "object" then error("not an object") else . end
          | del(."toolguard-coding-agent-guard")
