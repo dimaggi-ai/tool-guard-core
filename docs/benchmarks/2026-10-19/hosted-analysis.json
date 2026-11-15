@@ -32,7 +32,7 @@
   "limitations": [
     "20 same-day runs, not validated operational false-alarm probability",
     "normality/iid assumptions cannot be established by a small-sample test",
-    "currentline calibration does not validate historicalGo 1.25.13 data"
+    "current-line calibration does not validate historical Go 1.25.13 data"
   ],
   "historical16": {
     "mean_reported_loss_pct": 8.1575,

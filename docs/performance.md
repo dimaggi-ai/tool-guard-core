@@ -55,7 +55,7 @@ Methodology, exactly as the workflow runs it:
   excluding tags that point to the candidate commit itself. It fails if no
   distinct stable release is reachable. The workflow fetches complete history
   and tags, builds the selected checkout in a detached worktree, and logs both refs.
-- **Hardware:** GitHub-hosted `ubuntu-latest` x64, Go 1.26.9, without the race
+- **Hardware:** GitHub-hosted `ubuntu-latest` x64, Go 1.26.11, without the race
   detector. The workflow prints `uname -a`, `lscpu`, and `go version` so each
   run records its actual shared-runner environment. Running both proxies
   together exposes both to the same host conditions, but does not remove
@@ -111,7 +111,7 @@ CTE buried behind 5,000 UNION branches.
 Measurement conditions:
 
 - **Runner:** GitHub-hosted `ubuntu-latest` x64, without the race detector.
-- **Toolchain:** Go 1.26.9.
+- **Toolchain:** Go 1.26.11.
 - **Evidence:** the nightly workflow prints `uname -a`, `lscpu`, and
   `go version` before the assertion so each result records the actual shared
   runner CPU and image environment.
