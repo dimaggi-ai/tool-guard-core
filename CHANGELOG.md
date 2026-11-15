@@ -67,8 +67,9 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   The shadow secrets policy now uses this condition in place of generated
   regex branches. Its hand-written checks remain. Generic keys have a
   separate low-severity flag rule. The policy still blocks nothing in shadow
-  mode. Core has no redaction: neither `tg hook` nor `tg-proxy` copies tool
-  parameters into the audit record.
+  mode. Core has no redaction: `tg hook` and `tg-proxy` do not store
+  tool parameters in the audit record, but a decision reason can quote a
+  value taken from them, such as a protected file path.
 - An `or` condition that does not fire now returns its branches' details,
   joined by `; `, instead of an empty string. A `secret_classify`
   truncation report inside an `or` now reaches the rule result.
