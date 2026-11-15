@@ -1,166 +1,207 @@
 #!/usr/bin/env python3
-"""Generate the gitleaks provider-format conditions in
-policies/coding_agent_secret_commands.yaml.
+"""Generate Go secret rules from pinned third_party/gitleaks/gitleaks.toml.
 
-Source: third_party/gitleaks/gitleaks.toml, the default rule file of gitleaks
-(MIT licence, third_party/gitleaks/LICENSE) at the commit in GITLEAKS_COMMIT.
-
-The policy uses two layers for provider keys:
-
-- &providerKey, a hand-written regex for the most common prefixes. It is not
-  generated.
-- One generated condition per scanned field (&gitleaksCommand,
-  &gitleaksContent, &gitleaksNewString, &gitleaksEdits). Each condition is an
-  "or" with one branch per selected gitleaks rule:
-  and: [ <contains guard>, <rule regex> ].
-
-A guard is a literal string that every match of the rule contains, spelled
-exactly as in the regex. The engine checks the guard with a substring test
-and runs the regex only when the guard is present. This is the gitleaks
-keyword prefilter. One alternation of all rules without guards was measured
-at 51 ms for a 4 KB text; the guarded form takes under 1 ms.
-
-A rule is selected only when its regex is case-sensitive (no "(?i"),
-because a "contains" test is case-sensitive. TestSecretFormatGuards in
-cmd/tg proves for every branch that each regex match contains one of the
-guards.
-
-The policy engine cannot apply three parts of a gitleaks rule:
-
-- entropy: there is no entropy operator, so a rule matches without the
-  randomness check, and placeholder keys such as ghp_xxxx... are recorded;
-- allowlists and stopwords: they test the captured secret, and a policy regex
-  has no capture step;
-- path rules: a rule with a "path" applies to all files here.
-
-EXCLUDED lists the rules that other rules in the policy handle with a
-different effect, or that are too broad without entropy.
+The upstream MIT license is in third_party/gitleaks/LICENSE.
+Preserves regex, keyword, entropy, path, and allowlist matching metadata.
+Descriptions, title, and minVersion are explicitly ignored presentation metadata.
+Only the path-only pkcs12-file rule is excluded from text detection.
 
 Usage:
-  python3 scripts/gen-secret-formats.py          rewrite the policy
-  python3 scripts/gen-secret-formats.py --check  exit 1 if the policy is stale
-  python3 scripts/gen-secret-formats.py --list   print the selected rule IDs
+  python3 scripts/gen-secret-formats.py          rewrite the Go table
+  python3 scripts/gen-secret-formats.py --check  fail if the table is stale
+  python3 scripts/gen-secret-formats.py --list   list included and excluded IDs
+
+Requires Python 3.11+ and gofmt; no third-party dependencies.
 """
+import argparse
+import hashlib
 import json
 import pathlib
-import re
+import subprocess
 import sys
 import tomllib
 
 GITLEAKS_COMMIT = "5f6ec56cfa6f8c67648d863582c7ae2f206d5c1c"
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 RULES = ROOT / "third_party" / "gitleaks" / "gitleaks.toml"
-POLICY = ROOT / "policies" / "coding_agent_secret_commands.yaml"
-
-EXCLUDED = {
-    # An access key ID is an identifier, not the secret: rule-aws-key-id-in-command flags it.
-    "aws-access-token": "flagged by rule-aws-key-id-in-command",
-    "yandex-aws-access-token": "key ID shape, same reason as aws-access-token",
-    # A JWT may be a public key: rule-jwt-in-command escalates it.
-    "jwt": "escalated by rule-jwt-in-command",
-    "jwt-base64": "escalated by rule-jwt-in-command",
-    # Matches any key=value with a long value; gitleaks needs entropy 3.5 to keep it usable.
-    "generic-api-key": "too broad without entropy",
-    # Its allowlist drops "$VAR" and placeholder passwords; a policy regex cannot
-    # apply it. rule-inline-password covers curl -u with that exclusion.
-    "curl-auth-user": "needs its allowlist; rule-inline-password covers it",
-    # rule-auth-header covers literal Authorization and API-key headers.
-    "curl-auth-header": "covered by rule-auth-header",
-    # One branch matches any 40-hex string, such as a git commit SHA.
-    "sourcegraph-access-token": "bare 40-hex branch",
-}
-
-# Guards for rules whose gitleaks keyword is not spelled literally in the
-# regex. Each value must be a literal that every match contains;
-# TestSecretFormatGuards checks this.
-GUARD_OVERRIDE = {
-    "airtable-personnal-access-token": ["pat"],
-    # The "." in the regex is not escaped, so "hooks.slack.com" is not a literal.
-    "slack-webhook-url": ["hooks"],
-    # The keyword is lowercase; the regex requires an uppercase Q.
-    "azure-ad-client-secret": ["Q~"],
-}
-
-# Each generated line has this form; the anchor names the scanned field.
-FIELDS = {
-    "gitleaksCommand": "parameters.command",
-    "gitleaksContent": "parameters.content",
-    "gitleaksNewString": "parameters.new_string",
-    "gitleaksEdits": "parameters.edits",
-}
-LINE = re.compile(r"^(\s*- )&(gitleaks[A-Za-z]+) .*$", re.M)
-PLAIN = re.compile(r"[A-Za-z0-9_\-]+")
+OUTPUT = ROOT / "pkg" / "engine" / "secret_rules_generated.go"
+EXCLUDED = {"pkcs12-file": "path-only rule; text detection requires a regex"}
+TOP_FIELDS = {"title", "minVersion", "allowlist", "allowlists", "rules"}
+RULE_FIELDS = {"id", "description", "regex", "keywords", "secretGroup", "entropy", "path", "allowlist", "allowlists"}
+ALLOWLIST_FIELDS = {"description", "condition", "regexTarget", "regexes", "stopwords", "paths"}
 
 
-def spelled(rx: str, keyword: str) -> list[str]:
-    """Return each spelling of keyword in the regex source that is plain text."""
-    out = []
-    low = rx.lower()
-    k = keyword.lower()
-    i = low.find(k)
-    while i >= 0:
-        s = rx[i : i + len(k)]
-        before = rx[i - 1] if i > 0 else ""
-        if PLAIN.fullmatch(s) and before != "\\" and s not in out:
-            out.append(s)
-        i = low.find(k, i + 1)
-    return out
+def fields(value: dict, known: set[str], context: str) -> None:
+    if not isinstance(value, dict):
+        raise ValueError(f"{context}: expected a table")
+    unknown = value.keys() - known
+    if unknown:
+        raise ValueError(f"{context}: unsupported fields: {', '.join(sorted(unknown))}")
 
 
-def select() -> list[dict]:
-    data = tomllib.loads(RULES.read_text())
-    rules = []
+def string(value: object, context: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{context}: expected a string")
+    return value
+
+
+def strings(value: object, context: str) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError(f"{context}: expected a string array")
+    return [string(item, context) for item in value]
+
+
+def allowlists(value: dict, context: str) -> list[dict]:
+    if "allowlist" in value and "allowlists" in value:
+        raise ValueError(f"{context}: simultaneous allowlist and allowlists are unsupported")
+    entries = [value["allowlist"]] if "allowlist" in value else value.get("allowlists", [])
+    if not isinstance(entries, list):
+        raise ValueError(f"{context}.allowlists: expected an array of tables")
+    for i, entry in enumerate(entries):
+        label = f"{context}.allowlists[{i}]"
+        fields(entry, ALLOWLIST_FIELDS, label)
+        if "description" in entry:
+            string(entry["description"], label + ".description")
+        condition = string(entry.get("condition", ""), label + ".condition")
+        if condition.upper() not in ("", "AND", "OR", "&&", "||"):
+            raise ValueError(f"{label}: unsupported condition {condition!r}")
+        target = string(entry.get("regexTarget", ""), label + ".regexTarget")
+        if target not in ("", "secret", "match", "line"):
+            raise ValueError(f"{label}: unsupported regexTarget {target!r}")
+        for key in ("regexes", "stopwords", "paths"):
+            strings(entry.get(key, []), label + "." + key)
+    return entries
+
+
+def load() -> tuple[list[dict], list[dict]]:
+    data = tomllib.loads(RULES.read_text(encoding="utf-8"))
+    fields(data, TOP_FIELDS, "config")
+    for key in ("title", "minVersion"):
+        if key in data:
+            string(data[key], "config." + key)
+    global_allowlists = allowlists(data, "config")
+    if not isinstance(data.get("rules"), list):
+        raise ValueError("config.rules: expected an array of tables")
+    result, seen, excluded = [], set(), set()
     for rule in data["rules"]:
-        rid = rule["id"]
-        rx = rule.get("regex")
-        if rid in EXCLUDED or rx is None or "(?i" in rx:
+        fields(rule, RULE_FIELDS, "rule")
+        rid = string(rule.get("id"), "rule.id")
+        if not rid or rid in seen:
+            raise ValueError(f"empty or duplicate rule ID: {rid!r}")
+        seen.add(rid)
+        if "description" in rule:
+            string(rule["description"], rid + ".description")
+        strings(rule.get("keywords", []), rid + ".keywords")
+        string(rule.get("path", ""), rid + ".path")
+        group = rule.get("secretGroup", 0)
+        if type(group) is not int or group < 0:
+            raise ValueError(f"{rid}.secretGroup: expected a nonnegative integer")
+        entropy = rule.get("entropy", 0)
+        if type(entropy) not in (int, float) or not 0 <= entropy < float("inf"):
+            raise ValueError(f"{rid}.entropy: expected a finite nonnegative number")
+        allowlists(rule, rid)
+        if rid in EXCLUDED:
+            if "regex" in rule or not rule.get("path"):
+                raise ValueError(f"{rid}: excluded path-only rule changed semantics")
+            excluded.add(rid)
             continue
-        guards = GUARD_OVERRIDE.get(rid)
-        if guards is None:
-            guards = []
-            for kw in rule.get("keywords", []):
-                # Prefer the spelling in the regex; otherwise use the keyword
-                # as written. TestSecretFormatGuards rejects a wrong guard.
-                for g in spelled(rx, kw) or [kw]:
-                    if g not in guards:
-                        guards.append(g)
-        if not guards:
-            continue
-        rules.append({"id": rid, "regex": rx, "guards": guards})
-    return rules
+        if not string(rule.get("regex"), rid + ".regex"):
+            raise ValueError(f"{rid}: empty regex")
+        result.append(rule)
+    if excluded != EXCLUDED.keys():
+        raise ValueError("excluded rules changed; review EXCLUDED")
+    return result, global_allowlists
 
 
-def condition(field: str, rules: list[dict]) -> str:
-    branches = []
-    for r in rules:
-        guard = [{"field": field, "operator": "contains", "value": g} for g in r["guards"]]
-        guard_cond = guard[0] if len(guard) == 1 else {"or": guard}
-        branches.append({"and": [guard_cond, {"field": field, "operator": "regex", "value": r["regex"]}]})
-    # JSON is valid YAML flow syntax; one line per field keeps the diff small.
-    return json.dumps({"or": branches}, ensure_ascii=True, separators=(", ", ": "))
+def quote(value: str) -> str:
+    # Upstream allowlists contain full example credentials. Concatenated small
+    # chunks preserve values without storing complete credential literals.
+    chunks = [value[i:i + 16] for i in range(0, len(value), 16)] or [""]
+    return " + ".join(json.dumps(chunk, ensure_ascii=True) for chunk in chunks)
 
 
-def render(policy_text: str) -> str:
-    rules = select()
-    found = LINE.findall(policy_text)
-    if sorted(name for _, name in found) != sorted(FIELDS):
-        sys.exit("expected one '- &<name> ...' line for each of " + ", ".join(sorted(FIELDS)))
-    return LINE.sub(lambda m: m.group(1) + "&" + m.group(2) + " " + condition(FIELDS[m.group(2)], rules), policy_text)
+def array(values: list[str]) -> str:
+    return "[]string{" + ", ".join(quote(value) for value in values) + "}"
+
+
+def render_allowlists(entries: list[dict], indent: str) -> list[str]:
+    lines = []
+    for entry in entries:
+        lines.append(indent + "{")
+        for key, go_key in (("condition", "Condition"), ("regexTarget", "RegexTarget")):
+            if key in entry:
+                value = entry[key]
+                if key == "condition":
+                    value = {"&&": "AND", "||": "OR"}.get(value, value.upper())
+                lines.append(indent + "\t" + go_key + ": " + quote(value) + ",")
+        for key, go_key in (("regexes", "Regexes"), ("stopwords", "Stopwords"), ("paths", "Paths")):
+            if key in entry:
+                lines.append(indent + "\t" + go_key + ": " + array(entry[key]) + ",")
+        lines.append(indent + "},")
+    return lines
+
+
+def render(rules: list[dict], global_allowlists: list[dict]) -> str:
+    lines = [
+        "// Code generated by scripts/gen-secret-formats.py; DO NOT EDIT.",
+        "// Source: third_party/gitleaks/gitleaks.toml (MIT).",
+        "// Upstream commit: " + GITLEAKS_COMMIT,
+        "// Source SHA256: " + hashlib.sha256(RULES.read_bytes()).hexdigest(),
+        "", "package engine", "", "var secretRules = []secretRule{",
+    ]
+    for rule in rules:
+        lines.extend([
+            "\t{", "\t\tID: " + quote(rule["id"]) + ",",
+            "\t\tPattern: " + quote(rule["regex"]) + ",",
+            "\t\tKeywords: " + array(rule.get("keywords", [])) + ",",
+            "\t\tSecretGroup: " + str(rule.get("secretGroup", 0)) + ",",
+            "\t\tEntropy: " + repr(rule.get("entropy", 0)) + ",",
+        ])
+        if "path" in rule:
+            lines.append("\t\tPath: " + quote(rule["path"]) + ",")
+        entries = allowlists(rule, rule["id"])
+        if entries:
+            lines.append("\t\tAllowlists: []secretAllowlist{")
+            lines.extend(render_allowlists(entries, "\t\t\t"))
+            lines.append("\t\t},")
+        lines.append("\t},")
+    lines.extend(["}", "", "var secretGlobalAllowlists = []secretAllowlist{"])
+    lines.extend(render_allowlists(global_allowlists, "\t"))
+    lines.extend(["}", "", "var secretExcludedRules = map[string]string{"])
+    lines.extend("\t" + quote(rid) + ": " + quote(reason) + "," for rid, reason in sorted(EXCLUDED.items()))
+    lines.extend(["}", ""])
+    formatted = subprocess.run(
+        ["gofmt"], input="\n".join(lines), text=True, capture_output=True,
+        check=True, timeout=15,
+    )
+    return formatted.stdout
 
 
 def main() -> int:
-    if "--list" in sys.argv[1:]:
-        for r in select():
-            print(r["id"], r["guards"])
-        return 0
-    old = POLICY.read_text()
-    new = render(old)
-    if "--check" in sys.argv[1:]:
-        if new != old:
-            print("stale: run python3 scripts/gen-secret-formats.py", file=sys.stderr)
-            return 1
-        return 0
-    POLICY.write_text(new)
+    parser = argparse.ArgumentParser(description=__doc__)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--check", action="store_true")
+    mode.add_argument("--list", action="store_true")
+    args = parser.parse_args()
+    try:
+        rules, global_allowlists = load()
+        if args.list:
+            for rule in rules:
+                print(rule["id"])
+            for rid, reason in sorted(EXCLUDED.items()):
+                print(f"excluded: {rid}: {reason}")
+            return 0
+        new = render(rules, global_allowlists)
+        if args.check:
+            old = OUTPUT.read_text(encoding="utf-8") if OUTPUT.exists() else None
+            if new != old:
+                print("stale: run python3 scripts/gen-secret-formats.py", file=sys.stderr)
+                return 1
+        else:
+            OUTPUT.write_text(new, encoding="utf-8")
+    except (ValueError, OSError, subprocess.SubprocessError) as exc:
+        print(f"secret rule generation failed: {exc}", file=sys.stderr)
+        return 1
     return 0
 
 

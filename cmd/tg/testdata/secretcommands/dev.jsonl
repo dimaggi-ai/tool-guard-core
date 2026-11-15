@@ -34,8 +34,8 @@
 {"id": "d-dop", "params": {"command": "doctl auth init -t dop_v1_abcdef0123abcdef0123abcdef01{{+}}23abcdef0123abcdef0123abcdef0123abcd"}, "rule": "rule-provider-{{+}}key-in-command", "tool": "bash", "want": "hit"}
 {"id": "d-sgp", "params": {"command": "src login --token sgp_abcdef0123abcdef01{{+}}23abcdef0123abcdef0123"}, "rule": "rule-provider-{{+}}key-in-command", "tool": "bash", "want": "hit"}
 {"id": "d-sk-openrouter", "params": {"command": "OPENROUTE{{+}}R_API_KEY=sk-or-v1-abcdef0123abcdef0123abcdef0{{+}}123abcdef0123abcdef0123abcdef0123abcd python run.py"}, "rule": "rule-provider-{{+}}key-in-command", "tool": "bash", "want": "hit"}
-{"id": "d-note-glrt", "params": {"content": "runner token glrt-SYNTH00{{+}}0000000000000", "file_path": "/home/u/proj/HANDOFF.md"}, "rule": "rule-secret-{{+}}in-agent-note", "tool": "write", "want": "hit"}
-{"id": "d-settings-pplx", "params": {"content": "{\"env\":{\"PPLX\":\"pplx-SYNTHaB3xK9SYNTHaB3xK{{+}}9SYNTHaB3xK9SYNTHaB3xK9abcd\"}}", "file_path": "/home/u/proj/.claude/settings.local.json"}, "rule": "rule-secret-i{{+}}n-agent-config", "tool": "write", "want": "hit"}
+{"id": "d-note-glrt", "params": {"content": "runner token glrt-VD8SV06{{+}}GhMLpBEqU3RvC", "file_path": "/home/u/proj/HANDOFF.md"}, "rule": "rule-secret-{{+}}in-agent-note", "tool": "write", "want": "hit"}
+{"id": "d-settings-pplx", "params": {"content": "{\"env\":{\"PPLX\":\"pplx-JxkJPXXYhcIUEg3vdfYMl{{+}}mXmaH1BCIyHiSR5JbLOjLKwjY0h\"}}", "file_path": "/home/u/proj/.claude/settings.local.json"}, "rule": "rule-secret-i{{+}}n-agent-config", "tool": "write", "want": "hit"}
 {"id": "d-git-add{{+}}-settings", "params": {"command": "git add .claude/settings.local.json"}, "rule": "rule-git-add-{{+}}agent-settings", "tool": "bash", "want": "hit"}
 {"id": "d-c-pgpass-var", "params": {"command": "PGPASSWORD=\"$DB_PASSWORD\" psql -h db"}, "tool": "bash", "want": "clean"}
 {"id": "d-c-url-local", "params": {"command": "psql postgres://postgres:postgres@localhost:5432/app"}, "tool": "bash", "want": "clean"}

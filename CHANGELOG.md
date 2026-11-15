@@ -60,22 +60,23 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   is additive; code that builds `StreamReport` with positional struct literals must switch to keyed
   fields. A trusted external checkpoint pin establishes checkpoint identity
   only; it does not authenticate deleted records.
-- New policy `policies/coding_agent_secret_commands.yaml`, in shadow mode: it
-  records a secret that a coding agent types into a shell command, writes into
-  an agent config file, or copies into a note, and blocks nothing. It reads
-  inline passwords, credentials in URLs, authorization headers, a hand-written
-  list of provider-key formats, and 75 provider-key formats generated from the
-  default rules of gitleaks (MIT licence, pinned in `third_party/gitleaks`) by
-  `scripts/gen-secret-formats.py`. The generated rules have no entropy limits
-  or allowlists, so a placeholder in a provider format is recorded. The rules
-  match text: they catch a secret pasted by mistake, not one an agent hides on
-  purpose by splitting it across shell variables, encoding it, or building it
-  in a script. Core has no redaction: `tg hook` and `tg-proxy` do not store
+- Added `secret_classify` for provider and generic secret formats. It uses
+  the pinned gitleaks keywords, capture groups, entropy limits, allowlists,
+  and stopwords. It scans 65,536 bytes by default and reports truncation.
+  It does not scan paths, decode values, join variables, or redact data.
+  The shadow secrets policy now uses this condition in place of generated
+  regex branches. Its hand-written checks remain. Generic keys have a
+  separate low-severity flag rule. The policy still blocks nothing in shadow
+  mode. Core has no redaction: `tg hook` and `tg-proxy` do not store
   the raw tool parameters in the audit record, but the record can hold
   values taken from them, such as an amount or a protected file path quoted
-  in a decision reason. CI fails when the generated rules do not match
-  the pinned file. The test fixtures store each key in two pieces, which the
-  test joins, so the repository holds no complete key string.
+  in a decision reason.
+- An `or` condition that does not fire now returns its branches' details,
+  joined by `; `, instead of an empty string. A `secret_classify`
+  truncation report inside an `or` now reaches the rule result.
+- Go API: `domain.Condition.SecretClassify` and `domain.SecretClassify` add
+  secret-scanning configuration. Callers using positional `Condition`
+  struct literals must switch to keyed fields.
 - Two new policies, `policies/coding_agent_secret_egress.yaml` and
   `policies/coding_agent_context_files.yaml`. Loading the whole `policies/`
   directory now activates them; a deployment that names policy files
