@@ -70,7 +70,7 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	failClosedTools := fs.String("fail-closed-tools", "", "comma list of tool names to fail CLOSED for on internal error (others fail open); overrides -fail-closed's global behavior")
 	failClosedGroups := fs.String("fail-closed-groups", "", "comma list of tool groups (shell, filesystem_writes, filesystem, network_egress) to fail CLOSED for on internal error; a tool name the hook does not recognise is in group shell. A tool fails closed when its name is in -fail-closed-tools OR its group is listed here")
 	escalateAs := fs.String("escalate-as", "ask", "how a policy escalation is returned to the harness: ask (default) | deny. Use deny for a harness measured to run a call the hook answered ask to, or for an unattended run where nobody can answer a prompt. Any other value is treated as deny")
-	agyEscalation := fs.String("antigravity-escalation", "force_ask", "how an escalation is expressed to Antigravity: force_ask (default; the Antigravity hooks documentation says it prompts even where an \"Always Allow\" rule exists, which ask does not; not measured here) | ask (the harness's own value). Antigravity CLI started with --dangerously-skip-permissions ran the call after either value in the release run. See docs/support-matrix.md.")
+	agyEscalation := fs.String("antigravity-escalation", "force_ask", "how an escalation is expressed to Antigravity: force_ask (default; the Antigravity hooks documentation says it prompts even where an \"Always Allow\" rule exists, which ask does not; not measured here) | ask (the harness's own value). Antigravity CLI 1.5.4 ran the call after either value when started with --dangerously-skip-permissions. See docs/support-matrix.md for the versions measured.")
 	dialectStr := fs.String("dialect", "auto", "hook payload and output dialect: auto | claude | antigravity. auto reads the input shape")
 	protectPaths := fs.String("protect-paths", "", "comma list of path prefixes; a write-capable tool targeting one is denied BEFORE policy eval, unconditionally")
 	var protectPath repeatablePathFlag
@@ -1077,9 +1077,10 @@ decision to stdout. Always exits 0.
                         docs/support-matrix.md) and for unattended runs.
   -antigravity-escalation ask
                         emit ask instead of force_ask in the antigravity
-                        dialect. Started with
-                        --dangerously-skip-permissions, Antigravity CLI ran
-                        the call after either value.
+                        dialect. Antigravity CLI 1.5.4 ran the call
+                        after either value when started with
+                        --dangerously-skip-permissions (see
+                        docs/support-matrix.md for the versions measured).
 
 RECOMMENDED for any enforcing deployment: pass -fail-closed-tools (or
 -fail-closed). Without one, an internal error (unparseable stdin, a policy
