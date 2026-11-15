@@ -67,13 +67,19 @@ type harnessManifest struct {
 
 func loadHarnessManifest(t *testing.T) harnessManifest {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "evidence", "harness-manifest.json"))
+	return loadHarnessManifestFile(t, "harness-manifest.json")
+}
+
+// loadHarnessManifestFile reads a manifest in docs/evidence by file name.
+func loadHarnessManifestFile(t *testing.T, name string) harnessManifest {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "evidence", name))
 	if err != nil {
-		t.Fatalf("read docs/evidence/harness-manifest.json: %v (it is the manifest.json of a release run of verify-harnesses.sh)", err)
+		t.Fatalf("read docs/evidence/%s: %v (it is the manifest.json of a release run of verify-harnesses.sh)", name, err)
 	}
 	var m harnessManifest
 	if err := json.Unmarshal(raw, &m); err != nil {
-		t.Fatalf("parse docs/evidence/harness-manifest.json: %v", err)
+		t.Fatalf("parse docs/evidence/%s: %v", name, err)
 	}
 	return m
 }
