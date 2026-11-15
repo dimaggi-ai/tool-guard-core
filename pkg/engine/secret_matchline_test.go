@@ -125,6 +125,26 @@ func denseSecretSingleLine(size int) string {
 	return strings.Repeat(assignment, size/len(assignment))
 }
 
+// A dense last line with no final newline, after an earlier line, took
+// 10.3 s when each match scanned from its end to the end of the text.
+func TestSecretClassifyDenseUnterminatedLastLineIsBounded(t *testing.T) {
+	if testing.Short() {
+		t.Skip("scans 1 MiB")
+	}
+	text := "header\n" + denseSecretSingleLine(maximumSecretMaxBytes-len("header\n"))
+	assertManyMatches(t, text, `api_key=SYNTHqk0123456789`, 10000)
+	began := time.Now()
+	result := classifySecrets(text, maximumSecretMaxBytes)
+	elapsed := time.Since(began)
+	if !slices.ContainsFunc(result.Findings, func(f secretFinding) bool { return f.RuleID == "generic-api-key" }) {
+		t.Fatalf("unterminated last line found %v, want generic-api-key", result.Findings)
+	}
+	if elapsed > 5*time.Second*raceSlowdown {
+		t.Fatalf("classifying 1 MiB with an unterminated last line took %s", elapsed)
+	}
+	t.Logf("1 MiB dense unterminated last line: %s, %d findings", elapsed, len(result.Findings))
+}
+
 // One long line with many matches took 10.6 s when line-target allowlist
 // regexes rescanned the whole line for each match; it now takes about 1.8 s.
 func TestSecretClassifyDenseSingleLineIsBounded(t *testing.T) {

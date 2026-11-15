@@ -175,12 +175,7 @@ func classifySecrets(text string, maxBytes int) secretResult {
 		panic(err)
 	} // Generated-data errors are rejected at policy validation.
 	lower := strings.ToLower(text)
-	var newlines []int
-	for i := range text {
-		if text[i] == '\n' {
-			newlines = append(newlines, i)
-		}
-	}
+	newlines, breaks := secretLineBreaks(text)
 	type candidate struct {
 		id, secret string
 		line       int
@@ -217,7 +212,7 @@ func classifySecrets(text string, maxBytes int) secretResult {
 			if r.Entropy != 0 && secretEntropy(secret) <= r.Entropy {
 				continue
 			}
-			lineStart, lineEnd, lineNumber := secretMatchLineSpan(text, newlines, loc[0], loc[0]+len(match))
+			lineStart, lineEnd, lineNumber := secretMatchLineSpan(text, newlines, breaks, loc[0], loc[0]+len(match))
 			line := text[lineStart:lineEnd]
 			lineMatch := func(re *regexp.Regexp) bool {
 				key := lineRegexKey{re, lineStart, lineEnd}
@@ -268,13 +263,29 @@ func classifySecrets(text string, maxBytes int) secretResult {
 // unterminated-last-line behavior: that line's allowlist context starts at 0.
 // Upstream copyright Zachary Rice; MIT license: third_party/gitleaks/LICENSE.
 func secretMatchLine(text string, newlines []int, start, end int) (string, int) {
-	lineStart, lineEnd, number := secretMatchLineSpan(text, newlines, start, end)
+	_, breaks := secretLineBreaks(text)
+	lineStart, lineEnd, number := secretMatchLineSpan(text, newlines, breaks, start, end)
 	return text[lineStart:lineEnd], number
 }
 
+// secretLineBreaks returns the offsets of every '\n', and of every '\n' or
+// '\r', in text.
+func secretLineBreaks(text string) (newlines, breaks []int) {
+	for i := 0; i < len(text); i++ {
+		switch text[i] {
+		case '\n':
+			newlines = append(newlines, i)
+			breaks = append(breaks, i)
+		case '\r':
+			breaks = append(breaks, i)
+		}
+	}
+	return newlines, breaks
+}
+
 // secretMatchLineSpan returns the offsets of secretMatchLine's line and its
-// number.
-func secretMatchLineSpan(text string, newlines []int, start, end int) (int, int, int) {
+// number. breaks holds the offsets of every '\n' or '\r' in text.
+func secretMatchLineSpan(text string, newlines, breaks []int, start, end int) (int, int, int) {
 	if len(newlines) == 0 {
 		newlines = []int{len(text)}
 	}
@@ -297,10 +308,13 @@ func secretMatchLineSpan(text string, newlines []int, start, end int) (int, int,
 		lineEnd = newlines[j]
 	}
 	if !lineSet {
+		// The last line runs from end to the next '\n' or '\r', or to the end
+		// of text. A binary search keeps this from rescanning the line for
+		// every match on it.
 		startLine = n
-		lineEnd = end
-		for lineEnd < len(text) && text[lineEnd] != '\n' && text[lineEnd] != '\r' {
-			lineEnd++
+		lineEnd = len(text)
+		if k := sort.SearchInts(breaks, end); k < len(breaks) {
+			lineEnd = breaks[k]
 		}
 	}
 	if end > lineEnd {
