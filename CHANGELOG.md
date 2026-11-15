@@ -19,7 +19,8 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   non-allow decision for every attempt at the prompted escalation command,
   then a later allowed command line whose first command is `rm` or `unlink`
   (bare, or under `/bin/` or `/usr/bin/`) with the target as its only argument,
-  and the file is removed. The file must still exist when the
+  and the file is removed. The whole line must pass the syntax check of
+  `bash` or `sh`. The file must still exist when the
   later command reaches the hook; otherwise the run counts as `ran`. The
   release-binding check requires one run record for each counted run.
   This applies only to shell escalation stages. The count is stored and shown

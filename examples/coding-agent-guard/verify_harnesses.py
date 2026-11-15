@@ -208,9 +208,12 @@ def removes_target(command, target):
     if shell is None:
         return False
     # The scrubbed <scratch> marker would read as redirects; it stands for a plain path.
-    checked = subprocess.run([shell, "-n", "-c", command.replace("<scratch>", "/scratch")],
-                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL, timeout=30, check=False)
+    try:
+        checked = subprocess.run([shell, "-n", "-c", command.replace("<scratch>", "/scratch")],
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL, timeout=30, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
     return checked.returncode == 0
 
 
