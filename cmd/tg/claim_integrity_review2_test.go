@@ -171,20 +171,22 @@ func TestChangelogAntigravityRunCountsMatchManifest(t *testing.T) {
 	if extra := loose.FindString(rest); extra != "" {
 		t.Fatalf("CHANGELOG.md has a second run count for an escalation answer: %q; the test checks the one sentence only", extra)
 	}
+	// The retained manifest is checked whichever run the sentence names.
+	const name, digest = "harness-manifest-24eafd6.json", "6e979b4946b3bae5346ba20be75038dacafdba04c68b0c063d0a46a2f0e21aea"
+	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "evidence", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum := fmt.Sprintf("%x", sha256.Sum256(raw)); sum != digest {
+		t.Fatalf("docs/evidence/%s has SHA-256 %s; the retained manifest of the earlier run has %s", name, sum, digest)
+	}
+	earlier := loadHarnessManifestFile(t, name)
+	if earlier.Commit != legacyHarnessCommit {
+		t.Fatalf("docs/evidence/%s measured commit %s; the earlier run measured %s", name, earlier.Commit, legacyHarnessCommit)
+	}
 	manifest := loadHarnessManifest(t)
 	if got[1] == "an earlier run" {
-		const name, digest = "harness-manifest-24eafd6.json", "6e979b4946b3bae5346ba20be75038dacafdba04c68b0c063d0a46a2f0e21aea"
-		raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "evidence", name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if sum := fmt.Sprintf("%x", sha256.Sum256(raw)); sum != digest {
-			t.Fatalf("docs/evidence/%s has SHA-256 %s; the retained manifest of the earlier run has %s", name, sum, digest)
-		}
-		manifest = loadHarnessManifestFile(t, name)
-		if manifest.Commit != legacyHarnessCommit {
-			t.Fatalf("docs/evidence/%s measured commit %s; the earlier run measured %s", name, manifest.Commit, legacyHarnessCommit)
-		}
+		manifest = earlier
 	}
 	if measured := manifestVersion(t, manifest, "agy"); got[2] != measured {
 		t.Fatalf("CHANGELOG.md gives counts for %s on Antigravity CLI %s; the manifest of that run holds version %s", got[1], got[2], measured)

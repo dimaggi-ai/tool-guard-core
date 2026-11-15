@@ -252,8 +252,9 @@ func TestMatrixRunSizeMatchesManifest(t *testing.T) {
 
 // TestChangelogAgyFlagProtectionMatchesManifest: the changelog tells an
 // operator what the flag --dangerously-skip-permissions leaves them with.
-// The "no escalation protection" sentence is allowed only while the manifest
-// shows the escalated call running with the flag.
+// The "no escalation protection" sentence is required when the manifest
+// shows the escalated call running with the flag in every run, and rejected
+// otherwise. A run in which some calls ran and some did not needs other words.
 func TestChangelogAgyFlagProtectionMatchesManifest(t *testing.T) {
 	m := loadHarnessManifest(t)
 	// The stages come from the one Antigravity entry started with the flag.
@@ -292,16 +293,16 @@ func TestChangelogAgyFlagProtectionMatchesManifest(t *testing.T) {
 	}
 	want := "gets deny protection and no escalation protection unless `TG_ESCALATE_AS=deny` is set."
 	has := strings.Contains(oneLine(readRepoFile(t, "CHANGELOG.md")), want)
-	// The sentence is a claim about the measured version. It needs a run in
-	// which the escalated call ran.
+	// The sentence is a claim about the measured version. It says "no"
+	// protection, so it needs the escalated call to run in every run.
 	esc, ok := stage["escalation_shell"]
 	if !ok {
 		t.Fatal("manifest: no stage escalation_shell with the flag")
 	}
-	if esc.Outcomes["ran"] == 0 {
+	if esc.Runs == 0 || esc.Outcomes["ran"] != esc.Runs {
 		if has {
-			t.Errorf("CHANGELOG.md holds the sentence ending %q; in the manifest stage escalation_shell with the flag ran in 0 of %d runs (outcomes %v)",
-				want, esc.Runs, esc.Outcomes)
+			t.Errorf("CHANGELOG.md holds the sentence ending %q; in the manifest stage escalation_shell with the flag ran in %d of %d runs (outcomes %v), not in every run",
+				want, esc.Outcomes["ran"], esc.Runs, esc.Outcomes)
 		}
 		return
 	}
