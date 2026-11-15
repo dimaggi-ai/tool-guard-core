@@ -103,10 +103,38 @@ func TestSecretClassifyDenseMultilineIsBounded(t *testing.T) {
 	if len(result.Findings) == 0 {
 		t.Fatal("dense input produced no finding")
 	}
-	if elapsed > 5*time.Second*raceSlowdown {
-		t.Fatalf("classifying 1 MiB of dense matches took %s", elapsed)
-	}
+	assertBoundedByScan(t, text, elapsed)
 	t.Logf("1 MiB dense multiline: %s, %d findings", elapsed, len(result.Findings))
+}
+
+// assertBoundedByScan fails when classifying text took more than four times
+// the rule-regex scan of the same text, measured here on the same machine,
+// plus 250 ms. The scan is work classifySecrets cannot avoid, so the bound
+// holds on slow runners and under the race detector. Without the race
+// detector, a per-match rescan of a long line (10 s or more at 1 MiB, about
+// 18 times the scan) exceeds it; the race detector slows the scan more than
+// the rescan, so only the non-race run catches that regression.
+func assertBoundedByScan(t *testing.T, text string, elapsed time.Duration) {
+	t.Helper()
+	rules, _, err := loadSecretRules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lower := strings.ToLower(text)
+	began := time.Now()
+	for _, r := range rules {
+		if r.Path != "" || (len(r.Keywords) > 0 && !containsSecretKeyword(lower, r.Keywords)) {
+			continue
+		}
+		for _, loc := range r.re.FindAllStringIndex(text, -1) {
+			r.re.FindStringSubmatch(text[loc[0]:loc[1]])
+		}
+	}
+	scan := time.Since(began)
+	if limit := 4*scan + 250*time.Millisecond; elapsed > limit {
+		t.Fatalf("classifying took %s; the rule scan alone took %s, limit %s", elapsed, scan, limit)
+	}
+	t.Logf("classify %s, rule scan %s", elapsed, scan)
 }
 
 // assertManyMatches fails unless pattern matches text at least min times, so
@@ -139,9 +167,7 @@ func TestSecretClassifyDenseUnterminatedLastLineIsBounded(t *testing.T) {
 	if !slices.ContainsFunc(result.Findings, func(f secretFinding) bool { return f.RuleID == "generic-api-key" }) {
 		t.Fatalf("unterminated last line found %v, want generic-api-key", result.Findings)
 	}
-	if elapsed > 5*time.Second*raceSlowdown {
-		t.Fatalf("classifying 1 MiB with an unterminated last line took %s", elapsed)
-	}
+	assertBoundedByScan(t, text, elapsed)
 	t.Logf("1 MiB dense unterminated last line: %s, %d findings", elapsed, len(result.Findings))
 }
 
@@ -159,9 +185,7 @@ func TestSecretClassifyDenseSingleLineIsBounded(t *testing.T) {
 	if !slices.ContainsFunc(result.Findings, func(f secretFinding) bool { return f.RuleID == "generic-api-key" }) {
 		t.Fatalf("single-line input found %v, want generic-api-key", result.Findings)
 	}
-	if elapsed > 5*time.Second*raceSlowdown {
-		t.Fatalf("classifying 1 MiB on one line took %s", elapsed)
-	}
+	assertBoundedByScan(t, text, elapsed)
 	t.Logf("1 MiB dense single line: %s, %d findings", elapsed, len(result.Findings))
 }
 
