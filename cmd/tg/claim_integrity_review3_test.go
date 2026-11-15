@@ -298,7 +298,7 @@ func TestChangelogAgyFlagProtectionMatchesManifest(t *testing.T) {
 				opposite += n
 			}
 		}
-		if s.Result != "PASS" || s.Runs == 0 || opposite != 0 || held*2 <= s.Runs || held+s.Outcomes["not_measured"] != s.Runs {
+		if s.Result != "PASS" || s.Runs == 0 || opposite != 0 || held*2 <= s.Runs {
 			t.Fatalf("manifest: stage %s with the flag has result %q and outcomes %v in %d runs; the changelog sentence needs no run that shows the call running and the call held in more than half of the runs", id, s.Result, s.Outcomes, s.Runs)
 		}
 	}

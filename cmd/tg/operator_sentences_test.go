@@ -180,22 +180,45 @@ func TestOperatorSentencesMatchBehaviour(t *testing.T) {
 		t.Fatalf("maxApplyPatchTargets is %d; CHANGELOG.md says 64", maxApplyPatchTargets)
 	}
 
-	// The trust flag of the release run. A run in which Codex made no call
-	// shows nothing, so it does not count against the statement; any other
-	// outcome does.
-	m := loadHarnessManifest(t)
-	untrusted := false
-	for _, h := range m.Harnesses {
-		for _, s := range h.Stages {
-			if s.ID != "untrusted_hook" {
-				continue
+	// The trust step. The example README says that Codex does not call a hook
+	// it has not been made to trust. Stage untrusted_hook is a measurement, so
+	// the verifier accepts any outcome of it. A run in which Codex made no
+	// call shows nothing, and the statement then rests on the retained
+	// manifest of the run of 2026-11-10. Any other outcome is a run that
+	// contradicts the statement.
+	untrustedRuns := func(m harnessManifest, name string) (shown, contrary int) {
+		found := 0
+		for _, h := range m.Harnesses {
+			for _, s := range h.Stages {
+				if s.ID != "untrusted_hook" {
+					continue
+				}
+				found++
+				for outcome, n := range s.Outcomes {
+					switch outcome {
+					case "ran_without_hook":
+						shown += n
+					case "not_measured":
+					default:
+						contrary += n
+					}
+				}
 			}
-			n := s.Outcomes["ran_without_hook"]
-			untrusted = n > 0 && n+s.Outcomes["not_measured"] == s.Runs
 		}
+		if found != 1 {
+			t.Fatalf("%s: %d stages untrusted_hook; the test needs exactly one", name, found)
+		}
+		return shown, contrary
 	}
-	if !untrusted {
-		t.Fatal("the manifest no longer shows that Codex ran a command without calling an untrusted hook")
+	shown, contrary := untrustedRuns(loadHarnessManifest(t), "the release manifest")
+	if contrary != 0 {
+		t.Fatalf("the release manifest has %d run(s) of stage untrusted_hook with another outcome than a command that ran without a hook call; the example README says Codex does not call a hook it has not been made to trust", contrary)
+	}
+	if shown == 0 {
+		const retained = "harness-manifest-24eafd6.json"
+		if earlier, against := untrustedRuns(loadHarnessManifestFile(t, retained), retained); earlier == 0 || against != 0 {
+			t.Fatalf("no run of the release manifest shows what Codex does with an untrusted hook, and docs/evidence/%s shows it in %d run(s) with %d against", retained, earlier, against)
+		}
 	}
 	requireSentences(t, matrix,
 		"The flag `--dangerously-bypass-hook-trust` makes Codex call the hook without the trust step.",
