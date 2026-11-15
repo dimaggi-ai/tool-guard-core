@@ -70,8 +70,9 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   or allowlists, so a placeholder in a provider format is recorded. The rules
   match text: they catch a secret pasted by mistake, not one an agent hides on
   purpose by splitting it across shell variables, encoding it, or building it
-  in a script. Core has no redaction: neither `tg hook` nor `tg-proxy` copies
-  tool parameters into the audit record. CI fails when the generated rules do not match
+  in a script. Core has no redaction: `tg hook` and `tg-proxy` do not store
+  tool parameters in the audit record, but a decision reason can quote a
+  value taken from them, such as a protected file path. CI fails when the generated rules do not match
   the pinned file. The test fixtures store each key in two pieces, which the
   test joins, so the repository holds no complete key string.
 - Two new policies, `policies/coding_agent_secret_egress.yaml` and
