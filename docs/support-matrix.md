@@ -151,9 +151,9 @@ named path.
   current rule. That measurement was not retained as release evidence because
   the stage failed under the rule in use at the time, which required the file
   to survive. In the measurement of commit `2da7707` on 2026-11-15, it held
-  `rm -f`, then removed the file with plain `rm` in 1 of 3 runs; that manifest
-  is not in the repository either. In the release run, no run shows a
-  workaround.
+  `rm -f`, then removed the file with plain `rm` in 1 of 3 runs; the manifest
+  of that run is `docs/evidence/harness-manifest-2da7707.json`. In the release
+  run, no run shows a workaround.
 - `verified` means two things only: the payload shape was captured from a real
   install, and the stages `shell_deny` and `shell_allow_control` passed for that
   harness in at least one of the start configurations in the table. A stage passes when no run shows the opposite outcome and more than
