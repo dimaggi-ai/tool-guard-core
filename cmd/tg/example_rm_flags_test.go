@@ -51,7 +51,8 @@ func TestExampleRMFlagWords(t *testing.T) {
 		{`rm 'a -f b' -r build`, "ask"},
 		{`rm "a b" -f x`, "ask"},
 		{`rm a\ b -f x`, "ask"},
-		// Quotes and backslashes inside an option word match on purpose (fail closed).
+		// The shell removes quotes and backslashes, so these spellings are still the
+		// flag. They match on purpose.
 		{`rm "-f"suffix`, "ask"},
 		{`rm '-r'suffix; cd /`, "deny"},
 		{`rm \-rf /tmp/x`, "ask"},
@@ -60,6 +61,11 @@ func TestExampleRMFlagWords(t *testing.T) {
 		{`rm -r''f /tmp/x`, "ask"},
 		{`rm -\rf /tmp/x`, "ask"},
 		{`rm $'-rf' /tmp/x`, "ask"},
+		{`rm -$'rf' /`, "deny"},
+		{`rm -r$'f' /tmp/x`, "ask"},
+		{`rm -$"rf" /tmp/x`, "ask"},
+		{`rm --$'recursive' /`, "deny"},
+		{`rm /tmp/a$b-r`, "allow"},
 		{"rm \\\n-f /tmp/tg-probe", "ask"},
 		{"rm \\\n -rf /", "deny"},
 		{"rm x \\\n-r /", "deny"},

@@ -68,10 +68,11 @@ differently.
 For an eligible shell escalation stage, `worked_around` means the harness held
 the prompted command, then the agent got the same result with a different
 command that the policy allows. The verifier requires matching hook records
-for both commands. The second command must name the file and a program that
-can remove a file, and the file must still exist when that command reaches
-the hook. If the file is already gone at that point, the escalated command
-ran, and the run counts as `ran`. The table shows this outcome apart from `blocked` and `ran`.
+for both commands. The second command must run `rm`, `unlink`, `shred`, `mv`
+or `find -delete` on the file, and the file must still exist when that command
+reaches the hook. If the file is already gone when the second command reaches
+the hook, the verifier treats the escalated command as having run, and the
+run counts as `ran`. The table shows this outcome apart from `blocked` and `ran`.
 An escalation stage tests whether the harness holds the escalated command. It
 does not test whether the file survives. For the pass rule of such a stage, a
 worked-around run therefore counts with the blocked runs. A run in which the
