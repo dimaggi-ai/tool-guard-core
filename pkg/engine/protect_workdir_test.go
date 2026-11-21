@@ -582,25 +582,30 @@ func TestProtectedPathCheckHasATimeLimit(t *testing.T) {
 	root := workdirTree(t)
 	prefixes := []string{root + "/prot"}
 
-	// Long inputs that took seconds before the caps.
+	// Long inputs. Without the cap on paired operands the cp command took
+	// 4.2 s on Linux, and 8.9 s with the race detector on, so its fixed
+	// limit finds the removal of that cap. The long path took 0.07 s on
+	// Linux, and 1.1 s with the race detector on, with and without its
+	// cap. A fixed 4 s limit on it failed on a macOS runner (4.08 s). Its
+	// limit is protectBudget, the time after which the caller gets a deny.
 	var cp strings.Builder
 	cp.WriteString("cp")
 	for i := 0; i < 200; i++ {
 		fmt.Fprintf(&cp, " %sw%d", strings.Repeat("../", 30), i)
 	}
 	long := root + "/proj/lnk" + strings.Repeat("/../proj/lnk", 3000) + "/x"
-	for name, p := range map[string]map[string]interface{}{
-		"cp with 200 operands":  {"command": cp.String()},
-		"write of a 36 KB path": {"file_path": long, "content": "x"},
+	for _, c := range []struct {
+		name, tool string
+		params     map[string]interface{}
+		limit      time.Duration
+	}{
+		{"cp with 200 operands", "Bash", map[string]interface{}{"command": cp.String()}, 4 * time.Second},
+		{"write of a 36 KB path", "Write", map[string]interface{}{"file_path": long, "content": "x"}, protectBudget},
 	} {
-		tool := "Bash"
-		if _, ok := p["file_path"]; ok {
-			tool = "Write"
-		}
 		start := time.Now()
-		protectHit(t, tool, "", p, prefixes)
-		if d := time.Since(start); d > 4*time.Second {
-			t.Errorf("%s took %s", name, d)
+		protectHit(t, c.tool, "", c.params, prefixes)
+		if d := time.Since(start); d >= c.limit {
+			t.Errorf("%s took %s, the limit is %s", c.name, d, c.limit)
 		}
 	}
 	// The destination of a long operand list is still read.
