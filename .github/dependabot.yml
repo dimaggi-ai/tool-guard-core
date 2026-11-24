@@ -15,6 +15,16 @@ updates:
     commit-message:
       prefix: "deps"
       include: "scope"
+    ignore:
+      # This module has no version tags of its own. Dependabot selects
+      # the tag v2.1.0-rc.5+incompatible of the parent repository, which
+      # does not contain the package, and the weekly run fails with
+      # dependency_file_not_resolvable.
+      # An ignore entry stops version updates and security update pull
+      # requests for this module. Dependabot alerts still arrive. Update
+      # the module by hand, and its rows in THIRD_PARTY_NOTICES.md:
+      #   go get github.com/pingcap/tidb/pkg/parser@<commit>
+      - dependency-name: "github.com/pingcap/tidb/pkg/parser"
     groups:
       # Group golang.org/x/* updates so we don't get a flood of
       # separate PRs every week.
