@@ -129,7 +129,7 @@ jobs:
         with:
           go-version: "1.26.11"
           cache: true
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
       # test_contract.py builds `tg` from source itself and skips gracefully
