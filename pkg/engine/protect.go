@@ -154,6 +154,7 @@ func paramWorkDirs(params map[string]interface{}) []string {
 // selfCwdRest returns what follows "/proc/self/cwd" or
 // "/proc/thread-self/cwd" at the start of a path.
 func selfCwdRest(p string) (string, bool) {
+	p = collapseSlashDots(p)
 	for _, head := range []string{"/proc/self/cwd", "/proc/thread-self/cwd"} {
 		if p == head || strings.HasPrefix(p, head+"/") {
 			return p[len(head):], true
@@ -195,6 +196,11 @@ func violatesProtectedPaths(env *domain.ActionEnvelope, prefixes []string) (bool
 	// legitimate read of the policy dir.
 	if isFileWriteTool(tool) {
 		for _, fp := range collectFilePaths(params) {
+			// A path through another process's working directory or an
+			// open descriptor names a directory not known here.
+			if _, self := selfCwdRest(fp); !self && procPathUnknown(fp) {
+				return true, fmt.Sprintf("protected path: write through %s denied by -protect-paths (directory not known)", shortRaw(fp))
+			}
 			for _, reading := range pathReadings(fp, dirs) {
 				for _, cand := range canonicalCandidates(reading) {
 					for _, prefix := range clean {
@@ -912,7 +918,7 @@ func nestedTexts(cmd string) (texts []string, ok bool) {
 		}
 		switch prog := filepath.Base(words[0].value); {
 		case shellInterpreters[prog]:
-			for _, arg := range shellDashCArgs(words[1:]) {
+			for _, arg := range append(shellDashCArgs(words[1:]), shellOptionCommands(words[1:])...) {
 				texts = append(texts, arg.marked)
 			}
 		case prog == "eval":
@@ -1379,9 +1385,17 @@ func shellTokensTouchProtected(toks []shellToken, prefixes []string, depth int, 
 		if t.unresolved {
 			return true, shortRaw(t.raw)
 		}
-		value := rebaseWord(shellToken{kind: tokWord, value: t.value, raw: t.raw, marked: t.value}, base).value
-		if hit, target := namesProtected(value, prefixes); hit {
-			return true, target
+		// bash brace-expands a redirection word too: `> {P,}` and
+		// `> settings.{json,}` write P. Every expansion is checked, and a
+		// word whose braces cannot be read fails closed.
+		for _, w := range expandBraceWords([]shellToken{{kind: tokWord, value: t.value, raw: t.raw, marked: t.value}}) {
+			if w.unresolved {
+				return true, shortRaw(t.raw)
+			}
+			value := rebaseWord(w, base).value
+			if hit, target := namesProtected(value, prefixes); hit {
+				return true, target
+			}
 		}
 	}
 
@@ -1406,7 +1420,7 @@ func shellTokensTouchProtected(toks []shellToken, prefixes []string, depth int, 
 		// A shell started with -c runs an argument as a command, so that
 		// argument is checked like the command itself.
 		if base == "" && shellInterpreters[prog] {
-			for _, arg := range shellDashCArgs(words[1:]) {
+			for _, arg := range append(shellDashCArgs(words[1:]), shellOptionCommands(words[1:])...) {
 				if depth >= maxShellSubstDepth {
 					return true, shortRaw(arg.raw)
 				}
@@ -1775,6 +1789,50 @@ func shellDashCArgs(words []shellToken) []shellToken {
 		out = append(out, words[i])
 	}
 	return out
+}
+
+// shellCommandOptions name the shell options whose argument is a command the
+// shell runs: fish -C / --init-command and --command.
+var shellCommandOptions = map[string]bool{"-C": true, "--init-command": true, "--command": true}
+
+// shellOptionCommands returns the words a shell runs as a command because an
+// option carries them: the value of any long option written --NAME=VALUE
+// (fish --init-command='rm f'), and the word after an option in
+// shellCommandOptions when that word is not itself an option. bash -C takes no
+// argument; reading its next word as a command can add a deny and cannot
+// remove one.
+func shellOptionCommands(words []shellToken) []shellToken {
+	var out []shellToken
+	for i := 0; i < len(words); i++ {
+		v := words[i].value
+		if v == "--" {
+			break
+		}
+		if strings.HasPrefix(v, "--") {
+			if eq := strings.IndexByte(v, '='); eq > 2 {
+				val := v[eq+1:]
+				out = append(out, shellToken{kind: tokWord, value: val, raw: val, marked: markedAfterEq(words[i]), unresolved: words[i].unresolved})
+				continue
+			}
+		}
+		if shellCommandOptions[v] && i+1 < len(words) {
+			n := words[i+1].value
+			if !(len(n) > 1 && (n[0] == '-' || n[0] == '+')) {
+				out = append(out, words[i+1])
+				i++
+			}
+		}
+	}
+	return out
+}
+
+// markedAfterEq returns the marked text of a --NAME=VALUE word after the
+// first "=", which keeps every expansion mark of the value.
+func markedAfterEq(w shellToken) string {
+	if i := strings.IndexByte(w.marked, '='); i >= 0 {
+		return w.marked[i+1:]
+	}
+	return w.marked
 }
 
 // shellCommandArgTouchesProtected checks one word that a shell runs as a

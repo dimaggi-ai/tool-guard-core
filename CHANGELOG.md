@@ -10,6 +10,26 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Review corrections
 
+- The pre-release review of 2026-11-25 found calls that wrote to a path named
+  with `-protect-path` and were allowed. `tg hook` now denies them:
+  - a redirect target that holds a brace list, such as `> {P,}` or
+    `> P.{json,}`;
+  - a path under `/proc/self/cwd` or `/dev/fd` written with an empty, `.` or
+    `..` part, such as `/proc/self//cwd`, in a shell command and in a
+    file-write tool;
+  - an `apply_patch` target with `..` after a symbolic link, and patch text
+    under an alias key such as `cmd`;
+  - a command passed in a shell option, such as `fish --init-command=...`, or
+    after `bash -c` and another option;
+  - a long brace list after `=` or after a short option glued to the path,
+    such as `-cfP.{json,{1..70}}`, and one with `..` after a symbolic link.
+- `-dispatch` now reads the shell tool of every dialect, such as
+  Antigravity's `run_command`, not only `Bash`. A command it does not classify
+  is no longer allowed.
+- With `-escalate-as deny`, the audit record of a converted escalation now
+  says `denied` and gives the conversion as the reason.
+- [`policies/README.md`](policies/README.md) lists all ten shipped policies.
+
 - The example shell policy now matches recursive and force flags as separate
   words of the `rm` command. Plain `rm` of a path with `-r` or `-f` letters
   inside a word is no longer escalated or denied for those letters. The match

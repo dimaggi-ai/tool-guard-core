@@ -230,6 +230,40 @@ var otherTildeRe = regexp.MustCompile(`^~([+-][0-9]*|[A-Za-z0-9._][A-Za-z0-9._-]
 // (exec 3<DIR), before it uses the path, so the directory is not known here.
 var procCwdRe = regexp.MustCompile(`/proc/[^/]+/(task/[^/]+/)?((cwd|root)(/|$)|fd/[^/]+/[^/])|/dev/fd/[^/]+/[^/]`)
 
+// collapseSlashDots removes the empty and "." components of a path, which
+// the kernel skips: /proc/self//cwd and /proc/self/./cwd are /proc/self/cwd.
+// It keeps "..", which must not be read lexically after a symbolic link.
+func collapseSlashDots(p string) string {
+	if !strings.Contains(p, "//") && !strings.Contains(p, "/.") {
+		return p
+	}
+	parts := strings.Split(p, "/")
+	kept := parts[:0:0]
+	for i, c := range parts {
+		if (c == "" || c == ".") && i > 0 {
+			continue
+		}
+		kept = append(kept, c)
+	}
+	out := strings.Join(kept, "/")
+	if out == "" && strings.HasPrefix(p, "/") {
+		out = "/"
+	}
+	return out
+}
+
+// procPathUnknown reports whether a path goes through a directory the check
+// does not know: procCwdRe matches it once empty and "." components are
+// removed, or it holds ".." under /proc or /dev/fd (/dev/fd is a link into
+// /proc/self, so /dev/fd/../cwd is /proc/self/cwd).
+func procPathUnknown(p string) bool {
+	c := collapseSlashDots(p)
+	if procCwdRe.MatchString(c) {
+		return true
+	}
+	return (strings.Contains(c, "/proc/") || strings.Contains(c, "/dev/fd")) && strings.Contains(c, "/..")
+}
+
 // holdsUnknownDir reports whether the word, one of its brace expansions, or
 // a file name pattern in it read against the file system, is matched by
 // procCwdRe.
@@ -241,7 +275,7 @@ func holdsUnknownDir(word string) bool {
 		}
 	}
 	for _, v := range variants {
-		if procCwdRe.MatchString(v) {
+		if procPathUnknown(v) {
 			return true
 		}
 		if !strings.ContainsAny(v, "*?[") {
@@ -252,7 +286,7 @@ func holdsUnknownDir(word string) bool {
 			return true
 		}
 		for _, e := range expansions {
-			if procCwdRe.MatchString(e) {
+			if procPathUnknown(e) {
 				return true
 			}
 		}
@@ -792,6 +826,14 @@ func segmentOnlyReads(seg []shellToken, depth int) bool {
 		if len(words) < 3 || words[1].unresolved || words[1].value != "-c" {
 			return false
 		}
+		// An option after -c is read by fish (fish -c CMD --init-command=…)
+		// and changes how bash runs (bash -c -i CMD), so the call is not
+		// read through.
+		for _, w := range words[2:] {
+			if w.unresolved || (len(w.value) > 1 && (w.value[0] == '-' || w.value[0] == '+')) {
+				return false
+			}
+		}
 		args := shellDashCArgs(words[1:])
 		if len(args) == 0 {
 			return false
@@ -832,25 +874,72 @@ func unreadWord(cmd string, toks []shellToken, bases, prefixes []string) string 
 		}
 		open := strings.IndexByte(word, '{')
 		head, rest := word[:open], word[open:]
-		if eq := strings.LastIndexByte(head, '='); eq >= 0 && strings.HasPrefix(head, "-") {
-			head = head[eq+1:] // the value of an option: --file=PATH{...}
+		// The path can start after an "=" (--file=PATH{...}, out=PATH{...})
+		// and after a short option glued to it (-cfPATH{...}), so each of
+		// these heads is compared.
+		heads := []string{head}
+		if eq := strings.LastIndexByte(head, '='); eq >= 0 {
+			heads = append(heads, head[eq+1:])
+		}
+		if strings.HasPrefix(head, "-") {
+			if j := strings.IndexAny(head, "/~"); j > 0 {
+				heads = append(heads, head[j:])
+			}
 		}
 		tails, ok := expandLongBraces(rest, maxUnreadBraceWords)
 		if !ok {
 			return word
 		}
-		for _, start := range braceHeadForms(head, bases) {
-			for _, tail := range tails {
-				parts := pathParts(start + tail)
-				for _, prefix := range prefixes {
-					if partsCanMatch(parts, pathParts(prefix)) {
+		for _, h := range heads {
+			for _, start := range braceHeadForms(h, bases) {
+				for _, tail := range tails {
+					// pathParts removes ".." lexically, and the kernel
+					// follows a link first (/var/run/../etc), so a ".."
+					// part is resolved with the links on the disk. A ".."
+					// after a part the braces make is not known: it counts
+					// as a match.
+					p, known := physicalDotDot(start + tail)
+					if !known {
 						return word
+					}
+					parts := pathParts(p)
+					for _, prefix := range prefixes {
+						if partsCanMatch(parts, pathParts(prefix)) {
+							return word
+						}
 					}
 				}
 			}
 		}
 	}
 	return ""
+}
+
+// physicalDotDot resolves the ".." parts of p with the links on the disk.
+// known is false when a ".." part comes after a part that holds a sequence
+// mark, or when the path cannot be resolved.
+func physicalDotDot(p string) (string, bool) {
+	parts := strings.Split(p, "/")
+	marked, dotDot := false, false
+	for _, part := range parts {
+		if part == ".." {
+			if marked {
+				return "", false
+			}
+			dotDot = true
+		}
+		if strings.ContainsAny(part, numberSeqMark+otherSeqMark) {
+			marked = true
+		}
+	}
+	if !dotDot {
+		return p, true
+	}
+	r := physicalPath(p)
+	if r == "" {
+		return "", false
+	}
+	return r, true
 }
 
 // holdsBraceList reports whether one of the words still holds a brace list

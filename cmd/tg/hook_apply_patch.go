@@ -3,8 +3,9 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"path"
+	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 )
@@ -22,16 +23,38 @@ var applyPatchMarkers = []string{
 	"*** Move to:",
 }
 
-// applyPatchText returns the patch text of an apply_patch call. Codex CLI
-// 0.166.0 sends it in the parameter command. input and patch are read too.
-// A list of strings is joined, one string per line.
-func applyPatchText(params map[string]json.RawMessage) string {
-	var parts []string
-	for _, k := range []string{"command", "input", "patch"} {
-		raw, ok := params[k]
-		if !ok {
-			continue
+// applyPatchTextKey reports whether a parameter can carry the patch text:
+// command and its aliases (cmd, CommandLine, ...), input and patch, in any
+// letter case and with _ - . or space between the words. A harness may act on
+// any of them, so all are read.
+func applyPatchTextKey(k string) bool {
+	var b strings.Builder
+	for _, r := range k {
+		switch r {
+		case '_', '-', ' ', '.':
+		default:
+			b.WriteRune(unicode.ToLower(r))
 		}
+	}
+	n := b.String()
+	return n == "input" || n == "patch" || commandAliasNames[n]
+}
+
+// applyPatchText returns the patch text of an apply_patch call. Codex CLI
+// 0.166.0 sends it in the parameter command. Every key applyPatchTextKey
+// accepts is read, in sorted order. A list of strings is joined, one string
+// per line.
+func applyPatchText(params map[string]json.RawMessage) string {
+	var keys []string
+	for k := range params {
+		if applyPatchTextKey(k) {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	var parts []string
+	for _, k := range keys {
+		raw := params[k]
 		var s string
 		if json.Unmarshal(raw, &s) == nil {
 			parts = append(parts, s)
@@ -106,13 +129,15 @@ func applyPatchEnvelopes(base *domain.ActionEnvelope, cwd string) (envs []*domai
 			return nil, "apply_patch names a file with an empty path", true
 		}
 		if !strings.HasPrefix(target, "/") && strings.HasPrefix(cwd, "/") {
-			target = path.Join(cwd, target)
+			// Not path.Join: it removes "link/.." lexically, and the kernel
+			// follows the link first. The check resolves links itself.
+			target = strings.TrimRight(cwd, "/") + "/" + target
 		}
 		mm := make(map[string]json.RawMessage, len(params)+2)
 		for k, v := range params {
 			// The patch text is not a shell command. On the key command
 			// the engine would read it as one.
-			if k != "command" && k != "input" {
+			if !applyPatchTextKey(k) {
 				mm[k] = v
 			}
 		}

@@ -267,7 +267,7 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	// A tool input that is not an object, or a command that is not a
 	// string (or a string array for apply_patch), cannot be evaluated. Before,
 	// such a call got an empty parameter object and was allowed.
-	if why := hookInputMalformed(in); why != "" && !(dispatching && tool == "bash" && dispatchCommandMalformed(in)) {
+	if why := hookInputMalformed(in); why != "" && !(dispatching && dispatchShellTool(tool) && dispatchCommandMalformed(in)) {
 		if d, reason := failDecide(tool); d == "deny" {
 			emitAudited(d, reason+": "+why, nil)
 			return 0
@@ -305,7 +305,7 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	}
 
 	dec, reason, result, auditPolicyHash := evalHook(*policyDir, *policyFile, envs, truncatedVariants, mode, failDecide, *unknownToolsDeny)
-	if dispatching && tool == "bash" && dec == "allow" {
+	if dispatching && dispatchShellTool(tool) && dec == "allow" {
 		dec, reason = dispatchBashEnvelopes(envs, truncatedVariants)
 		if dec == hookNoDecision && dialect != dialectClaude {
 			dec, reason = "ask", "Tool Guard dispatch: this dialect requires an explicit decision for an unrelated command"
@@ -322,9 +322,32 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	if *escalateAs != "ask" && *escalateAs != "deny" {
 		fmt.Fprintf(os.Stderr, "tg hook: -escalate-as %q is not ask or deny; treating it as deny\n", *escalateAs)
 	}
+	before := dec
 	dec, reason = applyEscalateAs(*escalateAs, dec, reason)
+	if before == "ask" && dec == "deny" && result != nil {
+		// The harness got a deny, so the audit record says the call was
+		// denied. Decision keeps the engine's escalation.
+		r := *result
+		r.ActionTaken = domain.ActionDenied
+		r.DecisionReason = reason
+		result = &r
+	}
 	emitAudited(dec, reason, result)
 	return 0
+}
+
+// dispatchShellTool reports whether -dispatch reads the tool as a shell
+// command: the shell tool names the protected-path check reads (Claude Code
+// Bash, Antigravity run_command, Codex exec_command, ...). Before, only
+// "bash" was dispatched, so an Antigravity run_command call kept the plain
+// allow.
+func dispatchShellTool(tool string) bool {
+	switch tool {
+	case "bash", "shell", "sh", "run_command", "run_shell_command", "run", "exec", "command", "terminal",
+		"exec_command", "shell_command", "local_shell", "unified_exec", "container.exec", "powershell", "pwsh":
+		return true
+	}
+	return false
 }
 
 // hookNoDecision is the decision value for a proven unrelated command. The
