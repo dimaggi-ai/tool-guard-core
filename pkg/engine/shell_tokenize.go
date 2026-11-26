@@ -305,13 +305,15 @@ func tokenizeShell(cmd string) []shellToken {
 
 		case '\\':
 			// Backslash escape outside quotes: next character is literal;
-			// backslash-newline is a line continuation (both dropped).
+			// backslash-newline is a line continuation (both dropped), and
+			// it does not start a word: bash removes it before it splits
+			// the text into words.
+			if i+1 < n && cmd[i+1] == '\n' {
+				i += 2
+				continue
+			}
 			begin(i)
 			if i+1 < n {
-				if cmd[i+1] == '\n' {
-					i += 2
-					continue
-				}
 				wb.WriteByte(cmd[i+1])
 				i += 2
 				continue
@@ -357,7 +359,13 @@ func matchShellOperator(s string, i int) (kind shellTokenKind, text string, opLe
 		}
 		if next(1) == '>' {
 			if next(2) == '>' {
+				if next(3) == '!' {
+					return tokRedirWrite, "&>>!", 4 // zsh
+				}
 				return tokRedirWrite, "&>>", 3
+			}
+			if next(2) == '!' {
+				return tokRedirWrite, "&>!", 3 // zsh
 			}
 			return tokRedirWrite, "&>", 2
 		}
@@ -377,11 +385,18 @@ func matchShellOperator(s string, i int) (kind shellTokenKind, text string, opLe
 	case '>':
 		switch next(1) {
 		case '>':
+			if next(2) == '!' {
+				return tokRedirWrite, ">>!", 3 // zsh
+			}
 			return tokRedirWrite, ">>", 2
 		case '|':
 			return tokRedirWrite, ">|", 2
 		case '&':
 			return tokRedirDup, ">&", 2
+		case '!', '?':
+			// zsh >! writes over a file like >|; fish >? writes a file
+			// that does not exist yet. Read both as a write.
+			return tokRedirWrite, s[i : i+2], 2
 		}
 		return tokRedirWrite, ">", 1
 	case '<':

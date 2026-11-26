@@ -153,10 +153,17 @@ func parsePOSIXShellCall(args []shellToken) shellCall {
 			continue
 		}
 		names := 0
-		for _, ch := range v[1:] {
+		for k := 1; k < len(v); k++ {
+			ch := v[k]
 			switch {
 			case ch == 'c':
 				c.dashC = true
+			case (ch == 'o' || ch == 'O') && k+1 < len(v):
+				// zsh reads -oerrexit as the option name glued to -o, and
+				// bash reads -oe as -o with the name in the next word. The
+				// words after it cannot be read for every shell, so each
+				// of them can be the text.
+				return unknownShellRest(c, args, i-1)
 			case ch == 'o' || ch == 'O':
 				names++
 				c.plain = false
@@ -165,7 +172,7 @@ func parsePOSIXShellCall(args []shellToken) shellCall {
 				if ch == 's' {
 					c.stdin = true
 				}
-			case strings.ContainsRune(plainShellLetters, ch):
+			case strings.IndexByte(plainShellLetters, ch) >= 0:
 			default:
 				c.plain = false
 			}

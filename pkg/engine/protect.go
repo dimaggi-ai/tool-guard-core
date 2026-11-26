@@ -650,6 +650,11 @@ func shellTouchesProtectedRec(cmd string, prefixes []string, depth int, inherite
 	if hit, reason := shellTouchesProtectedPOSIX(cmd, prefixes, depth, inherited, work); hit {
 		return true, reason
 	}
+	if depth == 0 && inherited == nil {
+		if hit, reason := netCheck(cmd, prefixes, work); hit {
+			return true, reason
+		}
+	}
 	// Native Windows shells retain backslashes as path separators. Check
 	// that reading as well; replacing the POSIX reading would lose escaped
 	// command names and paths used by POSIX shells running on Windows.

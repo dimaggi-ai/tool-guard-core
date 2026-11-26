@@ -71,13 +71,12 @@ const maxPatchValueDepth = 16
 
 // patchStrings returns the strings in a JSON value that hold a file marker.
 // A list of strings that holds one is returned whole, one string per line.
-// A value nested deeper than maxPatchValueDepth is not read: deep is set
-// when its JSON text holds a marker.
+// A value nested deeper than maxPatchValueDepth is not read and sets deep,
+// whatever it holds: its decoded text can hold a marker that the raw JSON
+// text spells with escapes.
 func patchStrings(raw json.RawMessage, depth int, deep *bool) []string {
 	if depth > maxPatchValueDepth {
-		if holdsPatchMarker(string(raw)) {
-			*deep = true
-		}
+		*deep = true
 		return nil
 	}
 	var s string
@@ -293,11 +292,11 @@ func applyPatchEnvelopes(base *domain.ActionEnvelope, cwd string) (envs []*domai
 		dirs := []string{""}
 		if !absolute {
 			if strings.HasPrefix(cwd, "/") {
-				dirs = append(dirs, strings.TrimRight(cwd, "/"))
+				dirs = append(dirs, trimDirSlash(cwd))
 			}
 			for _, wd := range workDirs {
 				if !strings.HasPrefix(wd, "/") && strings.HasPrefix(cwd, "/") {
-					dirs = append(dirs, strings.TrimRight(cwd, "/")+"/"+wd)
+					dirs = append(dirs, strings.TrimSuffix(trimDirSlash(cwd), "/")+"/"+wd)
 				}
 				dirs = append(dirs, wd)
 			}
@@ -326,6 +325,15 @@ func applyPatchEnvelopes(base *domain.ActionEnvelope, cwd string) (envs []*domai
 		}
 	}
 	return envs, "", true
+}
+
+// trimDirSlash removes the slashes at the end of a directory and keeps the
+// root "/" as "/": "" stands for "no directory".
+func trimDirSlash(d string) string {
+	if t := strings.TrimRight(d, "/"); t != "" {
+		return t
+	}
+	return "/"
 }
 
 // sortedKeys returns the keys of params in order, so the envelopes built from
