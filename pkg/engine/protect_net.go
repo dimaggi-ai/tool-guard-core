@@ -33,7 +33,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -402,6 +401,19 @@ func (p *netPattern) procMagic(b *netBudget, set []int32, top bool) bool {
 	return false
 }
 
+// roamsTree reports whether the pattern, read from a directory, names
+// both its parent (..) and a child of any name of any length. A directory
+// change to such an operand can reach every directory.
+func (p *netPattern) roamsTree(b *netBudget) bool {
+	init := p.closureOf(p.starts)
+	for _, name := range []string{"..", "x", "x9-_qzA.x9-_qzA.x9-_qzA"} {
+		if !p.accepts(p.steps(b, init, name)) {
+			return false
+		}
+	}
+	return true
+}
+
 // hasName reports whether the pattern holds a literal character other than
 // . and /.
 func (p *netPattern) hasName() bool {
@@ -690,6 +702,54 @@ func braceSeqItems(body []bitem) ([]string, bool) {
 	return braceSequence2(sb.String())
 }
 
+// versionDependentSeq reports whether the characters hold a sequence that
+// versions of bash expand in different ways: one with an increment, or
+// with a zero-padded number, which bash 3 keeps as text or reads without
+// the padding, or with a number that does not fit in 32 bits, which some
+// versions read with overflow. Such a word is read with the brace atoms,
+// which hold every expansion.
+func versionDependentSeq(ms []mchar) bool {
+	isBrace := func(m mchar) bool {
+		return m.k == mMeta && (m.c == '{' || m.c == '}' || m.c == ',')
+	}
+	for i := 0; i < len(ms); i++ {
+		if !(ms[i].k == mMeta && ms[i].c == '{') {
+			continue
+		}
+		j := i + 1
+		for j < len(ms) && !isBrace(ms[j]) {
+			j++
+		}
+		if j >= len(ms) || ms[j].c != '}' || j-i-1 > 64 {
+			continue
+		}
+		body := make([]byte, 0, j-i-1)
+		for _, m := range ms[i+1 : j] {
+			body = append(body, m.c)
+		}
+		if m := braceCharSeqRe.FindSubmatch(body); m != nil && len(m[4]) > 0 {
+			return true
+		}
+		m := braceIntSeqRe.FindSubmatch(body)
+		if m == nil {
+			continue
+		}
+		if len(m[4]) > 0 {
+			return true
+		}
+		for _, e := range [][]byte{m[1], m[2]} {
+			t := strings.TrimLeft(string(e), "+-")
+			if len(t) > 1 && t[0] == '0' {
+				return true
+			}
+			if v, err := strconv.ParseInt(string(e), 10, 64); err != nil || v > math.MaxInt32 || v < math.MinInt32 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // braceSequence2 returns the words of a sequence as bash makes them. A
 // sequence of netMaxList words or more returns an empty, non-nil list: the
 // readers read it as any digits. A number or an increment bash does not
@@ -937,7 +997,7 @@ func buildPatterns(b *netBudget, ms []mchar, exactOK, fold, flags bool) ([]*netP
 	if !anyBrace {
 		return []*netPattern{newNetPattern(atomsOf(nil, ms, false, flags), fold)}, 0
 	}
-	if exactOK && ok {
+	if exactOK && ok && !versionDependentSeq(ms) {
 		alts, _ := parseBraces(b, ms, 0, false)
 		items := alts[0]
 		lists, all := braceCounts(items, netMaxList)
@@ -1698,12 +1758,13 @@ func levelOneChars(raw, home string) (ms []mchar, magic bool) {
 		ms[0].st = true
 		ms[len(ms)-1].en = true
 	}
-	text := make([]byte, len(ms))
+	buf := make([]byte, len(ms))
 	for k := range ms {
-		text[k] = ms[k].c
+		buf[k] = ms[k].c
 	}
+	text := string(buf)
 	for k := range ms {
-		if ms[k].k == mLit && isNetDelim(ms[k].c) && !(ms[k].c == ':' && isURLColon(string(text), k)) {
+		if ms[k].k == mLit && isNetDelim(ms[k].c) && !(ms[k].c == ':' && isURLColon(text, k)) {
 			if k > 0 {
 				ms[k-1].en = true
 			}
@@ -1793,13 +1854,16 @@ var (
 var netRemoteTypes = map[string]bool{
 	"nfs": true, "nfs4": true, "cifs": true, "smb3": true, "smbfs": true,
 	"9p": true, "ceph": true, "afs": true, "glusterfs": true, "lustre": true,
+	// macOS
+	"afpfs": true, "webdav": true, "macfuse": true, "osxfuse": true,
+	"fusefs": true, "fuse-t": true,
 }
 
 func netRemoteType(t string) bool {
 	if t == "fusectl" {
 		return false
 	}
-	return t == "fuse" || t == "fuseblk" || strings.HasPrefix(t, "fuse.") || netRemoteTypes[t]
+	return t == "fuse" || t == "fuseblk" || strings.HasPrefix(t, "fuse.") || strings.HasPrefix(t, "macfuse") || strings.HasPrefix(t, "osxfuse") || netRemoteTypes[t]
 }
 
 // unescapeMount undoes the octal escapes of a field of mountinfo.
@@ -1822,29 +1886,41 @@ func unescapeMount(s string) string {
 }
 
 func loadRemoteMounts() {
-	data, err := os.ReadFile("/proc/self/mountinfo")
-	if err != nil {
-		return
+	for _, m := range remoteMountPoints() {
+		netRemoteMounts = append(netRemoteMounts, strings.TrimRight(netInternal(filepath.ToSlash(m)), "/"))
 	}
-	for _, line := range strings.Split(string(data), "\n") {
+}
+
+// mountinfoRemote returns the mount points of the remote file systems in
+// the text of /proc/self/mountinfo.
+func mountinfoRemote(data string) []string {
+	var out []string
+	for _, line := range strings.Split(data, "\n") {
 		fields := strings.Fields(line)
 		for i := 6; i+1 < len(fields); i++ {
 			if fields[i] != "-" {
 				continue
 			}
 			if netRemoteType(fields[i+1]) {
-				netRemoteMounts = append(netRemoteMounts, strings.TrimRight(unescapeMount(fields[4]), "/"))
+				out = append(out, unescapeMount(fields[4]))
 			}
 			break
 		}
 	}
+	return out
 }
 
 // remote reports whether the path p is at or under a mount point of a
 // FUSE or network file system.
 func remote(p string) bool {
 	netRemoteOnce.Do(loadRemoteMounts)
+	if netWindows && (p == "/UNC" || strings.HasPrefix(p, "/UNC/")) {
+		return true
+	}
 	for _, m := range netRemoteMounts {
+		if netWindows {
+			m = strings.TrimRight(netInternal(m), "/")
+		}
 		if m == "" || p == m || strings.HasPrefix(p, m+"/") {
 			return true
 		}
@@ -1858,13 +1934,14 @@ func (f *netFS) lstat(p string) netEntry {
 		// unknown.
 		return netEntry{kind: kDir, read: true}
 	}
+	osp, onOS := netOSPath(p)
 	if e, ok := f.ent[p]; ok {
 		if e.kind == kLink && !e.read {
 			e.read = true
 			if f.b.lookup() {
 				walkLookups.Add(1)
-				e.target, _ = os.Readlink(p)
-				e.target = filepath.ToSlash(e.target)
+				e.target, _ = os.Readlink(osp)
+				e.target = netInternal(filepath.ToSlash(e.target))
 			}
 			f.ent[p] = e
 		}
@@ -1872,14 +1949,32 @@ func (f *netFS) lstat(p string) netEntry {
 	}
 	var e netEntry
 	e.read = true
+	if !onOS {
+		// The root of the drives is a directory; another name in it is
+		// not there.
+		if p == "/" {
+			e.kind = kDir
+		}
+		f.ent[p] = e
+		return e
+	}
 	if f.b.lookup() {
 		walkLookups.Add(1)
-		if fi, err := os.Lstat(p); err == nil {
+		if fi, err := os.Lstat(osp); err == nil {
+			target := ""
+			if netWindows && fi.Mode()&os.ModeIrregular != 0 {
+				// A junction or another reparse point that names a
+				// place: read it as a link.
+				target, _ = os.Readlink(osp)
+			}
 			switch {
 			case fi.Mode()&os.ModeSymlink != 0:
 				e.kind = kLink
-				e.target, _ = os.Readlink(p)
-				e.target = filepath.ToSlash(e.target)
+				e.target, _ = os.Readlink(osp)
+				e.target = netInternal(filepath.ToSlash(e.target))
+			case target != "":
+				e.kind = kLink
+				e.target = netInternal(filepath.ToSlash(target))
 			case fi.IsDir():
 				e.kind = kDir
 			default:
@@ -1901,7 +1996,22 @@ func (f *netFS) readDir(p string) *netDir {
 		return d
 	}
 	walkLookups.Add(1)
-	fh, err := os.Open(p)
+	osp, onOS := netOSPath(p)
+	if !onOS {
+		if p == "/" {
+			// The root of the drives lists the drives.
+			drives := netDriveNames()
+			d.ok = true
+			d.set = make(map[string]bool, len(drives))
+			for _, n := range drives {
+				d.names = append(d.names, n)
+				d.set[n] = true
+				f.ent[joinDir(p, n)] = netEntry{kind: kDir, read: true}
+			}
+		}
+		return d
+	}
+	fh, err := os.Open(osp)
 	if err != nil {
 		return d
 	}
@@ -1982,7 +2092,27 @@ func (f *netFS) enter(dir, name string, hops int) (string, uint8, bool) {
 	if _, ok := f.ent[p]; !ok {
 		// One listing of the directory answers for all its names.
 		if d := f.readDir(dir); d.ok && !d.set[name] {
-			return p, kMissing, false
+			if !netWindows {
+				return p, kMissing, false
+			}
+			// Windows also opens a name in another letter case and
+			// the short name of a long one: the place is the name the
+			// directory lists.
+			real := ""
+			if names := d.folded(name); len(names) > 0 {
+				real = names[0]
+			} else if strings.Contains(name, "~") {
+				if osp, ok := netOSPath(p); ok && f.b.lookup() {
+					walkLookups.Add(1)
+					if long := netLongName(osp); long != "" && d.set[long] {
+						real = long
+					}
+				}
+			}
+			if real == "" {
+				return p, kMissing, false
+			}
+			p = joinDir(dir, real)
 		}
 	}
 	e := f.lstat(p)
@@ -2033,7 +2163,7 @@ func (f *netFS) resolve(dir, text string, hops int) (string, uint8, bool) {
 
 // physical returns the physical form of an absolute path.
 func (f *netFS) physical(p string) string {
-	p = filepath.ToSlash(p)
+	p = netInternal(filepath.ToSlash(p))
 	if !strings.HasPrefix(p, "/") {
 		return p
 	}
@@ -2070,7 +2200,7 @@ func newNetCtx(cmd string, prefixes []string) *netCtx {
 	c := &netCtx{b: b, fs: &netFS{b: b, ent: map[string]netEntry{}, dirs: map[string]*netDir{}}}
 	seen := map[string]bool{}
 	for _, raw := range expandPrefixes(prefixes) {
-		raw = strings.TrimRight(filepath.ToSlash(raw), "/")
+		raw = strings.TrimRight(netInternal(filepath.ToSlash(raw)), "/")
 		if raw == "" {
 			raw = "/"
 		}
@@ -2085,7 +2215,9 @@ func newNetCtx(cmd string, prefixes []string) *netCtx {
 			t := netTarget{path: p, base: filepath.Base(p)}
 			if remote(p) {
 				// Not looked into; the path itself still counts.
-			} else if fi, err := os.Stat(p); err == nil && fi.IsDir() {
+			} else if osp, ok := netOSPath(p); !ok {
+				// Not a file of the system.
+			} else if fi, err := os.Stat(osp); err == nil && fi.IsDir() {
 				t.dir = true
 				if d := c.fs.readDir(p); d.ok {
 					t.names = d.names
@@ -2098,7 +2230,7 @@ func newNetCtx(cmd string, prefixes []string) *netCtx {
 		c.fold = true
 	}
 	if home, err := shellHomeDir(); err == nil && home != "" {
-		c.homes = append(c.homes, strings.TrimRight(home, "/"))
+		c.homes = append(c.homes, strings.TrimRight(netInternal(home), "/"))
 	}
 	return c
 }
@@ -2144,7 +2276,9 @@ type netWalkState struct {
 // itself is in one. A run of text is a mention only when it spells a path
 // to one.
 func (c *netCtx) walk(p *netPattern, base string, collect, strict bool) (names, magic bool, dirs []string) {
-	if lit, ok := p.literal(); ok {
+	// On Windows a literal with a colon can hold a drive, which the
+	// automaton reads (netDriveStarts).
+	if lit, ok := p.literal(); ok && !(netWindows && strings.Contains(lit, ":")) {
 		return c.walkLiteral(lit, base, collect, strict)
 	}
 	init := p.closureOf(p.starts)
@@ -2154,6 +2288,12 @@ func (c *netCtx) walk(p *netPattern, base string, collect, strict bool) (names, 
 	}
 	if abs := p.step(init, '/', false); len(abs) > 0 {
 		stack = append(stack, netWalkState{dir: "/", set: abs})
+	}
+	if netWindows {
+		dirs, sets := p.netDriveStarts(init)
+		for i := range dirs {
+			stack = append(stack, netWalkState{dir: dirs[i], set: sets[i]})
+		}
 	}
 	seen := map[string]bool{}
 	child := func(dir, name string, set []int32) bool {
@@ -2207,6 +2347,15 @@ func (c *netCtx) walk(p *netPattern, base string, collect, strict bool) (names, 
 			magic = true
 			return
 		}
+		if st.dir == "/" {
+			// A directory of a process under /proc, also on a system with
+			// no /proc to list (a process can still open such a path
+			// through a link or a mount of its own).
+			if s := p.step(p.steps(c.b, st.set, "proc"), '/', false); len(s) > 0 && p.procMagic(c.b, s, true) {
+				magic = true
+				return
+			}
+		}
 		if !collect {
 			for _, t := range c.targets {
 				if (strict || !st.first) && c.atOrUnder(st.dir, t.path) {
@@ -2221,7 +2370,9 @@ func (c *netCtx) walk(p *netPattern, base string, collect, strict bool) (names, 
 		} else if p.accepts(st.set) && st.dir != base {
 			dirs = append(dirs, st.dir)
 		}
-		if s := p.step(st.set, '/', false); len(s) > 0 {
+		// A slash at the start of a reading names the root, which the
+		// state at "/" reads; elsewhere it stays in the directory.
+		if s := p.step(st.set, '/', false); len(s) > 0 && !st.first {
 			stack = append(stack, netWalkState{dir: st.dir, set: s})
 		}
 		if name, set, ok := p.fixedName(c.b, st.set); ok {
@@ -2525,13 +2676,14 @@ func (c *netCtx) runReadings(run string) []netReading {
 			if strings.HasPrefix(run, "-") {
 				// A path can be glued to an option at any offset, but
 				// not inside the host part of a network address.
-				text := make([]byte, len(ms))
+				buf := make([]byte, len(ms))
 				for k := range ms {
-					text[k] = ms[k].c
+					buf[k] = ms[k].c
 				}
+				chars := string(buf)
 				inURL := false
 				for k := range ms {
-					if !inURL && ms[k].c == ':' && isURLColon(string(text), k) {
+					if !inURL && ms[k].c == ':' && isURLColon(chars, k) {
 						inURL = true
 					} else if inURL && ms[k].c != ':' && isNetDelim(ms[k].c) {
 						inURL = false
@@ -2941,7 +3093,7 @@ func homeAssignments(toks []shellToken) (vals []string, dyn bool) {
 			dyn = true
 			continue
 		}
-		if v := strings.TrimRight(t.value[len("HOME="):], "/"); strings.HasPrefix(v, "/") {
+		if v := strings.TrimRight(netInternal(t.value[len("HOME="):]), "/"); strings.HasPrefix(v, "/") {
 			vals = append(vals, v)
 		}
 	}
@@ -3078,9 +3230,19 @@ func netShellTexts(toks []shellToken) (texts []string, unknownProg bool) {
 // netCheck is the check of one top-level command text. work are the
 // directories the tool call says it runs in.
 func netCheck(cmd string, prefixes, work []string) (bool, string) {
-	if runtime.GOOS == "windows" {
-		return false, ""
+	// Native Windows shells keep backslashes as path separators: the text
+	// is also read with them as slashes (shellTouchesProtectedRec).
+	if netWindows && strings.Contains(cmd, `\`) {
+		for _, text := range []string{cmd, decodeWindowsShellEscapes(cmd)} {
+			if hit, why := netCheckText(strings.ReplaceAll(text, `\`, "/"), prefixes, work); hit {
+				return true, why
+			}
+		}
 	}
+	return netCheckText(cmd, prefixes, work)
+}
+
+func netCheckText(cmd string, prefixes, work []string) (bool, string) {
 	c := newNetCtx(cmd, prefixes)
 	if len(c.targets) == 0 {
 		return false, ""
@@ -3098,9 +3260,17 @@ const netOverReason = "a command too large to check"
 // whatever the programs of the command do, or "". inherited are the
 // directories the text is also read under.
 func netNames(cmd string, prefixes, inherited []string) string {
-	if runtime.GOOS == "windows" {
-		return ""
+	if netWindows && strings.Contains(cmd, `\`) {
+		for _, text := range []string{cmd, decodeWindowsShellEscapes(cmd)} {
+			if why := netNamesText(strings.ReplaceAll(text, `\`, "/"), prefixes, inherited); why != "" {
+				return why
+			}
+		}
 	}
+	return netNamesText(cmd, prefixes, inherited)
+}
+
+func netNamesText(cmd string, prefixes, inherited []string) string {
 	c := newNetCtx(cmd, prefixes)
 	if len(c.targets) == 0 {
 		return ""
@@ -3380,6 +3550,17 @@ func (c *netCtx) check(cmd string, depth int, inherited []string, inhUncertain b
 	for _, op := range ops {
 		ms, magic := readingChars(op, home)
 		opReadings = append(opReadings, c.newReading(op, ms, magic, true, false))
+	}
+	// An operand that names both .. and any name, such as *, takes the
+	// bases up and down the whole file system, which is more than the
+	// budget reads. Deny it as too large before the walk.
+	for _, r := range opReadings {
+		for _, p := range r.pats {
+			if p.roamsTree(c.b) {
+				c.b.over = true
+				return true, netOverReason
+			}
+		}
 	}
 	for i := 0; i < len(bases); i++ {
 		for _, r := range opReadings {

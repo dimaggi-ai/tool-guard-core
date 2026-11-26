@@ -166,7 +166,12 @@ func TestNetBraceSoundnessAgainstBash(t *testing.T) {
 		words[i] = randomBraceWord(rng)
 		script.WriteString("printf '%s\\n' " + words[i] + "; echo '\x01'\n")
 	}
-	out, err := exec.Command(bash, "--norc", "--noprofile", "-c", script.String()).Output()
+	// The script goes in on standard input: on Windows the runtime of Git
+	// bash parses a -c argument again and changes its backslashes and
+	// quotes, so bash would run other words.
+	run := exec.Command(bash, "--norc", "--noprofile", "-s")
+	run.Stdin = strings.NewReader(script.String())
+	out, err := run.Output()
 	if err != nil {
 		t.Fatalf("bash: %v", err)
 	}
@@ -247,7 +252,13 @@ func TestNetRemoteMountUnknown(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(mnt, "sub"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	netRemoteMounts = append(append([]string{}, saved...), mnt)
+	// A mount list holds physical paths: on macOS the temp dir is under
+	// the link /var, and the mount is at /private/var/...
+	physMnt, err := filepath.EvalSymlinks(mnt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	netRemoteMounts = append(append([]string{}, saved...), filepath.ToSlash(mnt), filepath.ToSlash(physMnt))
 	prefixes := []string{filepath.Join(h, ".claude", "settings.json")}
 	for _, c := range []struct {
 		cmd  string

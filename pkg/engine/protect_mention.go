@@ -990,55 +990,64 @@ func expandLongBraces(s string, limit int) (out []string, ok bool) {
 const maxBraceWork = 1 << 18
 
 func expandLongBracesW(s string, limit int, work *int) (out []string, ok bool) {
-	if *work += len(s) + 1; *work > maxBraceWork {
-		return nil, false
-	}
 	// match[i] is the "}" that closes the "{" at i, or -1: a "{" that no
-	// "}" closes is plain text.
-	match := make([]int, len(s))
-	var open []int
+	// "}" closes is plain text. The pairs are found once for the whole
+	// word: the body of a pair, a part of a body between its commas and
+	// the text after a pair hold the same pairs on their own, so each
+	// level of the recursion reads its range of the one table.
+	match := make([]int32, len(s))
+	var open []int32
 	for j := 0; j < len(s); j++ {
 		match[j] = -1
 		switch s[j] {
 		case '{':
-			open = append(open, j)
+			open = append(open, int32(j))
 		case '}':
 			if n := len(open); n > 0 {
-				match[open[n-1]] = j
+				match[open[n-1]] = int32(j)
 				open = open[:n-1]
 			}
 		}
 	}
-	for i := 0; i < len(s); i++ {
+	return expandLongBracesRange(s, match, 0, len(s), limit, work)
+}
+
+// expandLongBracesRange is expandLongBracesW for the text s[lo:hi].
+func expandLongBracesRange(s string, match []int32, lo, hi, limit int, work *int) (out []string, ok bool) {
+	if *work += hi - lo + 1; *work > maxBraceWork {
+		return nil, false
+	}
+	for i := lo; i < hi; i++ {
 		if s[i] != '{' {
 			continue
 		}
-		end := match[i]
-		if end < 0 {
+		end := int(match[i])
+		if end < 0 || end >= hi {
 			continue
 		}
 		body := s[i+1 : end]
-		var parts []string
-		depth, last := 0, 0
-		for j := 0; j < len(body); j++ {
-			switch body[j] {
+		type span struct{ lo, hi int }
+		var parts []span
+		depth, last := 0, i+1
+		for j := i + 1; j < end; j++ {
+			switch s[j] {
 			case '{':
 				depth++
 			case '}':
 				depth--
 			case ',':
 				if depth == 0 {
-					parts = append(parts, body[last:j])
+					parts = append(parts, span{last, j})
 					last = j + 1
 				}
 			}
 		}
-		parts = append(parts, body[last:])
+		parts = append(parts, span{last, end})
 		var mids []string
 		switch {
 		case len(parts) > 1:
 			for _, part := range parts {
-				sub, ok := expandLongBracesW(part, limit, work)
+				sub, ok := expandLongBracesRange(s, match, part.lo, part.hi, limit, work)
 				if !ok || len(mids)+len(sub) > limit {
 					return nil, false
 				}
@@ -1050,7 +1059,7 @@ func expandLongBracesW(s string, limit int, work *int) (out []string, ok bool) {
 			mids = []string{otherSeqMark}
 		default:
 			// Not a list: bash keeps the braces and expands the text in them.
-			sub, ok := expandLongBracesW(body, limit, work)
+			sub, ok := expandLongBracesRange(s, match, i+1, end, limit, work)
 			if !ok {
 				return nil, false
 			}
@@ -1058,18 +1067,18 @@ func expandLongBracesW(s string, limit int, work *int) (out []string, ok bool) {
 				mids = append(mids, "{"+w+"}")
 			}
 		}
-		tails, ok := expandLongBracesW(s[end+1:], limit, work)
+		tails, ok := expandLongBracesRange(s, match, end+1, hi, limit, work)
 		if !ok || len(mids)*len(tails) > limit {
 			return nil, false
 		}
 		for _, mid := range mids {
 			for _, tail := range tails {
-				out = append(out, s[:i]+mid+tail)
+				out = append(out, s[lo:i]+mid+tail)
 			}
 		}
 		return out, true
 	}
-	return []string{s}, true
+	return []string{s[lo:hi]}, true
 }
 
 // literalBraceAlternatives returns the texts of a redirect target that the

@@ -367,7 +367,7 @@ func physicalPathCached(p string, cache map[string]string) string {
 		// is built for the separators of the host and reads nothing in
 		// "C:/dir" on a POSIX host.
 		if v := volumeNameOf(p); v != "" && len(v) == 2 && v[1] == ':' {
-			return filepath.Clean(p)
+			return path.Clean(p)
 		}
 		if filepath.IsAbs(p) {
 			return ""
@@ -1776,64 +1776,106 @@ func expandBraceWords(words []shellToken) []shellToken {
 			out = append(out, w)
 			continue
 		}
-		if w.raw != w.value {
-			// Quoting inside the word: which braces are live is not
-			// known. bash expands only a brace that carries no quote,
-			// so a word whose every brace stands inside quoting is kept
-			// as it is (`> '{P,}'` makes the file "{P,}"). A word with
-			// a live brace next to a quoted one is not read and fails
-			// closed.
-			//
-			// A live brace is expanded with the quoting kept in mind
-			// (`''{P,{a}}` makes P and {a}). A word that holds an expansion
-			// as well, or whose list the reader cannot expand, is not read
-			// and fails closed.
-			if !holdsLiveBrace(w.raw) {
-				out = append(out, w)
-				continue
-			}
-			made, ok := expandQuotedBraces(w.raw, maxBraceWords)
-			if !ok && !strings.ContainsAny(w.raw, "$`") && netListFits(w.raw) {
-				// Only too long: the net reads every word of the list.
-				out = append(out, w)
-				continue
-			}
-			if !ok || strings.ContainsAny(w.raw, "$`") {
-				w.unresolved = true
-				out = append(out, w)
-				continue
-			}
-			for _, e := range made {
-				out = append(out, shellToken{kind: tokWord, value: e, raw: quoteBraces(e), marked: e})
-			}
-			continue
+		out = append(out, expandBraceWord(w)...)
+	}
+	return out
+}
+
+// braceWordCache holds the words that expandBraceWord made for a long word.
+// The rules read the words of one command several times (once for each
+// base and each rule), and a long word with deep lists costs the most to
+// expand, so its words are made once.
+var braceWordCache = struct {
+	sync.Mutex
+	m map[shellToken][]shellToken
+}{m: map[shellToken][]shellToken{}}
+
+const (
+	braceWordCacheMinLen = 256 // the shortest raw text a word is kept for
+	braceWordCacheMax    = 64  // words kept before the cache is emptied
+)
+
+// expandBraceWord returns the words bash makes of one word that holds a
+// brace. The caller may not change the slice.
+func expandBraceWord(w shellToken) []shellToken {
+	if len(w.raw) < braceWordCacheMinLen {
+		return expandBraceWordUncached(w)
+	}
+	braceWordCache.Lock()
+	made, ok := braceWordCache.m[w]
+	braceWordCache.Unlock()
+	if ok {
+		return made
+	}
+	made = expandBraceWordUncached(w)
+	braceWordCache.Lock()
+	if len(braceWordCache.m) >= braceWordCacheMax {
+		braceWordCache.m = map[shellToken][]shellToken{}
+	}
+	braceWordCache.m[w] = made
+	braceWordCache.Unlock()
+	return made
+}
+
+func expandBraceWordUncached(w shellToken) []shellToken {
+	var out []shellToken
+	if w.raw != w.value {
+		// Quoting inside the word: which braces are live is not
+		// known. bash expands only a brace that carries no quote,
+		// so a word whose every brace stands inside quoting is kept
+		// as it is (`> '{P,}'` makes the file "{P,}"). A word with
+		// a live brace next to a quoted one is not read and fails
+		// closed.
+		//
+		// A live brace is expanded with the quoting kept in mind
+		// (`''{P,{a}}` makes P and {a}). A word that holds an expansion
+		// as well, or whose list the reader cannot expand, is not read
+		// and fails closed.
+		if !holdsLiveBrace(w.raw) {
+			out = append(out, w)
+			return out
 		}
-		expanded, ok := expandBraces(w.value)
-		if holdsBraceList(expanded) {
-			// expandBraces does not expand a list that holds a brace group
-			// of one word (`P.{json,{a}}`, `{P,{a}}`). bash expands the
-			// inner group too, so the bounded long expander is asked once.
-			// When that too leaves a list, or makes more words than the rule
-			// reads, the word stays unresolved and a path position fails
-			// closed on it.
-			if made, longOK := expandLongBraces(w.value, maxBraceWords); longOK && !holdsBraceList(made) {
-				expanded, ok = made, true
-			}
+		made, ok := expandQuotedBraces(w.raw, maxBraceWords)
+		if !ok && !strings.ContainsAny(w.raw, "$`") && netListFits(w.raw) {
+			// Only too long: the net reads every word of the list.
+			out = append(out, w)
+			return out
 		}
-		if !ok || holdsBraceList(expanded) {
-			// A list that is only too long is read by the net, which
-			// makes every word of it (netCheck).
-			if !strings.ContainsAny(w.raw, "$`") && netListFits(w.raw) {
-				out = append(out, w)
-				continue
-			}
+		if !ok || strings.ContainsAny(w.raw, "$`") {
 			w.unresolved = true
 			out = append(out, w)
-			continue
+			return out
 		}
-		for _, e := range expanded {
-			out = append(out, shellToken{kind: tokWord, value: e, raw: e, marked: e})
+		for _, e := range made {
+			out = append(out, shellToken{kind: tokWord, value: e, raw: quoteBraces(e), marked: e})
 		}
+		return out
+	}
+	expanded, ok := expandBraces(w.value)
+	if holdsBraceList(expanded) {
+		// expandBraces does not expand a list that holds a brace group
+		// of one word (`P.{json,{a}}`, `{P,{a}}`). bash expands the
+		// inner group too, so the bounded long expander is asked once.
+		// When that too leaves a list, or makes more words than the rule
+		// reads, the word stays unresolved and a path position fails
+		// closed on it.
+		if made, longOK := expandLongBraces(w.value, maxBraceWords); longOK && !holdsBraceList(made) {
+			expanded, ok = made, true
+		}
+	}
+	if !ok || holdsBraceList(expanded) {
+		// A list that is only too long is read by the net, which
+		// makes every word of it (netCheck).
+		if !strings.ContainsAny(w.raw, "$`") && netListFits(w.raw) {
+			out = append(out, w)
+			return out
+		}
+		w.unresolved = true
+		out = append(out, w)
+		return out
+	}
+	for _, e := range expanded {
+		out = append(out, shellToken{kind: tokWord, value: e, raw: e, marked: e})
 	}
 	return out
 }
@@ -2524,20 +2566,20 @@ func redirectTargets(toks []shellToken) []redirTarget {
 // verb in one segment can't be attributed to a sibling. This replaces the old
 // FieldsFunc split, which was not quote-aware and so broke `echo "a;b"` in two.
 func splitShellSegments(toks []shellToken) [][]shellToken {
+	// Each segment is a part of toks, not a copy; its capacity ends with
+	// it, so an append to a segment cannot write into toks.
 	var segs [][]shellToken
-	var cur []shellToken
-	for _, t := range toks {
+	start := 0
+	for i, t := range toks {
 		if t.kind == tokSep {
-			if len(cur) > 0 {
-				segs = append(segs, cur)
-				cur = nil
+			if i > start {
+				segs = append(segs, toks[start:i:i])
 			}
-			continue
+			start = i + 1
 		}
-		cur = append(cur, t)
 	}
-	if len(cur) > 0 {
-		segs = append(segs, cur)
+	if len(toks) > start {
+		segs = append(segs, toks[start:len(toks):len(toks)])
 	}
 	return segs
 }
@@ -2548,7 +2590,19 @@ func splitShellSegments(toks []shellToken) [][]shellToken {
 // mis-read as an argument to the command; write targets are checked separately
 // by redirectTargets.
 func commandWords(seg []shellToken) []shellToken {
-	var out []shellToken
+	// A segment of words alone is its own list of words. The capacity
+	// ends with it, so an append cannot write into the segment.
+	plain := true
+	for _, t := range seg {
+		if t.kind != tokWord {
+			plain = false
+			break
+		}
+	}
+	if plain {
+		return seg[:len(seg):len(seg)]
+	}
+	out := make([]shellToken, 0, len(seg))
 	expectOperand := false
 	for _, t := range seg {
 		if expectOperand {
