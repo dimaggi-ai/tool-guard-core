@@ -228,7 +228,26 @@ any mix of its parts. A command that holds the word `nocaseglob` counts in the s
 
 The check of one command has a work counter: 2,000,000 steps and 10,000 file
 system lookups, for the command and the texts it runs. A command over the
-counter is denied as too large to check.
+counter is denied as too large to check. In a sequence of 4096 words or
+more, such as `d{1..5000}`, the hook reads the sequence as any number. A
+sequence that bash does not make, such as `{-9223372036854775808..0}`, is
+read as its text.
+
+The hook does not look into a FUSE or network file system, such as sshfs,
+rclone, NFS or SMB, because a lookup there can wait without end. A command
+that can write is denied when a path or pattern in it reaches such a mount,
+as in `cp a /mnt/backup/x`, because a link there can lead to the protected
+path. A read-only command such as `cat` stays allowed.
+
+After a directory change that the hook cannot resolve, such as `cd "$D"`,
+`env -C "$D"` or `sudo -D "$D"`, the hook denies a relative word whose last
+part can be the protected file name, and a relative path with `..`. It
+denies a relative redirect target after such a change only when the shell
+that opens the redirect makes the change: a `cd`, `pushd`, `popd` or
+`chdir` in the same `( )` group or in a group around it. A `CDPATH`
+assignment and a `cd` to a pattern that matches no directory count anywhere
+in the command. So `cd "$D" && make > build.log` is denied, and
+`git -C "$R" log > log.txt` and `(cd "$D" && make) > build.log` are not.
 
 The hook reads a relative path under the working directory that the harness
 sends with the call (`cwd` or `workdir`). When the harness sends none, it
@@ -292,6 +311,13 @@ program other than `ln` makes in the same command. It goes to a directory
 that the command text does not name, as in `cd $DIR`, and writes a relative
 path there. It
 changes a whole directory above the path, as in `find ~/.claude -delete`.
+It writes into a protected directory through a symbolic link to it without
+the file name, as in `rsync -a src/ dlink/`, `tar -xf a.tar -C dlink` or
+`unzip a.zip -d dlink`, where `dlink` is a link to `~/.claude`. It finds
+the file with a program that searches, as in
+`find . -name settings.json -delete`. After a directory change that
+the hook cannot resolve, it writes through a link with another name, as in
+`cd "$D"; python3 w.py alias`.
 The hook does not read a script that a shell runs from a file. Other ways can
 exist that are not in this paragraph. An agent that can run a shell can
 change a protected file in one of these ways.

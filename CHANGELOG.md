@@ -21,7 +21,8 @@ the project adheres to [Semantic Versioning](https://semver.org/).
     directory under `/dev`, such as `/dev/shm/../fd/3`, a path through a
     symbolic link, absolute or relative, into `/proc` or `/dev/fd`, and a long
     brace list under `/proc/self`. A file-write tool path under
-    `/proc/self/cwd` is read in the working directory of the hook process;
+    `/proc/self/cwd` is read in the working directory of the hook process
+    and in the cwd of the tool call;
   - an `apply_patch` target with `..` after a symbolic link, and patch text
     under an alias key such as `cmd`. The hook also reads patch text under
     other keys, such as `content` or `args`, in nested objects and in arrays.
@@ -50,7 +51,9 @@ the project adheres to [Semantic Versioning](https://semver.org/).
     process runs in another directory;
   - a write to `/dev/stdout` or `/dev/stderr` when that stream may be a
     file opened for reading, such as `cat 2< P 2>/dev/stderr` or
-    `exec 1>&0; echo x > /dev/stdout`;
+    `exec 1>&0; echo x > /dev/stdout`. The file and the stream may be
+    written with quotes, escapes, `$'...'` or `$"..."`, such as
+    `2<$'.claude/settings.json'` or `> /de'v'/stdout`;
   - a brace list in a word with an extended glob pattern, such as
     `@(settings)`;
   - a redirect written as `>|`, `>!`, `>>!`, `&>!`, `&>>!` or `>?`, and a
@@ -58,11 +61,43 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   - a name split by a backslash, quotes and a newline, which `eval` or
     `bash -c` joins into one word;
   - a name written with `$'...'` escapes, such as `$'.cl\x61ude'`, also in
-    the text of `eval`.
-- After a directory change the hook cannot resolve, a relative word whose last part can be the protected file name is denied.
+    the text of `eval` or `trap`, and a blank, tab or newline written as such
+    an escape, such as `eval $'tee\t.claude/settings.json'`;
+  - a write in the text of `eval`, `trap` or a shell that reads its
+    commands from standard input, such as
+    `echo 'cd "$D"; echo x > alias' | sh`, also when the text holds `$(...)`,
+    backquotes or an escaped blank;
+  - a `~`, `$HOME` or bare `cd` after `HOME` is set with `printf -v` or
+    `read`. The hook reads such a home as any directory;
+  - a name in a collating element or a class of a bracket pattern, such as
+    `[[.k.]]`, `[[=k=]]` or `[[:alpha:]]`.
+- After a directory change the hook cannot resolve, a relative word whose
+  last part can be the protected file name is denied, and so is a relative
+  path with `..`. Such a change is a `cd`, `pushd`, `popd` or `chdir` to a
+  value the hook cannot read, a `CDPATH` assignment, a directory option of a
+  program such as `env -C`, `git -C`, `make -C`, `go -C`, `sudo -D`,
+  `nsenter --wd` or `docker run -w`, `chroot`, or a command word that comes
+  from a variable.
+- A relative redirect target is denied after such a change only when the
+  change is made by the shell that opens the redirect: a `cd`, `pushd`,
+  `popd` or `chdir` in the same `( )` group or in a group around it. A
+  `CDPATH` assignment and a `cd` to a pattern that matches no directory
+  count anywhere in the command. A directory option of one program, as in
+  `git -C "$R" log > log.txt`, and a `cd` in a `( )` group that ends before
+  the redirect, as in `(cd "$D" && make) > build.log`, do not count.
+- A brace sequence of 4096 words or more, such as `d{1..5000}`, is read as
+  any number in every reader. A sequence that bash does not make, such as
+  `{-9223372036854775808..0}`, is read as its text, as bash keeps it.
 - The hook reads brace lists, escapes and nested texts within a work counter.
-  A command over the counter is denied. Deeply nested brace lists and very
-  long words end in well under a second.
+  A command over the counter is denied. The slowest call measured for this
+  release took 0.3 s: a command of 20,000 directory names. Deeply nested
+  brace lists, sequences at the int64 limits and a word of 200,000
+  characters each took under 0.1 s.
+- The hook does not look into a FUSE or network file system, such as sshfs,
+  rclone, NFS or SMB, because a lookup there can wait without end. A
+  command that can write is denied when a path or pattern in it reaches
+  such a mount, as in `cp a /mnt/backup/x`: a link there can lead to the
+  protected path. A read-only command such as `cat` stays allowed.
 - One call that was denied before is now allowed: a read inside `bash -c`
   after an option that does not change what runs, such as `-e`, `-x` or
   `--norc`. Calls that write no protected path stay allowed, such as a write
@@ -71,7 +106,9 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   `bin/run.sh`, which the hook places under the working directory. Braces
   that are not a path stay allowed too, such as
   `python3 -c 'print({"a":1,"b":{"c":2}})'`, `echo '{"a":1}' > out.json`,
-  `curl -d '{"k":"v"}' URL` and `touch file{1..100}.txt`.
+  `curl -d '{"k":"v"}' URL`, `touch file{1..100}.txt`, an `awk` program
+  such as `awk '{a[$1]++} END{for(k in a) print k}'` and a `kubectl`
+  `jsonpath` such as `'{.items[0].metadata.name}'`.
 - `-dispatch` now reads the shell tool of every dialect, such as
   `run_command`, not only `Bash`. A command it does not classify is no longer
   allowed. Another tool is read as a shell command only when it carries a
