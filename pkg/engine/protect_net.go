@@ -471,28 +471,39 @@ func setKey(dir string, set []int32) string {
 // atomsOf turns characters into atoms. opt makes them optional. flags
 // keeps the start and end marks.
 func atomsOf(out []atom, ms []mchar, opt, flags bool) []atom {
+	// The open literal is built in buf and stored when it ends, so a long
+	// literal costs linear time.
 	openLit := false
+	var buf []byte
+	flush := func() {
+		if openLit {
+			out[len(out)-1].s = string(buf)
+			buf = buf[:0]
+		}
+		openLit = false
+	}
+	closes := closingBrackets(ms)
 	for i := 0; i < len(ms); i++ {
 		m := ms[i]
 		st := flags && m.st
 		switch {
 		case m.k == mDyn:
-			openLit = false
+			flush()
 			if n := len(out); n > 0 && out[n-1].kind == aDyn && out[n-1].opt == opt && !st && !out[n-1].endAt {
 				break
 			}
 			out = append(out, atom{kind: aDyn, opt: opt, startAt: st})
 		case m.k == mMeta && m.c == '*':
-			openLit = false
+			flush()
 			out = append(out, atom{kind: aStar, opt: opt, startAt: st})
 		case m.k == mMeta && m.c == '?':
-			openLit = false
+			flush()
 			out = append(out, atom{kind: aQ, opt: opt, startAt: st})
-		case m.k == mMeta && m.c == '[' && closingBracket(ms, i) > i:
+		case m.k == mMeta && m.c == '[' && closes[i] > i:
 			// A bracket expression matches one character, and its own
 			// text when no file matches. A star holds both.
-			openLit = false
-			j := closingBracket(ms, i)
+			flush()
+			j := closes[i]
 			out = append(out, atom{kind: aStar, opt: opt, startAt: st})
 			for k := i + 1; k <= j; k++ {
 				if flags && ms[k].en {
@@ -502,32 +513,47 @@ func atomsOf(out []atom, ms []mchar, opt, flags bool) []atom {
 			i = j
 			m = ms[j]
 		default:
-			if openLit && !st {
-				out[len(out)-1].s += string(m.c)
-			} else {
-				out = append(out, atom{kind: aLit, opt: opt, s: string(m.c), startAt: st})
+			if !openLit || st {
+				flush()
+				out = append(out, atom{kind: aLit, opt: opt, startAt: st})
 				openLit = true
 			}
+			buf = append(buf, m.c)
 		}
 		if flags && m.en {
 			out[len(out)-1].endAt = true
-			openLit = false
+			flush()
 		}
 	}
+	flush()
 	return out
 }
 
-// closingBracket returns the index of the ] that closes the [ at i, or -1.
-func closingBracket(ms []mchar, i int) int {
-	for j := i + 1; j < len(ms); j++ {
-		if ms[j].c == '/' {
-			return -1
+// closingBrackets returns, for each index i, the index of the ] that
+// closes a [ at i, or -1: the first ] after i+1 with no / before it. It
+// reads the characters once from the end.
+func closingBrackets(ms []mchar) []int {
+	out := make([]int, len(ms))
+	// next: the first ] at or after a position, before any /; next2 the
+	// one after it.
+	next, next2 := -1, -1
+	for i := len(ms) - 1; i >= 0; i-- {
+		// The answer for i is the first ] at j >= i+2.
+		switch {
+		case next >= i+2:
+			out[i] = next
+		case next2 >= i+2:
+			out[i] = next2
+		default:
+			out[i] = -1
 		}
-		if ms[j].k == mMeta && ms[j].c == ']' && j > i+1 {
-			return j
+		if ms[i].c == '/' {
+			next, next2 = -1, -1
+		} else if ms[i].k == mMeta && ms[i].c == ']' {
+			next, next2 = i, next
 		}
 	}
-	return -1
+	return out
 }
 
 // bitem is one item of a parsed brace word: a character, a list of
@@ -542,8 +568,14 @@ type bitem struct {
 
 // wellFormedBraces reports whether every { and } outside quotes is
 // paired and nested.
+// netMaxBraceDepth bounds the nesting of brace groups the exact reading
+// parses. A deeper word is not well formed for it.
+const netMaxBraceDepth = 128
+
 func wellFormedBraces(ms []mchar) (bool, bool) {
-	depth, any := 0, false
+	// any is read over the whole word: a } before the first { must not
+	// hide the lists after it.
+	depth, any, ok := 0, false, true
 	for _, m := range ms {
 		if m.k != mMeta {
 			continue
@@ -552,14 +584,19 @@ func wellFormedBraces(ms []mchar) (bool, bool) {
 		case '{':
 			depth++
 			any = true
+			if depth > netMaxBraceDepth {
+				// Deeper groups are read as optional pieces.
+				ok = false
+			}
 		case '}':
 			depth--
 			if depth < 0 {
-				return false, any
+				ok = false
+				depth = 0
 			}
 		}
 	}
-	return depth == 0, any
+	return ok && depth == 0, any
 }
 
 // parseBraces parses a well formed word as bash does: a group with a
@@ -569,7 +606,10 @@ func parseBraces(b *netBudget, ms []mchar, i int, inGroup bool) ([][]bitem, int)
 	var alts [][]bitem
 	var cur []bitem
 	for i < len(ms) {
-		b.charge(1)
+		// Over the budget the parse stops; the caller sees b.over.
+		if !b.charge(1) {
+			return append(alts, cur), len(ms)
+		}
 		m := ms[i]
 		if m.k == mMeta && m.c == '{' {
 			galts, j := parseBraces(b, ms, i+1, true)
@@ -584,7 +624,9 @@ func parseBraces(b *netBudget, ms []mchar, i int, inGroup bool) ([][]bitem, int)
 					if len(seq) > 0 {
 						cur[len(cur)-1].ch = m
 					}
-				} else {
+				} else if b.charge(len(body)) {
+					// The copy of the body is charged, so deep groups of
+					// one word cost the budget and not the time limit.
 					cur = append(cur, bitem{ch: m})
 					cur = append(cur, body...)
 					if j < len(ms) {
@@ -962,6 +1004,10 @@ func isNetDelim(c byte) bool { return strings.IndexByte(netDelims, c) >= 0 }
 
 func isNetMeta(c byte) bool { return strings.IndexByte("{},*?[]", c) >= 0 }
 
+// netJoinRe matches a backslash, the quotes after it and a newline (or the
+// \n escape of $'...'): a line continuation once the quotes are read.
+var netJoinRe = regexp.MustCompile(`\\(?:['"]|\$')*(?:\n|\\n)`)
+
 // sigmaText deletes every backslash-newline pair, then every quote and
 // backslash.
 func sigmaText(s string) string {
@@ -984,6 +1030,155 @@ func sigmaText(s string) string {
 // quote), escapes decoded, the other backslashes removed. A NUL gives two
 // texts: the text up to it, and the whole text without it.
 func decodedTexts(s string) []string {
+	out := decodeText(s, false)
+	// $'...' also reads \n, \t and the other letter escapes as control
+	// characters: a newline there separates commands in a later reading.
+	for i := 0; i+1 < len(s); i++ {
+		if s[i] == '\\' && strings.IndexByte(netLetterEscapes, s[i+1]) >= 0 {
+			for _, d := range decodeText(s, true) {
+				if !containsString(out, d) {
+					out = append(out, d)
+				}
+			}
+			break
+		}
+	}
+	// The exact quote removal of bash, up to three times: one reading per
+	// level, so escapes inside and outside $'...' are each read as bash does.
+	u := s
+	for level := 0; level < 3; level++ {
+		var ok bool
+		if u, ok = netUnquote(u); !ok {
+			break
+		}
+		for _, d := range append([]string{sigmaText(u)}, decodeText(u, false)...) {
+			if !containsString(out, d) {
+				out = append(out, d)
+			}
+		}
+	}
+	return out
+}
+
+// netUnquote removes one level of quotes as bash does: a backslash escapes
+// the next character, '...' is literal, "..." keeps the backslash before
+// any character but $ ` " \ and newline, and $'...' decodes its escapes. ok
+// is false for a quote that does not close.
+func netUnquote(s string) (string, bool) {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '\\':
+			if i+1 < len(s) {
+				i++
+				if s[i] != '\n' {
+					b.WriteByte(s[i])
+				}
+			}
+		case c == '$' && i+1 < len(s) && s[i+1] == '\'':
+			j := i + 2
+			for j < len(s) && s[j] != '\'' {
+				if s[j] == '\\' {
+					j++
+				}
+				j++
+			}
+			if j >= len(s) {
+				return "", false
+			}
+			b.WriteString(netDollarBody(s[i+2 : j]))
+			i = j
+		case c == '\'':
+			j := strings.IndexByte(s[i+1:], '\'')
+			if j < 0 {
+				return "", false
+			}
+			b.WriteString(s[i+1 : i+1+j])
+			i += j + 1
+		case c == '"':
+			i++
+			for ; i < len(s) && s[i] != '"'; i++ {
+				if s[i] == '\\' && i+1 < len(s) && strings.IndexByte("$`\"\\\n", s[i+1]) >= 0 {
+					i++
+					if s[i] != '\n' {
+						b.WriteByte(s[i])
+					}
+					continue
+				}
+				b.WriteByte(s[i])
+			}
+			if i >= len(s) {
+				return "", false
+			}
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String(), true
+}
+
+// netDollarBody decodes the body of $'...': the letter escapes, \\, \',
+// \", \? and the numeric escapes. A NUL ends the text, as in bash. Other
+// backslashes are kept.
+func netDollarBody(body string) string {
+	var b strings.Builder
+	for i := 0; i < len(body); i++ {
+		c := body[i]
+		if c != '\\' || i+1 >= len(body) {
+			b.WriteByte(c)
+			continue
+		}
+		d := body[i+1]
+		if k := strings.IndexByte(netLetterEscapes, d); k >= 0 {
+			b.WriteByte(netLetterBytes[k])
+			i++
+			continue
+		}
+		if strings.IndexByte("\\'\"?", d) >= 0 {
+			b.WriteByte(d)
+			i++
+			continue
+		}
+		if d == 'x' || d == 'u' || d == 'U' || (d >= '0' && d <= '7') {
+			// The numeric escape: decode it alone and skip its digits.
+			base, maxd, off := 8, 3, 1
+			switch d {
+			case 'x':
+				base, maxd, off = 16, 2, 2
+			case 'u':
+				base, maxd, off = 16, 4, 2
+			case 'U':
+				base, maxd, off = 16, 8, 2
+			}
+			j, w := i+off, 0
+			for j < len(body) && w < maxd && digitVal(body[j]) >= 0 && digitVal(body[j]) < base {
+				j++
+				w++
+			}
+			if w > 0 {
+				one := decodeText(body[i:j], false)
+				if len(one) > 1 {
+					return b.String() + one[0]
+				}
+				b.WriteString(one[0])
+				i = j - 1
+				continue
+			}
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
+}
+
+// netLetterEscapes are the letters of the $'...' escapes of one control
+// character, in the order of netLetterBytes.
+const netLetterEscapes = "abefnrtv"
+
+var netLetterBytes = []byte{7, 8, 27, 12, '\n', '\r', '\t', 11}
+
+// decodeText is one decoded reading; letters decodes the letter escapes.
+func decodeText(s string, letters bool) []string {
 	var t strings.Builder
 	for i := 0; i < len(s); i++ {
 		c := s[i]
@@ -1024,6 +1219,15 @@ func decodedTexts(s string) []string {
 			base, maxd, off = 8, 3, 1
 		}
 		if base == 0 {
+			if letters && u[i+1] == '\\' {
+				i += 2 // an escaped backslash, removed with the others
+				continue
+			}
+			if k := strings.IndexByte(netLetterEscapes, u[i+1]); letters && k >= 0 {
+				out.WriteByte(netLetterBytes[k])
+				i += 2
+				continue
+			}
 			i++ // a backslash that starts no escape
 			continue
 		}
@@ -2526,9 +2730,17 @@ func (c *netCtx) check(cmd string, depth int, inherited []string, inhUncertain b
 	}
 	toks := tokenizeShell(cmd)
 	sigToks := tokenizeShell(sigmaText(cmd))
+	// joined: the text with each backslash that quotes and a newline
+	// follow joined to the next line, as a later reading of the text does
+	// ('a\'"<newline>"'b' read again is ab).
+	joined := netJoinRe.ReplaceAllString(cmd, "")
+	var joinToks []shellToken
+	if joined != cmd {
+		joinToks = tokenizeShell(sigmaText(joined))
+	}
 
 	// HOME values and directory changes.
-	vals, homeDyn := homeAssignments(append(append([]shellToken{}, toks...), sigToks...))
+	vals, homeDyn := homeAssignments(append(append(append([]shellToken{}, toks...), sigToks...), joinToks...))
 	saved := c.homes
 	defer func() { c.homes = saved }()
 	for _, v := range vals {
@@ -2542,6 +2754,13 @@ func (c *netCtx) check(cmd string, depth int, inherited []string, inhUncertain b
 	globs = append(globs, g2...)
 	bareCd = bareCd || b2
 	uncertain = uncertain || u2 || inhUncertain
+	if joinToks != nil {
+		o3, g3, b3, u3 := dirIndicators(joinToks)
+		ops = append(ops, o3...)
+		globs = append(globs, g3...)
+		bareCd = bareCd || b3
+		uncertain = uncertain || u3
+	}
 	if bareCd && homeDyn {
 		uncertain = true
 	}
@@ -2552,6 +2771,9 @@ func (c *netCtx) check(cmd string, depth int, inherited []string, inhUncertain b
 	texts := []string{cmd}
 	if strings.Contains(cmd, "\\\n") {
 		texts = append(texts, strings.ReplaceAll(cmd, "\\\n", ""))
+	}
+	if joined != cmd && !containsString(texts, joined) {
+		texts = append(texts, joined)
 	}
 	seenRun := map[string]bool{}
 	for _, text := range texts {

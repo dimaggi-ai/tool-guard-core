@@ -980,6 +980,19 @@ func unquoteWord(s string) string {
 // sequence expression is not expanded: a mark stands in its place. ok is
 // false when the word makes more words than limit.
 func expandLongBraces(s string, limit int) (out []string, ok bool) {
+	work := 0
+	return expandLongBracesW(s, limit, &work)
+}
+
+// maxBraceWork bounds the characters the brace expanders of the old rules
+// read for one word, over every level of their recursion. Over it they
+// return ok false, and the word is not read.
+const maxBraceWork = 1 << 18
+
+func expandLongBracesW(s string, limit int, work *int) (out []string, ok bool) {
+	if *work += len(s) + 1; *work > maxBraceWork {
+		return nil, false
+	}
 	// match[i] is the "}" that closes the "{" at i, or -1: a "{" that no
 	// "}" closes is plain text.
 	match := make([]int, len(s))
@@ -1025,7 +1038,7 @@ func expandLongBraces(s string, limit int) (out []string, ok bool) {
 		switch {
 		case len(parts) > 1:
 			for _, part := range parts {
-				sub, ok := expandLongBraces(part, limit)
+				sub, ok := expandLongBracesW(part, limit, work)
 				if !ok || len(mids)+len(sub) > limit {
 					return nil, false
 				}
@@ -1037,7 +1050,7 @@ func expandLongBraces(s string, limit int) (out []string, ok bool) {
 			mids = []string{otherSeqMark}
 		default:
 			// Not a list: bash keeps the braces and expands the text in them.
-			sub, ok := expandLongBraces(body, limit)
+			sub, ok := expandLongBracesW(body, limit, work)
 			if !ok {
 				return nil, false
 			}
@@ -1045,7 +1058,7 @@ func expandLongBraces(s string, limit int) (out []string, ok bool) {
 				mids = append(mids, "{"+w+"}")
 			}
 		}
-		tails, ok := expandLongBraces(s[end+1:], limit)
+		tails, ok := expandLongBracesW(s[end+1:], limit, work)
 		if !ok || len(mids)*len(tails) > limit {
 			return nil, false
 		}
@@ -1139,6 +1152,13 @@ func expandQuotedBraces(raw string, limit int) ([]string, bool) {
 	return expandQuotedChars(chars, limit)
 }
 
+// expandQuotedChars expands the brace lists of quoted characters, within
+// maxBraceWork.
+func expandQuotedChars(s []quotedChar, limit int) ([]string, bool) {
+	work := 0
+	return expandQuotedCharsW(s, limit, &work)
+}
+
 func plainQuotedChars(s []quotedChar) string {
 	b := make([]byte, len(s))
 	for i, q := range s {
@@ -1147,7 +1167,10 @@ func plainQuotedChars(s []quotedChar) string {
 	return string(b)
 }
 
-func expandQuotedChars(s []quotedChar, limit int) ([]string, bool) {
+func expandQuotedCharsW(s []quotedChar, limit int, work *int) ([]string, bool) {
+	if *work += len(s) + 1; *work > maxBraceWork {
+		return nil, false
+	}
 	// match[i] is the "}" that closes the "{" at i, or -1. A "{" that no
 	// "}" closes is plain text, and a later one can still make a list.
 	match := make([]int, len(s))
@@ -1176,6 +1199,9 @@ func expandQuotedChars(s []quotedChar, limit int) ([]string, bool) {
 			continue
 		}
 		body := s[i+1 : end]
+		if *work += len(body); *work > maxBraceWork {
+			return nil, false
+		}
 		var parts [][]quotedChar
 		depth, last := 0, 0
 		for j, q := range body {
@@ -1198,7 +1224,7 @@ func expandQuotedChars(s []quotedChar, limit int) ([]string, bool) {
 		var mids []string
 		if len(parts) > 1 {
 			for _, part := range parts {
-				sub, ok := expandQuotedChars(part, limit)
+				sub, ok := expandQuotedCharsW(part, limit, work)
 				if !ok || len(mids)+len(sub) > limit {
 					return nil, false
 				}
@@ -1211,7 +1237,7 @@ func expandQuotedChars(s []quotedChar, limit int) ([]string, bool) {
 		} else {
 			continue // not a list: bash keeps the braces and reads on
 		}
-		tails, ok := expandQuotedChars(s[end+1:], limit)
+		tails, ok := expandQuotedCharsW(s[end+1:], limit, work)
 		if !ok || len(mids)*len(tails) > limit {
 			return nil, false
 		}

@@ -1882,9 +1882,16 @@ func allBracesQuoted(raw string) bool {
 // ok is false when the result is too large.
 func expandBraces(s string) (out []string, ok bool) {
 	todo := []string{s}
+	work := 0
 	for len(todo) > 0 {
 		cur := todo[0]
 		todo = todo[1:]
+		// Each search reads the whole word: a bound on the characters read
+		// keeps deep nesting from taking quadratic time. Over it, the word
+		// is not expanded, as for a list that makes too many words.
+		if work += len(cur) + 1; work > maxBraceWork {
+			return nil, false
+		}
 		loc := braceExprRe.FindStringIndex(cur)
 		if loc == nil {
 			out = append(out, cur)

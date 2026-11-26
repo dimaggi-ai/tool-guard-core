@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // review090dTree extends review090cTree with links to /dev/fd/3 and
@@ -62,6 +63,7 @@ func TestReview090dProtectedPathBypasses(t *testing.T) {
 		// Fable 2 and 3: a quote, an escaped brace or a quoted brace inside
 		// a long brace list.
 		{"long list with \\\" in quotes", bashEv(`python3 w.py {"a\"b",.{claude,{1..70}}/settings.json}`, home)},
+		{"long list with balanced quotes", bashEv(`python3 w.py {"\"'",.{cl\aude,{1..70}}/settings.json,"'",\"}`, home)},
 		{"long list with \\{", bashEv(`python3 w.py {\{,.{claude,{1..70}}/settings.json}`, home)},
 		{"long list with x\\}", bashEv(`python3 w.py {x\},.{claude,{1..70}}/settings.json}`, home)},
 		{"long list with \\{ and a link", bashEv(`python3 w.py {\{,dlink/settings.`+L+`}`, home)},
@@ -86,6 +88,7 @@ func TestReview090dProtectedPathBypasses(t *testing.T) {
 		// Fable 7: zsh --emulate takes a value; an unknown long option.
 		{"zsh --emulate sh -c", bashEv("zsh --emulate sh -c '"+x+"'", home)},
 		{"bash --unknownopt -c", bashEv("bash --unknownopt -c '"+x+"'", home)},
+		{"bash --unknownopt val -c", bashEv("bash --unknownopt val -c '"+x+"'", home)},
 		// Fable 8 and Gemini 4: a glued -C and a -C under ~.
 		{"env -Clnk sh -c '> ../settings.json'", bashEv("env -Clnk sh -c 'echo x > ../settings.json'", home)},
 		{"env -Clnk ../long list", bashEv("env -Clnk python3 w.py ../settings."+L, home)},
@@ -105,6 +108,11 @@ func TestReview090dProtectedPathBypasses(t *testing.T) {
 		{"Write plp3/settings.json", write(home, "plp3/settings.json")},
 		{"redirect pl3/settings.json", bashEv("echo x > pl3/settings.json", home)},
 		{"cd .claude then ../pl", bashEv("cd .claude && echo x > ../pl/settings.json", home)},
+		{"Write pl/settings.json, no cwd", noCwd(write(home, "pl/settings.json"))},
+		{"Write pl3/settings.json, no cwd", noCwd(write(home, "pl3/settings.json"))},
+		{"Write plp3/settings.json, no cwd", noCwd(write(home, "plp3/settings.json"))},
+		{"redirect pl3/settings.json, no cwd", noCwd(bashEv("echo x > pl3/settings.json", home))},
+		{"cd .claude then ../pl, no cwd", noCwd(bashEv("cd .claude && echo x > ../pl/settings.json", home))},
 		// Gemini 3: the files fish writes.
 		{"cd .claude then fish -No", bashEv("cd .claude && fish -Nosettings.json -c true", home)},
 		{"fish -No under .claude", bashEv("fish -Nosettings.json -c true", cdir)},
@@ -131,14 +139,25 @@ func TestReview090dProtectedPathBypasses(t *testing.T) {
 		{"apply_patch key root", toolEv("apply_patch", "/tmp", map[string]interface{}{"patch": patch, "root": cdir})},
 		{"apply_patch key path", toolEv("apply_patch", "/tmp", map[string]interface{}{"patch": patch, "path": cdir})},
 	}
+	// Each case runs with the hook in the event cwd and in /tmp.
 	for _, c := range cases {
 		c := c
-		t.Run(c.name, func(t *testing.T) {
-			if got, reason := review090dRun(t, c.ev, file); got != "deny" {
-				t.Errorf("decision %q (%s), want deny", got, reason)
-			}
-		})
+		for _, hookDir := range []string{home, "/tmp"} {
+			hookDir := hookDir
+			t.Run(c.name+" hook in "+filepath.Base(hookDir), func(t *testing.T) {
+				t.Chdir(hookDir)
+				if got, reason := review090dRun(t, c.ev, file); got != "deny" {
+					t.Errorf("decision %q (%s), want deny", got, reason)
+				}
+			})
+		}
 	}
+}
+
+// noCwd removes the cwd of an event.
+func noCwd(ev map[string]interface{}) map[string]interface{} {
+	delete(ev, "cwd")
+	return ev
 }
 
 // Fable 1: a write under /proc/self/cwd is read in the working directory
@@ -241,7 +260,14 @@ func TestReview090dPathologicalWords(t *testing.T) {
 	for _, c := range cases {
 		c := c
 		t.Run(c.name, func(t *testing.T) {
-			got, _ := review090dRun(t, bashEv(c.cmd, home), file)
+			start := time.Now()
+			got, reason := review090dRun(t, bashEv(c.cmd, home), file)
+			if d := time.Since(start); d > 2*time.Second {
+				t.Errorf("took %s, want under 2s", d)
+			}
+			if strings.Contains(reason, "did not end in") {
+				t.Errorf("denied on the time limit: %s", reason)
+			}
 			if got != "" && got != "allow" && got != "deny" && got != "ask" {
 				t.Errorf("decision %q", got)
 			}
