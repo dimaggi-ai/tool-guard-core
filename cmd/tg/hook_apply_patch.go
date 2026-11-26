@@ -44,7 +44,9 @@ func applyPatchTextKey(k string) bool {
 // input, at any depth in objects and lists, that holds a file marker: a
 // harness may put the patch under a key this list does not know (changes,
 // args, input.patch). A list of strings is joined, one string per line.
-func applyPatchText(params map[string]json.RawMessage) string {
+// deep is true when a value nested deeper than maxPatchValueDepth holds a
+// file marker: the caller denies the call, as its files are not read.
+func applyPatchText(params map[string]json.RawMessage) (text string, deep bool) {
 	var parts []string
 	for _, k := range sortedKeys(params) {
 		if applyPatchTextKey(k) {
@@ -59,9 +61,9 @@ func applyPatchText(params map[string]json.RawMessage) string {
 				continue
 			}
 		}
-		parts = append(parts, patchStrings(params[k], 0)...)
+		parts = append(parts, patchStrings(params[k], 0, &deep)...)
 	}
-	return strings.Join(parts, "\n")
+	return strings.Join(parts, "\n"), deep
 }
 
 // maxPatchValueDepth bounds how deep patchStrings reads nested values.
@@ -69,12 +71,12 @@ const maxPatchValueDepth = 16
 
 // patchStrings returns the strings in a JSON value that hold a file marker.
 // A list of strings that holds one is returned whole, one string per line.
-// A value nested deeper than maxPatchValueDepth is returned as its JSON
-// text, which still shows a marker it holds.
-func patchStrings(raw json.RawMessage, depth int) []string {
+// A value nested deeper than maxPatchValueDepth is not read: deep is set
+// when its JSON text holds a marker.
+func patchStrings(raw json.RawMessage, depth int, deep *bool) []string {
 	if depth > maxPatchValueDepth {
 		if holdsPatchMarker(string(raw)) {
-			return []string{string(raw)}
+			*deep = true
 		}
 		return nil
 	}
@@ -96,14 +98,14 @@ func patchStrings(raw json.RawMessage, depth int) []string {
 	var list []json.RawMessage
 	if json.Unmarshal(raw, &list) == nil {
 		for _, v := range list {
-			out = append(out, patchStrings(v, depth+1)...)
+			out = append(out, patchStrings(v, depth+1, deep)...)
 		}
 		return out
 	}
 	var obj map[string]json.RawMessage
 	if json.Unmarshal(raw, &obj) == nil {
 		for _, k := range sortedKeys(obj) {
-			out = append(out, patchStrings(obj[k], depth+1)...)
+			out = append(out, patchStrings(obj[k], depth+1, deep)...)
 		}
 	}
 	return out
@@ -120,9 +122,58 @@ func holdsPatchMarker(s string) bool {
 }
 
 // applyPatchWorkDirKeys are the normalised parameter names that can name the
-// directory a relative patch path stands in.
+// directory a relative patch path stands in. dir, directory, root and path
+// are read too: a harness may use one of them, and a directory read in
+// excess can only add a deny.
 var applyPatchWorkDirKeys = map[string]bool{
 	"workdir": true, "workdirectory": true, "workingdir": true, "workingdirectory": true, "cwd": true,
+	"dir": true, "directory": true, "root": true, "path": true,
+}
+
+// patchWorkDirs returns the string values of the work directory keys in a
+// JSON object, at any depth up to maxPatchValueDepth in objects and lists
+// (input.workdir, args.cwd). deep is set when a value is nested deeper.
+func patchWorkDirs(params map[string]json.RawMessage, depth int, deep *bool) []string {
+	var out []string
+	for _, k := range sortedKeys(params) {
+		raw := params[k]
+		if applyPatchWorkDirKey(k) {
+			var d string
+			if json.Unmarshal(raw, &d) == nil {
+				if d = strings.TrimSpace(d); d != "" {
+					if t := strings.TrimRight(d, "/"); t != "" {
+						d = t
+					}
+					out = append(out, d)
+				}
+				continue
+			}
+		}
+		out = append(out, patchWorkDirsIn(raw, depth+1, deep)...)
+	}
+	return out
+}
+
+func patchWorkDirsIn(raw json.RawMessage, depth int, deep *bool) []string {
+	if len(raw) == 0 || (raw[0] != '{' && raw[0] != '[') {
+		return nil
+	}
+	if depth > maxPatchValueDepth {
+		*deep = true
+		return nil
+	}
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(raw, &obj) == nil {
+		return patchWorkDirs(obj, depth, deep)
+	}
+	var list []json.RawMessage
+	var out []string
+	if json.Unmarshal(raw, &list) == nil {
+		for _, v := range list {
+			out = append(out, patchWorkDirsIn(v, depth+1, deep)...)
+		}
+	}
+	return out
 }
 
 // applyPatchWorkDirKey reports whether a parameter names the directory a
@@ -203,25 +254,19 @@ func applyPatchEnvelopes(base *domain.ActionEnvelope, cwd string) (envs []*domai
 	}
 	// A work directory in the tool input places a relative patch path, as
 	// cwd does for the harness call. An absolute one is used as it is. A
-	// relative one is placed under cwd and is also kept as it is.
-	var workDirs []string
-	for _, k := range sortedKeys(params) {
-		if applyPatchWorkDirKey(k) {
-			var d string
-			if json.Unmarshal(params[k], &d) == nil {
-				if d = strings.TrimSpace(d); d != "" {
-					if t := strings.TrimRight(d, "/"); t != "" {
-						d = t
-					}
-					workDirs = append(workDirs, d)
-				}
-			}
-		}
+	// relative one is placed under cwd and is also kept as it is. It can
+	// stand next to a nested patch (input.workdir with input.patch).
+	text, deep := applyPatchText(params)
+	if deep {
+		return nil, fmt.Sprintf("apply_patch holds a patch nested deeper than %d levels; the hook does not read it", maxPatchValueDepth), true
 	}
-	text := applyPatchText(params)
 	targets, added := applyPatchTargets(text)
 	if len(targets) == 0 {
 		return nil, "", false
+	}
+	workDirs := patchWorkDirs(params, 0, &deep)
+	if deep {
+		return nil, fmt.Sprintf("apply_patch holds a value nested deeper than %d levels; the hook does not read it", maxPatchValueDepth), true
 	}
 	if len(targets) > maxApplyPatchTargets {
 		return nil, fmt.Sprintf("apply_patch names %d files; the hook checks at most %d in one call", len(targets), maxApplyPatchTargets), true

@@ -126,6 +126,9 @@ type shellToken struct {
 	unresolved bool
 	// marked is value with shellUnresolvedMark at each unresolved expansion.
 	marked string
+	// fd is the file descriptor number written before a redirection
+	// operator (the "2" of 2<FILE), or "".
+	fd string
 }
 
 // tokenizeShell lexes a raw shell command string into a flat token stream.
@@ -196,8 +199,10 @@ func tokenizeShell(cmd string) []shellToken {
 			// redirection is a file-descriptor number (2>, 1>>) that binds to
 			// the operator, not a standalone argument. `raw == value` proves no
 			// quoting/escaping/expansion happened.
+			fd := ""
 			if isRedirKind(kind) && started && wb.Len() > 0 &&
 				cmd[wordStart:i] == wb.String() && isAllDigits(wb.String()) {
+				fd = wb.String()
 				wb.Reset()
 				wordStart = -1
 				unresolved = false
@@ -205,7 +210,7 @@ func tokenizeShell(cmd string) []shellToken {
 			} else {
 				flush(i)
 			}
-			toks = append(toks, shellToken{kind: kind, value: text})
+			toks = append(toks, shellToken{kind: kind, value: text, fd: fd})
 			i += opLen
 			continue
 		}

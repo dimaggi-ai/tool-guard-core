@@ -13,39 +13,52 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 - The pre-release review of 2026-11-25 found calls that wrote to a path named
   with `-protect-path` and were allowed. `tg hook` now denies them:
   - a redirect target that holds a brace list, such as `> {P,}`. This
-    includes a list in quotes or inside another list, such as
+    includes a list mixed with quotes or inside another list, such as
     `> ''{settings.json,{a}}`;
   - a path under `/proc/self/cwd` or `/dev/fd` written with an empty, `.` or
     `..` part, such as `/proc/self//cwd`, in a shell command and in a
     file-write tool. This includes a path that reaches them from another
     directory under `/dev`, such as `/dev/shm/../fd/3`, a path through a
-    symbolic link to `/proc/self/cwd`, and a long brace list under
-    `/proc/self`;
+    symbolic link, absolute or relative, into `/proc` or `/dev/fd`, and a long
+    brace list under `/proc/self`. A file-write tool path under
+    `/proc/self/cwd` is read in the working directory of the hook process;
   - an `apply_patch` target with `..` after a symbolic link, and patch text
     under an alias key such as `cmd`. The hook also reads patch text under
     other keys, such as `content` or `args`, in nested objects and in arrays.
-    It places a relative target under a work directory key, such as `workdir`
-    or `cwd`;
+    It places a relative target under a work directory key, such as `workdir`,
+    `cwd` or `dir`, also when the key is nested, such as `input.workdir`. A
+    patch nested deeper than 16 levels is denied;
   - a command passed in a shell option, such as `fish --init-command=...`, or
-    after `bash -c` and another option. The hook now reads all fish options,
-    including the short and prefix forms, such as `-C`, `--co` and `--i`;
+    after `bash -c` and another option. The hook reads fish options in their
+    short, glued and prefix forms, such as `-C`, `-iC"..."`, `--co` and
+    `--i`. An unknown long option of `bash`, `sh` or `zsh`, and the value of
+    `zsh --emulate`, no longer hide the command text after them;
   - a fish option that writes a file, such as `-o`, `--debug-output` or
-    `--profile`, when the file is a protected path or is not known;
+    `--profile`, when the file is a protected path or is not known, under
+    every directory the command changes to;
   - a word after the text of `bash -c` that the text can run, such as
     `bash -c 'eval "$1"' _ 'echo x > P'`;
-  - a long brace list after `=` or after a short option glued to the path,
-    such as `-cfP.{json,{1..70}}`, and one with `..` after a symbolic link.
-- The review also found calls that were denied although they write no
-  protected path. `tg hook` now allows them:
-  - an empty word after the text of `bash -c`, and `bash ''`;
-  - a read inside `bash -c` after an option that does not change what runs,
-    such as `-e`, `-x` or `--norc`;
-  - a write to `/dev/stdout`, `/dev/stderr`, `/dev/fd/1` or `/dev/fd/2`, and
-    to a file under `/proc` that is not a process directory, such as
-    `/proc/sys/vm/drop_caches`;
-  - a long brace list that names no protected path;
-  - a relative `apply_patch` target such as `bin/run.sh`. The hook places it
-    under the working directory, not under `/`.
+  - a long brace list after `=`, after a short option glued to the path,
+    such as `tar -cf.claude/settings.{json,{1..70}}`, or with `..` after a
+    symbolic link. The list may hold quotes and escaped braces or commas,
+    and may stand in the text of `eval`, `trap` or another quoted command.
+    A list the hook cannot read in its bounds is denied;
+  - a relative path with `..` after a directory that the command changes to
+    with a value the hook cannot read, such as `cd $D` or `env -C"$D"`, and
+    after a directory glued to `-C`, such as `env -Clnk`. The directory is
+    read under the cwd of the tool call, also when the hook process runs in
+    another directory;
+  - a write to `/dev/stdout` or `/dev/stderr` when that stream may be a
+    file opened for reading, such as `cat 2< P 2>/dev/stderr` or
+    `exec 1>&0; echo x > /dev/stdout`;
+  - a brace list in a word with an extended glob pattern, such as
+    `@(settings)`.
+- One call that was denied before is now allowed: a read inside `bash -c`
+  after an option that does not change what runs, such as `-e`, `-x` or
+  `--norc`. Calls that write no protected path stay allowed, such as a write
+  to `/dev/stdout` or `/proc/sys/vm/drop_caches`, an empty word after the
+  text of `bash -c`, and a relative `apply_patch` target such as
+  `bin/run.sh`, which the hook places under the working directory.
 - `-dispatch` now reads the shell tool of every dialect, such as
   `run_command`, not only `Bash`. A command it does not classify is no longer
   allowed. Another tool is read as a shell command only when it carries a

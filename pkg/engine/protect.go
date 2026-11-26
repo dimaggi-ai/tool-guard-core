@@ -202,15 +202,20 @@ func violatesProtectedPaths(env *domain.ActionEnvelope, prefixes []string) (bool
 			if !self && (procPathUnknown(fp) || procDirUnknown(fp)) {
 				return true, fmt.Sprintf("protected path: write through %s denied by -protect-paths (directory not known)", shortRaw(fp))
 			}
-			for i, reading := range pathReadings(fp, dirs) {
-				// A path through /proc/self/cwd is the path under each
-				// directory the call says it runs in, and those readings
-				// follow. With no such directory it is not known, and a ".."
-				// after it gives the physical parent of that directory,
-				// which the text does not show.
-				if i == 0 && self && len(dirs) > 0 && !strings.Contains(rest+"/", "/../") {
-					continue
+			readings := pathReadings(fp, dirs)
+			// A path through /proc/self/cwd is the path under the directory
+			// of the process that opens it. That process can be this one
+			// (the hook runs in the agent's directory) or one in a directory
+			// the call names, so each of them is read. A ".." after it gives
+			// the physical parent of that directory, which the text does not
+			// show, and the path as written stays in the list (unknown, deny).
+			// If the directory of this process is not known, the same holds.
+			if self && !strings.Contains(rest+"/", "/../") {
+				if wd, err := os.Getwd(); err == nil {
+					readings[0] = strings.TrimRight(filepath.ToSlash(wd), "/") + rest
 				}
+			}
+			for _, reading := range readings {
 				if linkIntoProc(reading) {
 					return true, fmt.Sprintf("protected path: write through %s denied by -protect-paths (directory not known)", shortRaw(reading))
 				}
@@ -1486,6 +1491,66 @@ func rebaseWord(w shellToken, base string) shellToken {
 	return shellToken{kind: w.kind, value: joined, raw: w.raw, marked: joined}
 }
 
+// writeTargetTouchesProtected checks one word the command writes to as a
+// file: a redirection target, or the value of a shell option that names a
+// file (fish -o FILE). With base set, a relative word is read under it.
+func writeTargetTouchesProtected(t redirTarget, toks []shellToken, prefixes []string, base string, bases []string) (bool, string) {
+	if t.unresolved {
+		return true, shortRaw(t.raw)
+	}
+	// bash brace-expands a redirection word too: `> {P,}` and
+	// `> settings.{json,}` write P. Every expansion is checked, and a
+	// word whose braces cannot be read fails closed.
+	for _, w := range expandBraceWords([]shellToken{{kind: tokWord, value: t.value, raw: t.raw, marked: t.value}}) {
+		if w.unresolved {
+			return true, shortRaw(t.raw)
+		}
+		value := rebaseWord(w, base).value
+		// A target under a directory this check does not know
+		// (/proc/self/cwd, /dev/fd/3, /dev/stdin, a ".." under
+		// /dev/pts, a link into /proc) can be the protected file.
+		if unknownTarget(value, toks) {
+			return true, shortRaw(value)
+		}
+		if hit, target := namesProtected(value, prefixes); hit {
+			return true, target
+		}
+		// The word may hold a list made of parts of the target: with the
+		// quotes dropped (`> ''{P,{a}}`) or with a group the comma
+		// reader leaves unexpanded (`> {P,{a}}`), the text reaches the
+		// shell as one word that can still be the protected path. Each
+		// word bash would make from it is read here, quotes kept.
+		// Quoting that asks bash for no expansion at all (`> '{P,}'`
+		// makes the literal file "{P,}") is left as it is.
+		if w.value == t.value {
+			for _, alt := range literalBraceAlternatives(t.raw) {
+				altT := shellToken{kind: tokWord, value: alt, raw: alt, marked: alt}
+				if unknownTarget(alt, toks) {
+					return true, shortRaw(alt)
+				}
+				if hit, target := namesProtected(rebaseWord(altT, base).value, prefixes); hit {
+					return true, target
+				}
+				// A brace word that stays one word also names a path in
+				// the part before the list, so the unread-word rule reads
+				// it part by part.
+				if unreadWord(t.raw, []shellToken{{kind: tokWord, value: t.value, raw: t.raw, marked: t.value}}, bases, prefixes) != "" {
+					return true, shortRaw(t.raw)
+				}
+			}
+		}
+	}
+	// A target under a directory this check does not know fails closed on
+	// every reading of the word. A quoted brace is not expanded by bash, so
+	// its raw text is checked only when quoting makes no brace list.
+	for _, w := range []shellToken{{kind: tokWord, value: t.value, raw: t.raw, marked: t.value}, rebaseWord(shellToken{kind: tokWord, value: t.value, raw: t.raw, marked: t.value}, base)} {
+		if unknownTarget(w.value, toks) || (t.raw != t.value && !allBracesQuoted(t.raw) && unknownTarget(w.raw, toks)) {
+			return true, shortRaw(w.raw)
+		}
+	}
+	return false, ""
+}
+
 // shellTokensTouchProtected is the check of one token stream. With base set,
 // every relative path is read under that directory, and the commands a shell
 // runs (-c, standard input) are left to the pass without a base.
@@ -1497,63 +1562,8 @@ func shellTokensTouchProtected(toks []shellToken, prefixes []string, depth int, 
 			continue
 		}
 		seen[t.raw] = true
-		if t.unresolved {
-			return true, shortRaw(t.raw)
-		}
-		// bash brace-expands a redirection word too: `> {P,}` and
-		// `> settings.{json,}` write P. Every expansion is checked, and a
-		// word whose braces cannot be read fails closed.
-		for _, w := range expandBraceWords([]shellToken{{kind: tokWord, value: t.value, raw: t.raw, marked: t.value}}) {
-			if w.unresolved {
-				return true, shortRaw(t.raw)
-			}
-			value := rebaseWord(w, base).value
-			// A target under a directory this check does not know
-			// (/proc/self/cwd, /dev/fd/3, /dev/stdin, a ".." under
-			// /dev/pts) can be the protected file.
-			if unknownTarget(value, toks) {
-				return true, shortRaw(value)
-			}
-			if hit, target := namesProtected(value, prefixes); hit {
-				return true, target
-			}
-			// The word may hold a list made of parts of the target: with the
-			// quotes dropped (`> ''{P,{a}}`) or with a group the comma
-			// reader leaves unexpanded (`> {P,{a}}`), the text reaches the
-			// shell as one word that can still be the protected path. Each
-			// word bash would make from it is read here, quotes kept.
-			// Quoting that asks bash for no expansion at all (`> '{P,}'`
-			// makes the literal file "{P,}") is left as it is.
-			if w.value == t.value {
-				for _, alt := range literalBraceAlternatives(t.raw) {
-					altT := shellToken{kind: tokWord, value: alt, raw: alt, marked: alt}
-					if unknownTarget(alt, toks) {
-						return true, shortRaw(alt)
-					}
-					if hit, target := namesProtected(rebaseWord(altT, base).value, prefixes); hit {
-						return true, target
-					}
-					// A brace word that stays one word also names a path in
-					// the part before the list, so the unread-word rule reads
-					// it part by part.
-					if unreadWord(t.raw, []shellToken{{kind: tokWord, value: t.value, raw: t.raw, marked: t.value}}, bases, prefixes) != "" {
-						return true, shortRaw(t.raw)
-					}
-				}
-			}
-		}
-	}
-
-	// A target under a directory this check does not know (/proc/self/cwd,
-	// /dev/fd/3, /dev/stdin, a ".." under /dev/pts) can be the protected
-	// file, so it fails closed on every reading of the word. A quoted brace
-	// is not expanded by bash, so its raw text is checked only when quoting
-	// makes no brace list.
-	for _, t := range redirectTargets(toks) {
-		for _, w := range []shellToken{{kind: tokWord, value: t.value, raw: t.raw, marked: t.value}, rebaseWord(shellToken{kind: tokWord, value: t.value, raw: t.raw, marked: t.value}, base)} {
-			if unknownTarget(w.value, toks) || (t.raw != t.value && !allBracesQuoted(t.raw) && unknownTarget(w.raw, toks)) {
-				return true, shortRaw(w.raw)
-			}
+		if hit, target := writeTargetTouchesProtected(t, toks, prefixes, base, bases); hit {
+			return true, target
 		}
 	}
 
@@ -1580,18 +1590,18 @@ func shellTokensTouchProtected(toks []shellToken, prefixes []string, depth int, 
 		// command-bearing option (fish -C, --init-command) and the command
 		// glued into such an option after the -c command, which reads as a
 		// single word (fish -c 'echo ok' -C'echo x > $X').
-		if base == "" && shellInterpreters[prog] {
-			call := parseShellCall(prog, words[1:])
+		if shellInterpreters[prog] {
 			// A file the shell writes because an option names it
-			// (fish -o FILE, --profile FILE).
-			for _, f := range call.files {
-				if f.unresolved {
-					return true, shortRaw(f.raw)
-				}
-				if hit, target := matchLiteralPath(f.value, prefixes); hit {
+			// (fish -o FILE, --profile FILE) is read as a redirection
+			// target is: under each base, through links, with its braces.
+			for _, f := range parseShellCall(prog, words[1:]).files {
+				if hit, target := writeTargetTouchesProtected(redirTarget{value: f.value, raw: f.raw, unresolved: f.unresolved}, toks, prefixes, base, bases); hit {
 					return true, target
 				}
 			}
+		}
+		if base == "" && shellInterpreters[prog] {
+			call := parseShellCall(prog, words[1:])
 			for _, arg := range call.writeCheckTexts() {
 				if depth >= maxShellSubstDepth {
 					return true, shortRaw(arg.raw)
@@ -1853,20 +1863,24 @@ func quoteBraces(v string) string {
 // sequence expression.
 var braceExprRe = regexp.MustCompile(`\{[^{}]*(,|\.\.)[^{}]*\}`)
 
-// quoteRunRe matches one run of quote characters, single- or double-quoted
-// text, or a backslash with the character after it.
-var quoteRunRe = regexp.MustCompile(`''|""|'[^']*'|"[^"]*"|\\[\s\S]`)
-
 // allBracesQuoted reports whether every "{" and "}" of a word's raw text
-// stands inside quoting, so bash expands no brace list in it. A word that
-// still holds a brace group after the quoted runs are removed, or that has
-// no brace at all, returns false.
+// stands inside quoting or after a backslash (quotedChars), so bash expands
+// no brace list in it. A word with no brace, or with a quote that does not
+// close, returns false.
 func allBracesQuoted(raw string) bool {
 	if !strings.ContainsAny(raw, "{}") {
 		return false
 	}
-	kept := quoteRunRe.ReplaceAllString(raw, "")
-	return !strings.ContainsAny(kept, "{}") && !braceExprRe.MatchString(kept)
+	chars, ok := quotedChars(raw)
+	if !ok {
+		return false
+	}
+	for _, q := range chars {
+		if (q.c == '{' || q.c == '}') && !q.quoted {
+			return false
+		}
+	}
+	return true
 }
 
 // expandBraces expands the innermost brace groups of s until none is left.

@@ -3,8 +3,6 @@ package engine
 import (
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"testing"
 	"time"
 )
@@ -77,7 +75,7 @@ func TestReview090LongBraceCost(t *testing.T) {
 			t.Fatal(err)
 		}
 	}()
-	look0 := procSyscalls()
+	look0 := walkLookups.Load()
 	for _, n := range []int{10, 70, 200, 500} {
 		word := "lnk/../settings.{json,{1.." + itoa(n) + "}}"
 		cmd := "python3 w.py " + word
@@ -88,71 +86,29 @@ func TestReview090LongBraceCost(t *testing.T) {
 			t.Errorf("n=%d: long list after a link into the protected directory allowed", n)
 		}
 	}
-	// The same word over a plain directory (no link) stays allowed, so the
-	// denial above comes from the link and not from the size of the list.
+	// The walker caches each lookup, so the number of lookups does not grow
+	// with the number of words in the list.
+	looked := walkLookups.Load() - look0
+	t.Logf("COST walkLookups=%d", looked)
+	if looked == 0 {
+		t.Errorf("the long brace list rule made no file-system lookup")
+	}
+	if looked > 200 {
+		t.Errorf("the long brace list asked the disk %d times", looked)
+	}
+	// The same word over a plain directory (no link) stays allowed through
+	// the same entry, with a command that writes, so the denial above comes
+	// from the link and not from the size of the list.
 	free := filepath.Join(home, "free")
 	if err := os.MkdirAll(free, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	for _, n := range []int{10, 500} {
-		word := "free/../free/set.{json,{1.." + itoa(n) + "}}"
-		cmd := "cat " + word
-		if got := commandNamesProtected(tokenizeShell(cmd), []string{word}, []string{filepath.ToSlash(home)}, nil, nil, prefixes); got != "" {
-			t.Errorf("n=%d: plain dir/../dir long list denied: %s", n, got)
+		cmd := "python3 w.py free/../free/set.{json,{1.." + itoa(n) + "}}"
+		if hit, target := shellTouchesProtectedRec(cmd, prefixes, 0, nil, []string{filepath.ToSlash(home)}); hit {
+			t.Errorf("n=%d: plain dir/../dir long list denied: %s", n, target)
 		}
 	}
-	t.Logf("COST statLookups=%d", procSyscalls()-look0)
-	if got := procSyscalls() - look0; got > 200 {
-		t.Errorf("the long brace list asked the disk %d times", got)
-	}
-}
-
-func procSyscalls() int {
-	b, err := os.ReadFile("/proc/self/io")
-	if err != nil {
-		return -1
-	}
-	for _, line := range strings.Split(string(b), "\n") {
-		f := strings.Fields(line)
-		if len(f) == 2 && f[0] == "syscr:" {
-			v, _ := strconv.Atoi(f[1])
-			return v
-		}
-	}
-	return -1
-}
-
-func splitLines(s string) []string {
-	var out []string
-	cur := ""
-	for _, c := range s {
-		if c == '\n' {
-			out = append(out, cur)
-			cur = ""
-			continue
-		}
-		cur += string(c)
-	}
-	return append(out, cur)
-}
-
-func fields(s string) []string {
-	var out []string
-	cur := ""
-	for _, c := range s {
-		if c == ' ' || c == '\t' {
-			if cur != "" {
-				out = append(out, cur)
-				cur = ""
-			}
-			continue
-		}
-		cur += string(c)
-	}
-	if cur != "" {
-		out = append(out, cur)
-	}
-	return out
 }
 
 func itoa(n int) string {

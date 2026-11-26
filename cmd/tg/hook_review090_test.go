@@ -126,6 +126,18 @@ func TestReview090ProtectedPathBypasses(t *testing.T) {
 
 func review090AgyHook(t *testing.T, ev map[string]interface{}, protect string) string {
 	t.Helper()
+	d, _ := review090AgyOut(t, ev, protect)
+	return d
+}
+
+func review090AgyReason(t *testing.T, ev map[string]interface{}, protect string) string {
+	t.Helper()
+	_, r := review090AgyOut(t, ev, protect)
+	return r
+}
+
+func review090AgyOut(t *testing.T, ev map[string]interface{}, protect string) (string, string) {
+	t.Helper()
 	payload, err := json.Marshal(ev)
 	if err != nil {
 		t.Fatal(err)
@@ -138,11 +150,12 @@ func review090AgyHook(t *testing.T, ev map[string]interface{}, protect string) s
 	}
 	var out struct {
 		Decision string `json:"decision"`
+		Reason   string `json:"reason"`
 	}
 	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &out); err != nil {
 		t.Fatalf("output not JSON: %v\n%s", err, buf.String())
 	}
-	return out.Decision
+	return out.Decision, out.Reason
 }
 
 // P7: dispatch applies to the shell tool names of every dialect.
@@ -158,6 +171,10 @@ func TestReview090DispatchShellToolNames(t *testing.T) {
 		if got := review090AgyHook(t, agy(c.cmd), file); got != c.want {
 			t.Errorf("antigravity run_command %q: decision %q, want %q", c.cmd, got, c.want)
 		}
+	}
+	// The allow comes from the dispatch, not from the policy.
+	if reason := review090AgyReason(t, agy("gh pr list"), file); !strings.Contains(reason, "verified gh read") {
+		t.Errorf("antigravity gh pr list: reason %q, want the dispatch reason", reason)
 	}
 }
 

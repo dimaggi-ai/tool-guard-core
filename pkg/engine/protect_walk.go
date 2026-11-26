@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 )
 
 // This file holds the reader of a word with a brace list longer than the
@@ -62,6 +63,10 @@ type pathWalker struct {
 	over    bool
 }
 
+// walkLookups counts the file-system lookups of every pathWalker (lstat,
+// readlink, readdir). Tests read it to bound the cost of a walk.
+var walkLookups atomic.Int64
+
 func newPathWalker() *pathWalker {
 	return &pathWalker{
 		memo:    map[string]walkState{},
@@ -75,6 +80,7 @@ func (w *pathWalker) kind(p string) entryKind {
 	if k, ok := w.entries[p]; ok {
 		return k
 	}
+	walkLookups.Add(1)
 	fi, err := os.Lstat(p)
 	var k entryKind
 	switch {
@@ -191,6 +197,7 @@ func (w *pathWalker) follow(dir, p string, links int) walkState {
 	if links >= maxLinkFollows {
 		return unknownState()
 	}
+	walkLookups.Add(1)
 	target, err := os.Readlink(p)
 	if err != nil {
 		return unknownState()
@@ -239,6 +246,7 @@ func (w *pathWalker) anyEntryMatches(dir, part string) bool {
 	list, ok := w.lists[dir]
 	if !ok {
 		var err error
+		walkLookups.Add(1)
 		list, err = os.ReadDir(dir)
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -433,24 +441,53 @@ func stateNamesProtected(st walkState, forms []protectedForm) bool {
 	return false
 }
 
+// wordSplitChars are the characters after which a path can start in one
+// word: characters that are not part of a path (=, :, @, a comma, +, %), a
+// quote, and the blanks and shell characters of a command text that another
+// command reads again (eval 'cmd PATH', trap, su -c, python3 w.py\ PATH).
+const wordSplitChars = "=:@,+%" + quoteMark + " \t\n;|&()<>`"
+
+// maxWordStarts bounds the places a path can start in one word. A word with
+// more fails closed.
+const maxWordStarts = 256
+
+// maxUnreadStarts bounds the texts unreadWord walks for one command. A
+// command that needs more fails closed.
+const maxUnreadStarts = 100_000
+
+// extglobOpenRe matches the start of an extglob pattern: @(, !(, +(, *(, ?(.
+var extglobOpenRe = regexp.MustCompile(`[@!+*?]\(`)
+
+// maxUnreadWordLen bounds the length of a word that unreadWord expands. A
+// longer word with a long brace list fails closed.
+const maxUnreadWordLen = 8192
+
 // wordStarts returns the texts in one word made by a brace list at which a
-// path can start: the word itself, the text after each character that is
-// not part of a path (=, :, @, a comma, +, %, a quote), the text after the
-// letters of a short option (tar -cfPATH), and the text from the first "/"
-// or "~" of an option.
-func wordStarts(e string) []string {
+// path can start: the word itself, the text after each character of
+// wordSplitChars, the text after the letters of a short option
+// (tar -cfPATH), and the text from the first "/" or "~" of an option. ok is
+// false when there are more than maxWordStarts places.
+func wordStarts(e string) ([]string, bool) {
 	var out []string
 	seen := map[string]bool{}
+	over := false
 	add := func(v string) {
+		if over {
+			return
+		}
 		v = strings.ReplaceAll(v, quoteMark, "")
 		if v != "" && !seen[v] {
+			if len(out) >= maxWordStarts {
+				over = true
+				return
+			}
 			seen[v] = true
 			out = append(out, v)
 		}
 	}
 	add(e)
-	for i := 0; i < len(e); i++ {
-		if strings.IndexByte("=:@,+%"+quoteMark, e[i]) >= 0 {
+	for i := 0; i < len(e) && !over; i++ {
+		if strings.IndexByte(wordSplitChars, e[i]) >= 0 {
 			add(e[i+1:])
 		}
 	}
@@ -460,38 +497,77 @@ func wordStarts(e string) []string {
 		}
 		// The letters of a cluster stand before the value: -cvfPATH puts
 		// PATH after any of them.
-		for k := 2; k < len(e) && e[k-1] != '/'; k++ {
+		for k := 2; k < len(e) && e[k-1] != '/' && !over; k++ {
 			add(e[k:])
 		}
 	}
-	return out
+	return out, !over
 }
 
-// markQuotes returns the word with its quotes and backslashes removed and a
-// quoteMark where each quote stood. ok is false for a quote that does not
-// close.
+// Marks that stand for a brace or a comma that a quote or a backslash made
+// plain text, so the brace expansion does not read them.
+const (
+	plainOpenMark  = "\x04"
+	plainCloseMark = "\x05"
+	plainCommaMark = "\x06"
+)
+
+var plainMarkRestore = strings.NewReplacer(plainOpenMark, "{", plainCloseMark, "}", plainCommaMark, ",")
+
+// markQuotes returns the word with its quotes and backslashes removed, a
+// quoteMark where each quote stood, and a plain mark for each brace and
+// comma that a quote or a backslash covers. Inside double quotes a
+// backslash covers only $, `, ", \ and a newline, as in bash. ok is false
+// for a quote that does not close and for a "(" that no quote covers: with
+// extglob, @(...) and the like are patterns the check does not expand.
 func markQuotes(raw string) (string, bool) {
 	var b strings.Builder
+	plain := func(c byte) {
+		switch c {
+		case '{':
+			b.WriteString(plainOpenMark)
+		case '}':
+			b.WriteString(plainCloseMark)
+		case ',':
+			b.WriteString(plainCommaMark)
+		default:
+			b.WriteByte(c)
+		}
+	}
 	for i := 0; i < len(raw); i++ {
 		switch c := raw[i]; c {
-		case '\'', '"':
-			j := strings.IndexByte(raw[i+1:], c)
+		case '\'':
+			j := strings.IndexByte(raw[i+1:], '\'')
 			if j < 0 {
 				return "", false
 			}
 			b.WriteString(quoteMark)
-			inner := raw[i+1 : i+1+j]
-			if c == '"' {
-				inner = unquoteWord(inner)
+			for k := i + 1; k < i+1+j; k++ {
+				plain(raw[k])
 			}
-			b.WriteString(inner)
 			b.WriteString(quoteMark)
 			i += j + 1
+		case '"':
+			b.WriteString(quoteMark)
+			j := i + 1
+			for ; j < len(raw) && raw[j] != '"'; j++ {
+				if raw[j] == '\\' && j+1 < len(raw) && strings.IndexByte("$`\"\\\n", raw[j+1]) >= 0 {
+					j++
+				}
+				plain(raw[j])
+			}
+			if j >= len(raw) {
+				return "", false
+			}
+			b.WriteString(quoteMark)
+			i = j
 		case '\\':
 			if i+1 < len(raw) {
 				i++
-				b.WriteByte(raw[i])
+				plain(raw[i])
 			}
+		case '(':
+			return "", false
 		default:
 			b.WriteByte(c)
 		}
@@ -499,20 +575,36 @@ func markQuotes(raw string) (string, bool) {
 	return b.String(), true
 }
 
+// unquoteOnce returns the text a command such as eval gets from the raw
+// text of a word: the quotes and backslashes of one level removed. ok is
+// false for a quote that does not close.
+func unquoteOnce(raw string) (string, bool) {
+	chars, ok := quotedChars(raw)
+	if !ok {
+		return "", false
+	}
+	return plainQuotedChars(chars), true
+}
+
 // unreadWord returns a word of the command that the name rule cannot read
 // and that can be a protected path: a word with a brace list of more words
 // than maxBraceWords, and the name of the shell option `nocaseglob`. The
-// word is expanded here up to maxUnreadBraceWords words. Each word it makes
-// is read from every place a path can start in it, under the home directory
-// for a tilde, and under the working directory, each base and each directory
-// the command names for a relative path. The path is walked over the file
+// word is expanded here up to maxUnreadBraceWords words, as bash expands it
+// and, when the word holds a command text (eval 'cmd PATH'), as the command
+// that reads the text again expands it. Each word it makes is read from
+// every place a path can start in it, under the home directory for a
+// tilde, and under the working directory, each base and each directory the
+// command names for a relative path. The path is walked over the file
 // system (pathWalker) and compared with the protected paths part by part. A
-// word that makes more words, that holds $'...' text, or whose walk needs
-// more steps than the check reads, is returned without a comparison.
+// word that makes more words, that holds $'...' text, a control character,
+// an extglob pattern, or whose walk needs more steps than the check reads,
+// is returned without a comparison.
 func unreadWord(cmd string, toks []shellToken, bases, prefixes []string) string {
 	var walker *pathWalker
 	var forms []protectedForm
 	var dirs, homes []string
+	var dirsOver, dirUnknown bool
+	starts := 0
 	for _, t := range toks {
 		if t.kind != tokWord {
 			continue
@@ -524,30 +616,67 @@ func unreadWord(cmd string, toks []shellToken, bases, prefixes []string) string 
 		if !strings.ContainsRune(word, '{') {
 			continue
 		}
+		if len(t.raw) > maxUnreadWordLen {
+			if !holdsLiveBrace(t.raw) {
+				continue // a long quoted text such as JSON makes no list
+			}
+			return word
+		}
 		if made, ok := expandBraces(homeVarRe.ReplaceAllString(t.raw, "~")); ok && !holdsBraceList(made) {
 			continue // the other rules read each word of the list
 		}
 		if strings.Contains(t.raw, "$'") || strings.Contains(t.raw, "$\"") {
 			return word
 		}
-		marked, ok := markQuotes(t.raw)
-		if !ok {
-			return word
+		for i := 0; i < len(t.raw); i++ {
+			if t.raw[i] < 0x08 {
+				return word // a control byte can stand for a mark of this reader
+			}
 		}
-		marked = homeVarRe.ReplaceAllString(marked, "~")
-		made, ok := expandLongBraces(marked, maxUnreadBraceWords)
-		if !ok {
-			return word
+		if extglobOpenRe.MatchString(cmd) {
+			return word // @(...) and the like: a pattern the check does not expand
+		}
+		readings := []string{t.raw}
+		if text, ok := unquoteOnce(t.raw); ok && text != t.raw && strings.ContainsAny(text, " \t\n;|&()<>`") {
+			readings = append(readings, text)
+		}
+		var made []string
+		for _, r := range readings {
+			marked, ok := markQuotes(r)
+			if !ok {
+				return word
+			}
+			marked = homeVarRe.ReplaceAllString(marked, "~")
+			words, ok := expandLongBraces(marked, maxUnreadBraceWords)
+			if !ok || len(made)+len(words) > maxUnreadBraceWords {
+				return word
+			}
+			for _, w := range words {
+				made = append(made, plainMarkRestore.Replace(w))
+			}
 		}
 		if walker == nil {
 			walker = newPathWalker()
 			forms = protectedForms(prefixes)
-			dirs = walkDirs(toks, bases)
+			dirs, dirsOver, dirUnknown = walkDirs(toks, bases)
 			homes = walkHomes(toks)
 		}
+		if dirsOver {
+			return word
+		}
 		for _, e := range made {
-			for _, s := range wordStarts(e) {
+			list, ok := wordStarts(e)
+			if !ok {
+				return word
+			}
+			for _, s := range list {
+				if dirUnknown && (s == ".." || strings.HasPrefix(s, "../")) {
+					return word // under a directory the command names by a variable
+				}
 				for _, text := range startTexts(s, dirs, homes) {
+					if starts++; starts > maxUnreadStarts {
+						return word
+					}
 					var states []walkState
 					if text == "" {
 						states = []walkState{unknownState()}
@@ -619,24 +748,32 @@ func walkHomes(toks []shellToken) []string {
 
 // walkDirs returns the directories a relative word is read under: the
 // working directory, each base, and each directory the command names (env
-// -C DIR, tar -C DIR, cd DIR): the command can run in any of them.
-func walkDirs(toks []shellToken, bases []string) []string {
-	var out []string
+// -C DIR, env -CDIR, --chdir=DIR, tar -C DIR, cd DIR, cd ~/DIR): the command
+// can run in any of them. over is true when there are more than maxWalkDirs
+// of them; the caller fails closed. unknown is true when the command names a
+// directory by a word the check cannot read (cd $D, env -C $D).
+func walkDirs(toks []shellToken, bases []string) (out []string, over, unknown bool) {
 	add := func(d string) {
 		d = filepath.ToSlash(d)
 		if d != "/" {
 			d = strings.TrimRight(d, "/")
 		}
-		if strings.HasPrefix(d, "/") && len(out) < maxWalkDirs && !containsString(out, d) {
-			out = append(out, d)
+		if !strings.HasPrefix(d, "/") || containsString(out, d) {
+			return
 		}
+		if len(out) >= maxWalkDirs {
+			over = true
+			return
+		}
+		out = append(out, d)
 	}
 	if wd, err := os.Getwd(); err == nil {
 		add(wd)
 	}
+	homes := walkHomes(toks)
 	for _, base := range bases {
 		if base == "~" || strings.HasPrefix(base, "~/") {
-			for _, h := range walkHomes(toks) {
+			for _, h := range homes {
 				add(h + base[1:])
 			}
 			continue
@@ -646,30 +783,63 @@ func walkDirs(toks []shellToken, bases []string) []string {
 		}
 	}
 	roots := append([]string{}, out...)
-	for _, t := range toks {
-		if t.kind != tokWord || t.unresolved || t.value == "" || strings.ContainsAny(t.value, "{}*?[") {
+	for i, t := range toks {
+		if t.kind != tokWord {
 			continue
 		}
-		v := t.value
-		if i := strings.IndexByte(v, '='); i >= 0 && strings.HasPrefix(v, "--") {
-			v = v[i+1:] // --chdir=DIR
-		}
-		if v == "" || v[0] == '-' || len(v) > maxResolvePathLen {
-			continue
-		}
-		var cands []string
-		if strings.HasPrefix(v, "/") {
-			cands = []string{v}
-		} else {
-			for _, r := range roots {
-				cands = append(cands, r+"/"+v)
+		if t.unresolved {
+			prev := ""
+			if i > 0 && toks[i-1].kind == tokWord {
+				prev = toks[i-1].value
 			}
+			switch {
+			case prev == "cd" || prev == "pushd" || prev == "-C" || prev == "--chdir" || prev == "--directory",
+				strings.HasPrefix(t.value, "-C"), strings.HasPrefix(t.value, "--chdir="), strings.HasPrefix(t.value, "--directory="):
+				unknown = true
+			}
+			continue
 		}
-		for _, c := range cands {
-			if fi, err := os.Stat(c); err == nil && fi.IsDir() {
-				add(c)
+		if t.value == "" || strings.ContainsAny(t.value, "{}*?[") {
+			continue
+		}
+		var vals []string
+		v := t.value
+		switch {
+		case strings.HasPrefix(v, "--"):
+			if i := strings.IndexByte(v, '='); i >= 0 {
+				vals = []string{v[i+1:]} // --chdir=DIR
+			}
+		case strings.HasPrefix(v, "-"):
+			// A short option with its value glued on: -CDIR, -xCDIR.
+			for k := 2; k < len(v) && k <= 16 && v[k-1] != '/'; k++ {
+				vals = append(vals, v[k:])
+			}
+		default:
+			vals = []string{v}
+		}
+		for _, v := range vals {
+			if v == "" || len(v) > maxResolvePathLen {
+				continue
+			}
+			var cands []string
+			switch {
+			case strings.HasPrefix(v, "/"):
+				cands = []string{v}
+			case v == "~" || strings.HasPrefix(v, "~/"):
+				for _, h := range homes {
+					cands = append(cands, h+v[1:])
+				}
+			default:
+				for _, r := range roots {
+					cands = append(cands, r+"/"+v)
+				}
+			}
+			for _, c := range cands {
+				if fi, err := os.Stat(c); err == nil && fi.IsDir() {
+					add(c)
+				}
 			}
 		}
 	}
-	return out
+	return out, over, unknown
 }

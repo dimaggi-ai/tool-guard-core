@@ -56,6 +56,14 @@ var plainShellLongOptions = map[string]bool{
 	"--norc": true, "--noprofile": true, "--verbose": true, "--noediting": true,
 }
 
+// knownShellLongOptions are the long options of bash that take no value
+// and do not only change how it runs its commands.
+var knownShellLongOptions = map[string]bool{
+	"--login": true, "--posix": true, "--restricted": true, "--debugger": true,
+	"--dump-strings": true, "--dump-po-strings": true, "--help": true,
+	"--version": true, "--pretty-print": true, "--wordexp": true,
+}
+
 // parseShellCall reads the arguments of a shell call: args are the words
 // after the program name. fish has an option list of its own; every other
 // shell in shellInterpreters is read as a POSIX shell.
@@ -131,8 +139,16 @@ func parsePOSIXShellCall(args []shellToken) shellCall {
 			case v == "--rcfile" || v == "--init-file":
 				c.runsInput, c.plain = true, false
 				i++ // the file name
-			case !plainShellLongOptions[v]:
+			case v == "--emulate":
 				c.plain = false
+				i++ // zsh --emulate MODE
+			case plainShellLongOptions[v]:
+			case knownShellLongOptions[v] || strings.HasPrefix(v, "--emulate="):
+				c.plain = false
+			default:
+				// An option this check does not know can take the next word
+				// as its value, so each word from here on can be the text.
+				return unknownShellRest(c, args, i-1)
 			}
 			continue
 		}
@@ -263,6 +279,37 @@ func parseFishCall(args []shellToken) shellCall {
 		w := args[i]
 		v := w.value
 		if w.unresolved {
+			if m := w.marked; len(m) > 1 && m[0] == '-' && m[1] != '-' {
+				// A cluster of short options whose value holds an expansion
+				// (fish -C"sh -c '... $X'"): the letters before the first
+				// expansion are read, and the value of a letter that takes
+				// one is the rest of the word.
+				i++
+				valued := false
+				for k := 1; k < len(m); k++ {
+					ch := m[k]
+					if strings.IndexByte(fishValueLetters, ch) >= 0 {
+						if k+1 < len(m) {
+							apply(ch, gluedTailToken(w, k+1), true)
+						} else if i < len(args) {
+							apply(ch, args[i], true)
+							i++
+						} else {
+							apply(ch, shellToken{}, false)
+						}
+						valued = true
+						break
+					}
+					if ch == shellUnresolvedMark || strings.IndexByte(fishFlagLetters, ch) < 0 {
+						return unknownShellRest(c, args, i-1)
+					}
+					apply(ch, shellToken{}, false)
+				}
+				if !valued {
+					return unknownShellRest(c, args, i-1)
+				}
+				continue
+			}
 			name, ok := unresolvedLongOption(w)
 			if !ok {
 				return unknownShellRest(c, args, i)
