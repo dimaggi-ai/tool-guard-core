@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"unicode"
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 )
@@ -23,21 +22,20 @@ var applyPatchMarkers = []string{
 	"*** Move to:",
 }
 
-// applyPatchTextKey reports whether a parameter can carry the patch text:
-// command and its aliases (cmd, CommandLine, ...), input and patch, in any
-// letter case and with _ - . or space between the words. A harness may act on
-// any of them, so all are read.
+// applyPatchTextKeys are the normalised parameter names that can carry the
+// patch text: command and its aliases (cmd, CommandLine, ...), input, patch
+// and the other names a harness has been seen to put a patch under (diff,
+// text, body). normaliseHookKey folds case and drops _ - . and space, so
+// patch_text and patchText match here too. A harness may act on any of them,
+// so all are read.
+var applyPatchTextKeys = map[string]bool{
+	"input": true, "patch": true, "patchtext": true, "diff": true, "text": true, "body": true,
+}
+
+// applyPatchTextKey reports whether a parameter can carry the patch text.
 func applyPatchTextKey(k string) bool {
-	var b strings.Builder
-	for _, r := range k {
-		switch r {
-		case '_', '-', ' ', '.':
-		default:
-			b.WriteRune(unicode.ToLower(r))
-		}
-	}
-	n := b.String()
-	return n == "input" || n == "patch" || commandAliasNames[n]
+	n := normParamName(k)
+	return applyPatchTextKeys[n] || commandAliasNames[n]
 }
 
 // applyPatchText returns the patch text of an apply_patch call. Codex CLI
@@ -66,6 +64,36 @@ func applyPatchText(params map[string]json.RawMessage) string {
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+// applyPatchWorkDirKey reports whether a parameter names the directory a
+// relative patch path stands in.
+func applyPatchWorkDirKey(k string) bool {
+	n := normParamName(k)
+	return n == "workdir" || n == "workdirectory"
+}
+
+// collapseDotParts removes the empty and "." components of a path, which the
+// kernel skips, so .claude/./settings.json and .claude//settings.json match a
+// policy the way path.Join used to make them match. It keeps "..": the check
+// resolves links physically, and popping ".." lexically would hide a link.
+func collapseDotParts(p string) string {
+	if !strings.Contains(p, "//") && !strings.Contains(p, "/.") && !strings.Contains(p, "./") {
+		return p
+	}
+	parts := strings.Split(p, "/")
+	kept := parts[:0:0]
+	for i, c := range parts {
+		if (c == "" || c == ".") && i > 0 {
+			continue
+		}
+		kept = append(kept, c)
+	}
+	out := strings.Join(kept, "/")
+	if out == "" && strings.HasPrefix(p, "/") {
+		out = "/"
+	}
+	return out
 }
 
 // applyPatchTargets returns every path the patch text names and the lines the
@@ -114,6 +142,23 @@ func applyPatchEnvelopes(base *domain.ActionEnvelope, cwd string) (envs []*domai
 	if json.Unmarshal(base.Parameters, &params) != nil {
 		return nil, "", false
 	}
+	// A workdir in the tool input places a relative patch path, as cwd does
+	// for the harness call. It is kept only when it is not absolute: the
+	// engine already joins a relative parameter named cwd, workdir or
+	// workingDir onto the absolute directories of the call, so joining an
+	// absolute one here would drop the "workdir" key the engine needs for
+	// that and leave the relative directory unseen.
+	var relWorkDirs []string
+	for _, k := range sortedKeys(params) {
+		if applyPatchWorkDirKey(k) {
+			var d string
+			if json.Unmarshal(params[k], &d) == nil {
+				if d = strings.TrimSpace(d); d != "" && !strings.HasPrefix(d, "/") {
+					relWorkDirs = append(relWorkDirs, strings.TrimRight(d, "/"))
+				}
+			}
+		}
+	}
 	text := applyPatchText(params)
 	targets, added := applyPatchTargets(text)
 	if len(targets) == 0 {
@@ -128,11 +173,7 @@ func applyPatchEnvelopes(base *domain.ActionEnvelope, cwd string) (envs []*domai
 		if target == "" {
 			return nil, "apply_patch names a file with an empty path", true
 		}
-		if !strings.HasPrefix(target, "/") && strings.HasPrefix(cwd, "/") {
-			// Not path.Join: it removes "link/.." lexically, and the kernel
-			// follows the link first. The check resolves links itself.
-			target = strings.TrimRight(cwd, "/") + "/" + target
-		}
+		absolute := strings.HasPrefix(target, "/")
 		mm := make(map[string]json.RawMessage, len(params)+2)
 		for k, v := range params {
 			// The patch text is not a shell command. On the key command
@@ -142,17 +183,49 @@ func applyPatchEnvelopes(base *domain.ActionEnvelope, cwd string) (envs []*domai
 			}
 		}
 		mm["patch"] = patch
-		fp, _ := json.Marshal(target)
-		mm["file_path"] = fp
 		mm["content"] = content
-		b, err := json.Marshal(mm)
-		if err != nil {
-			return nil, "apply_patch parameters could not be encoded", true
+		dirs := []string{""}
+		if !absolute {
+			if strings.HasPrefix(cwd, "/") {
+				dirs = append(dirs, strings.TrimRight(cwd, "/"))
+			}
+			for _, wd := range relWorkDirs {
+				if strings.HasPrefix(cwd, "/") {
+					// Absolute, so the engine joins the bare target onto it.
+					dirs = append(dirs, strings.TrimRight(cwd, "/")+"/"+wd)
+				}
+				dirs = append(dirs, wd)
+			}
 		}
-		e := *base
-		e.Parameters = b
-		e.EnvelopeID = fmt.Sprintf("%s-patch-%d", base.EnvelopeID, i+1)
-		envs = append(envs, &e)
+		for j, d := range dirs {
+			// Not path.Join: it removes "link/.." lexically, and the kernel
+			// follows the link first. The check resolves links itself.
+			full := collapseDotParts(d + "/" + target)
+			if full == "" {
+				full = "."
+			}
+			fp, _ := json.Marshal(full)
+			mm["file_path"] = fp
+			b, err := json.Marshal(mm)
+			if err != nil {
+				return nil, "apply_patch parameters could not be encoded", true
+			}
+			e := *base
+			e.Parameters = b
+			e.EnvelopeID = fmt.Sprintf("%s-patch-%d-%d", base.EnvelopeID, i+1, j+1)
+			envs = append(envs, &e)
+		}
 	}
 	return envs, "", true
+}
+
+// sortedKeys returns the keys of params in order, so the envelopes built from
+// them do not depend on map iteration order.
+func sortedKeys(m map[string]json.RawMessage) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	sort.Strings(ks)
+	return ks
 }

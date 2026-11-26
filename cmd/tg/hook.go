@@ -78,7 +78,7 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	protectSelf := fs.Bool("protect-self", false, "shorthand: also protect the policy dir/file and $HOME/.claude from writes")
 	auditLog := fs.String("audit-log", "", "append each hook decision to this SHA-256 hash-chained JSONL log (tamper-evident, verify with `tg verify`); empty disables")
 	unknownToolsDeny := fs.Bool("unknown-tools-deny", false, "deny any tool_name not declared in scope.tool_names of some loaded ENFORCEMENT policy (closes the tool-name-spoofing/new-tool-goes-ungoverned class); mirrors tg-proxy's -unknown-tools-deny")
-	dispatch := fs.String("dispatch", "", "gh_read: after policy evaluation allows a Bash call, allow verified gh reads; validated literal pwd/ls return no decision in the claude dialect and ask in other dialects; everything else asks and every internal error denies")
+	dispatch := fs.String("dispatch", "", "gh_read: after policy evaluation allows a shell tool call (a known shell tool name or any tool in group shell), allow verified gh reads; validated literal pwd/ls return no decision in the claude dialect and ask in other dialects; everything else asks and every internal error denies")
 
 	parseErr := fs.Parse(args)
 	// Until input is decoded, auto has no known harness. Include both
@@ -267,7 +267,7 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	// A tool input that is not an object, or a command that is not a
 	// string (or a string array for apply_patch), cannot be evaluated. Before,
 	// such a call got an empty parameter object and was allowed.
-	if why := hookInputMalformed(in); why != "" && !(dispatching && dispatchShellTool(tool) && dispatchCommandMalformed(in)) {
+	if why := hookInputMalformed(in); why != "" && !(dispatching && dispatchShellTool(env) && dispatchCommandMalformed(in, tool)) {
 		if d, reason := failDecide(tool); d == "deny" {
 			emitAudited(d, reason+": "+why, nil)
 			return 0
@@ -305,7 +305,7 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	}
 
 	dec, reason, result, auditPolicyHash := evalHook(*policyDir, *policyFile, envs, truncatedVariants, mode, failDecide, *unknownToolsDeny)
-	if dispatching && dispatchShellTool(tool) && dec == "allow" {
+	if dispatching && dispatchShellTool(env) && dec == "allow" {
 		dec, reason = dispatchBashEnvelopes(envs, truncatedVariants)
 		if dec == hookNoDecision && dialect != dialectClaude {
 			dec, reason = "ask", "Tool Guard dispatch: this dialect requires an explicit decision for an unrelated command"
@@ -337,17 +337,14 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 }
 
 // dispatchShellTool reports whether -dispatch reads the tool as a shell
-// command: the shell tool names the protected-path check reads (Claude Code
-// Bash, Antigravity run_command, Codex exec_command, ...). Before, only
-// "bash" was dispatched, so an Antigravity run_command call kept the plain
-// allow.
-func dispatchShellTool(tool string) bool {
-	switch tool {
-	case "bash", "shell", "sh", "run_command", "run_shell_command", "run", "exec", "command", "terminal",
-		"exec_command", "shell_command", "local_shell", "unified_exec", "container.exec", "powershell", "pwsh":
-		return true
-	}
-	return false
+// command. It shares one predicate with the protected-path check in the
+// engine (engine.IsShellTool) and adds the group test: a shell tool name the
+// hook does not know (run_terminal_cmd, execute_command, ...) still lands in
+// the "shell" group via hookToolGroup, so it is dispatched too. Before, only
+// the listed names were dispatched — an Antigravity run_command call kept the
+// plain allow, and so did any unlisted shell tool.
+func dispatchShellTool(env *domain.ActionEnvelope) bool {
+	return engine.IsShellTool(env.ToolName) || env.ToolGroup == "shell"
 }
 
 // hookNoDecision is the decision value for a proven unrelated command. The
@@ -357,14 +354,21 @@ const hookNoDecision = ""
 
 // dispatchCommandMalformed permits the dispatcher to ask about an invalid
 // command value. Malformed values in other parameter families still deny.
-func dispatchCommandMalformed(in hookInput) bool {
+// A command given as a JSON ARRAY is not such a value: apply_patch is the one
+// tool whose command may be a string array, so for any other tool an array
+// command stays malformed and keeps its deny under -dispatch.
+func dispatchCommandMalformed(in hookInput, tool string) bool {
 	var params map[string]json.RawMessage
 	if json.Unmarshal(in.ToolInput, &params) != nil || params == nil {
 		return false
 	}
+	isPatch := strings.EqualFold(strings.TrimSpace(tool), "apply_patch")
 	invalid := false
 	for key, value := range params {
 		if commandAliasNames[normParamName(key)] {
+			if !isPatch && bytes.HasPrefix(bytes.TrimSpace(value), []byte("[")) {
+				return false
+			}
 			var command string
 			if bytes.Equal(bytes.TrimSpace(value), []byte("null")) || json.Unmarshal(value, &command) != nil {
 				invalid = true
@@ -530,7 +534,10 @@ func applyEscalateAs(flagVal, dec, reason string) (string, string) {
 	if dec != "ask" || flagVal == "ask" {
 		return dec, reason
 	}
-	return "deny", "Escalation returned as a denial (-escalate-as deny): " + reason
+	if flagVal == "deny" {
+		return "deny", "Escalation returned as a denial (-escalate-as deny): " + reason
+	}
+	return "deny", fmt.Sprintf("Escalation returned as a denial (-escalate-as %s treated as deny): %s", flagVal, reason)
 }
 
 // hookReason explains the applied action, not a stricter shadow-only raw
@@ -1112,9 +1119,11 @@ tooling glitch never wedges the agent, but that also means the error is
 never denied either. That default suits local dev; it is not what you want
 once this hook is actually enforcing policy.
 
--dispatch gh_read (enforcement mode only) changes what an allowed Bash call
-returns: a verified gh read allows; a validated literal pwd or ls returns no
-decision in the claude dialect so the client's permission rules apply.
+-dispatch gh_read (enforcement mode only) changes what an allowed call to a
+shell tool returns (a known shell tool name such as Bash, run_command or
+powershell, or any tool name in the shell tool group): a verified gh read
+allows; a validated literal pwd or ls returns no decision in the claude
+dialect so the client's permission rules apply.
 Other dialects ask for pwd or ls, and every other command asks in all
 dialects. Load it without a broad rule that escalates gh commands, because
 escalate outranks allow. Every internal error then denies for every tool,

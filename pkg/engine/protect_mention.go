@@ -228,7 +228,7 @@ var otherTildeRe = regexp.MustCompile(`^~([+-][0-9]*|[A-Za-z0-9._][A-Za-z0-9._-]
 // a path under an open file descriptor (/dev/fd/3/x, /proc/self/fd/3/x). A
 // command can change that directory, or open the descriptor on a directory
 // (exec 3<DIR), before it uses the path, so the directory is not known here.
-var procCwdRe = regexp.MustCompile(`/proc/[^/]+/(task/[^/]+/)?((cwd|root)(/|$)|fd/[^/]+/[^/])|/dev/fd/[^/]+/[^/]`)
+var procCwdRe = regexp.MustCompile(`/proc/[^/]+/(task/[^/]+/)?((cwd|root)(/|$)|fd/[^/]+/[^/])|/dev/(fd|stdin|stdout|stderr)/[^/]`)
 
 // collapseSlashDots removes the empty and "." components of a path, which
 // the kernel skips: /proc/self//cwd and /proc/self/./cwd are /proc/self/cwd.
@@ -252,16 +252,44 @@ func collapseSlashDots(p string) string {
 	return out
 }
 
+// unknownDirRoots are the directories the check reaches only through the
+// file system: /proc and /dev/fd, where a link can stand, and /dev/pts, the
+// directory above the /dev/fd link.
+var unknownDirRoots = []string{"/proc/", "/dev/fd", "/dev/pts/"}
+
 // procPathUnknown reports whether a path goes through a directory the check
 // does not know: procCwdRe matches it once empty and "." components are
-// removed, or it holds ".." under /proc or /dev/fd (/dev/fd is a link into
-// /proc/self, so /dev/fd/../cwd is /proc/self/cwd).
+// removed, or it holds ".." under such a directory. /dev/fd is a link into
+// /proc/self and /dev/pts/../fd reaches it, so /dev/pts/../fd/../cwd is
+// /proc/self/cwd.
 func procPathUnknown(p string) bool {
 	c := collapseSlashDots(p)
 	if procCwdRe.MatchString(c) {
 		return true
 	}
-	return (strings.Contains(c, "/proc/") || strings.Contains(c, "/dev/fd")) && strings.Contains(c, "/..")
+	if !strings.Contains(c, "/..") {
+		return false
+	}
+	for _, root := range unknownDirRoots {
+		if strings.Contains(c, root) {
+			return true
+		}
+	}
+	return false
+}
+
+// procDirUnknown reports whether p names one of those directories, or a path
+// under it, so what it opens is not known here. The file or directory itself
+// is not followed: /dev/stdin, /dev/fd/3 and /proc/self/cwd can each be a
+// directory the shell was given (exec 3<DIR, cd /proc/self).
+func procDirUnknown(p string) bool {
+	c := collapseSlashDots(p)
+	for _, d := range []string{"/dev/fd", "/dev/stdin", "/dev/stdout", "/dev/stderr"} {
+		if c == d || strings.HasPrefix(c, d+"/") {
+			return true
+		}
+	}
+	return strings.HasPrefix(c, "/proc/") && !strings.Contains(c, "/fd/")
 }
 
 // holdsUnknownDir reports whether the word, one of its brace expansions, or
@@ -792,6 +820,40 @@ func shellOnlyReads(cmd string, depth int) bool {
 	return true
 }
 
+// segmentShellCommandOnlyReads reports whether a segment the read-only rule
+// refused is a call of a shell whose every -c command reads and writes no
+// file. The options of the shell are not read: they change what the shell
+// does, which is why the caller does not read the whole call through.
+func segmentShellCommandOnlyReads(seg []shellToken, depth int) bool {
+	words := stripCommandPrefix(commandWords(seg))
+	if len(words) == 0 || words[0].unresolved || words[0].raw != words[0].value {
+		return false
+	}
+	prog := words[0].value
+	for _, dir := range []string{"/usr/bin/", "/bin/"} {
+		if strings.HasPrefix(prog, dir) && !strings.Contains(prog[len(dir):], "/") {
+			prog = prog[len(dir):]
+		}
+	}
+	if !shellInterpreters[prog] {
+		return false
+	}
+	for _, w := range words[1:] {
+		if w.unresolved {
+			return false
+		}
+		if w.value == "-c" || w.value == "--c" || strings.HasPrefix(w.value, "--command") {
+			for _, arg := range shellDashCArgs(words[1:]) {
+				if !shellOnlyReads(arg.marked, depth+1) {
+					return false
+				}
+			}
+			return true
+		}
+	}
+	return false
+}
+
 // segmentOnlyReads is the test of shellOnlyReads for one command of the
 // text.
 func segmentOnlyReads(seg []shellToken, depth int) bool {
@@ -821,22 +883,41 @@ func segmentOnlyReads(seg []shellToken, depth int) bool {
 		return true
 	}
 	if shellInterpreters[prog] {
-		// Only "SHELL -c COMMAND" is read through. Another option can
-		// run code (fish --init-command=…, bash --rcfile F, bash -i).
+		// "SHELL -c COMMAND" is read through, because the text of the
+		// command is read the same way and a rule that denies it denies the
+		// same text when the shell runs it. An option that stands between
+		// the program name and the -c is read by the shell itself and
+		// changes what runs (bash -c -i CMD starts an interactive shell,
+		// bash --rcfile F CMD reads a file), so such a call is not read
+		// through: the name rule denies it when its text names a protected
+		// path. It is read through only when the -c is the plain option on
+		// its own: a cluster that carries it (bash -ce 'cat F') sets an
+		// option of the shell too, and the words after the command string
+		// are handled below. The command text of a call that is not read
+		// through is still read, so a read of a protected file stays
+		// allowed and only a write to it is denied (bash -c -x 'cat F').
 		if len(words) < 3 || words[1].unresolved || words[1].value != "-c" {
 			return false
 		}
-		// An option after -c is read by fish (fish -c CMD --init-command=…)
-		// and changes how bash runs (bash -c -i CMD), so the call is not
-		// read through.
-		for _, w := range words[2:] {
-			if w.unresolved || (len(w.value) > 1 && (w.value[0] == '-' || w.value[0] == '+')) {
-				return false
-			}
+		if len(words) < 3 || words[1].unresolved || words[1].value != "-c" {
+			return false
 		}
 		args := shellDashCArgs(words[1:])
 		if len(args) == 0 {
 			return false
+		}
+		// A word that stands after the command string is a positional
+		// parameter, which no program reads, so it changes nothing. A long
+		// option there is read by the shell itself, not as a positional
+		// (fish -c CMD --init-command CM runs CM2 too), and so is a cluster
+		// of short options (bash -c CMD -i starts an interactive shell);
+		// both stop the reading. A single "-" is the name of the first
+		// positional parameter, a word before the option list (bash -c CMD
+		// - NAME) and is left alone.
+		for _, w := range words[2+len(args):] {
+			if w.unresolved || (len(w.value) > 2 && w.value[0] == '-' && w.value[1] != '+') {
+				return false
+			}
 		}
 		for _, arg := range args {
 			if !shellOnlyReads(arg.marked, depth+1) {
@@ -874,38 +955,165 @@ func unreadWord(cmd string, toks []shellToken, bases, prefixes []string) string 
 		}
 		open := strings.IndexByte(word, '{')
 		head, rest := word[:open], word[open:]
-		// The path can start after an "=" (--file=PATH{...}, out=PATH{...})
-		// and after a short option glued to it (-cfPATH{...}), so each of
-		// these heads is compared.
+		// The path can start after "=", ":" or "@" (--file=PATH{...},
+		// out=PATH{...}, a:PATH{...}, @PATH{...}), after a "/" that stands
+		// in front of it (the relative path glued to an option: tar
+		// -cf.claude/PATH{...}), and after the dash and the letters of a
+		// short option glued to it (tar -cfPATH{...}, python -oPATH{...}: a
+		// glued value with no slash at all). Each of these heads is
+		// compared.
 		heads := []string{head}
-		if eq := strings.LastIndexByte(head, '='); eq >= 0 {
-			heads = append(heads, head[eq+1:])
+		add := func(v string) {
+			if v != "" && v != head && !containsString(heads, v) {
+				heads = append(heads, v)
+			}
+		}
+		for i := 0; i < len(head); i++ {
+			if head[i] == '=' || head[i] == ':' || head[i] == '@' || head[i] == '/' {
+				add(head[i+1:])
+			}
 		}
 		if strings.HasPrefix(head, "-") {
 			if j := strings.IndexAny(head, "/~"); j > 0 {
-				heads = append(heads, head[j:])
+				add(head[j:])
+			}
+			// The option letters of a cluster of at most eight of them, with
+			// no dash among them: -cfPATH{...} puts the file after "cf".
+			for k := 2; k <= 8 && k < len(head); k++ {
+				if !strings.ContainsRune(head[1:k], '-') {
+					add(head[k:])
+				}
 			}
 		}
 		tails, ok := expandLongBraces(rest, maxUnreadBraceWords)
 		if !ok {
 			return word
 		}
+		// The text as the shell reads it, quotes kept, is compared too, so
+		// an empty alternative of a brace list, which leaves the rest of the
+		// word as text (`> {PATH,{a}}`), is not missed. So is the whole word,
+		// read as it stands when the path starts inside the braces
+		// (`{/HOME/lnk/..,{1..70}}/P`): there the list, not only the text in
+		// front of it, is a head. When the token holds a real expansion such
+		// as $HOME, word already holds the "~" form, so adding the raw $HOME
+		// text would treat "$HOME" as a literal subdirectory.
+		if word != "" && !containsString(heads, word) {
+			heads = append(heads, word)
+		}
+		if !t.unresolved {
+			if u := unquoteWord(t.raw); u != "" && !containsString(heads, u) {
+				heads = append(heads, u)
+			}
+		}
+		// The EvalSymlinks and Lstat results are kept for the whole word: a
+		// list of 4096 words asks the same directories over and over, and one
+		// system call per word costs seconds against the time budget of the
+		// check.
+		cache := map[string]string{}
+		lstatCache := map[string]lstatKind{}
+		headUnknown := braceHeadUnknown(word)
+		if headUnknown && wordHasUnknownExpansion(cmd, t) {
+			return word
+		}
 		for _, h := range heads {
-			for _, start := range braceHeadForms(h, bases) {
-				for _, tail := range tails {
-					// pathParts removes ".." lexically, and the kernel
-					// follows a link first (/var/run/../etc), so a ".."
-					// part is resolved with the links on the disk. A ".."
-					// after a part the braces make is not known: it counts
-					// as a match.
-					p, known := physicalDotDot(start + tail)
-					if !known {
+			forms := braceHeadForms(h, bases)
+			if headUnknown && holdsDotDot(h) && len(forms) == 0 {
+				return word
+			}
+			for _, start := range forms {
+				// The last part before the brace list can be a symbolic link
+				// to a directory: a link with no ".." in its name (dlink for
+				// .claude) is followed even when no ".." follows it, so the
+				// link form of the head is compared as well.
+				starts := []string{start}
+				if dir := stdpath.Dir(start); dir != "" && dir != "/" && !strings.Contains(dir, "..") {
+					if r, ok := evalSymlinkCached(cache, dir); ok {
+						if r != dir && strings.HasPrefix(start, dir+"/") {
+							starts = append(starts, r+start[len(dir):])
+						}
+					}
+				}
+				for _, start := range starts {
+					// A start that holds a "/" but begins with an option
+					// letter, a ":" or an "@" is not a path the check reads
+					// from the working directory: it is the tail of an
+					// option (tar -cfDIR/P{...}) or a text the braces left
+					// ({DIR/P,{a}}). The "/" inside it is still a directory
+					// separator for the kernel, so such a word is not
+					// dropped: it fails closed.
+					if pathInsideDir(start) {
 						return word
 					}
-					parts := pathParts(p)
-					for _, prefix := range prefixes {
-						if partsCanMatch(parts, pathParts(prefix)) {
+					if procPathUnknown(start) || procDirUnknown(start) {
+						return word
+					}
+					if pathInsideDir(start + tails[0]) {
+						return word
+					}
+					// The braces of the whole word decide whether its head
+					// has a ".." next to a brace list; see braceHeadUnknown.
+					// Fail closed only when a component before a ".." is a
+					// symbolic link or cannot be determined safely; plain
+					// existing directories and missing paths fall through to
+					// the physical-path check below.
+					if headUnknown && dotDotHeadOverLink(start, lstatCache) {
+						return word
+					}
+					// Each word of the list is resolved with the disk below,
+					// and the EvalSymlinks results of the whole check are
+					// kept in cache, so a list of 4096 words asks each
+					// directory once.
+					for _, tail := range tails {
+						// A path through a directory this check does not
+						// know (/proc/self/cwd, /dev/fd/3, a ".." under
+						// /dev/pts) can name the protected file too, so it
+						// is checked before the ".." parts are resolved with
+						// the disk.
+						if procPathUnknown(start+tail) || procDirUnknown(start+tail) {
 							return word
+						}
+						// A ".." of the tail that a part of the tail
+						// removes, or a ".." that stands right after a part
+						// the braces made, is not known: the name the list
+						// made can be a symbolic link, and the directory the
+						// ".." gives back is the physical parent of that
+						// link. Such a word fails closed.
+						if marksDotDot(tail) || (holdsDotDot(tail) && cancelsDotDot(tail)) {
+							return word
+						}
+						// pathParts removes ".." as text, while the kernel
+						// follows the link in front of it first. So the word
+						// is walked with the disk whenever its text holds a
+						// ".." in the head or in a word of the list: the
+						// kernel applies each ".." to the longest existing
+						// prefix, after resolving the symbolic links of that
+						// prefix, which turns HOME/LNK/../../P into
+						// HOME/.claude/P when LNK is a link into
+						// HOME/.claude/sub. The whole text of the word is
+						// given to the walk, not the head alone, because the
+						// ".." that reaches outside can stand in the part of
+						// the file name, as the second ".." of the example
+						// does. The walk of every word of one list shares
+						// cache, so each directory is asked once. A word of
+						// an unknown directory, a list part that cancels a
+						// ".." as text, or a walk that fails keeps the word
+						// unread: the check fails closed.
+						p := start + tail
+						if holdsDotDot(start) || holdsDotDot(tail) {
+							r := physicalPathCached(start+tail, cache)
+							if r == "" {
+								return word
+							}
+							p = r
+						}
+						if procPathUnknown(p) || procDirUnknown(p) {
+							return word
+						}
+						parts := pathParts(p)
+						for _, prefix := range prefixes {
+							if partsCanMatch(parts, pathParts(prefix)) {
+								return word
+							}
 						}
 					}
 				}
@@ -915,31 +1123,227 @@ func unreadWord(cmd string, toks []shellToken, bases, prefixes []string) string 
 	return ""
 }
 
-// physicalDotDot resolves the ".." parts of p with the links on the disk.
-// known is false when a ".." part comes after a part that holds a sequence
-// mark, or when the path cannot be resolved.
-func physicalDotDot(p string) (string, bool) {
-	parts := strings.Split(p, "/")
-	marked, dotDot := false, false
-	for _, part := range parts {
+// holdsDotDot reports whether p has a ".." part.
+func holdsDotDot(p string) bool {
+	for _, part := range strings.Split(p, "/") {
 		if part == ".." {
-			if marked {
-				return "", false
+			return true
+		}
+	}
+	return false
+}
+
+// maxDotDotComponents bounds the number of path components before ".." that
+// dotDotHeadOverLink inspects with os.Lstat.
+const maxDotDotComponents = 128
+
+// lstatKind records the outcome of one os.Lstat call for a directory prefix
+// in front of "..".
+type lstatKind uint8
+
+const (
+	lstatUnknown  lstatKind = iota
+	lstatDir                // plain existing directory
+	lstatNotExist           // does not exist on disk
+	lstatUnsafe             // symbolic link, non-directory, or other Lstat error
+)
+
+// lstatCached memoizes os.Lstat results for one check so a long brace word or
+// multiple bases inspect each directory prefix at most once.
+func lstatCached(cache map[string]lstatKind, p string) lstatKind {
+	if k, ok := cache[p]; ok {
+		return k
+	}
+	fi, err := os.Lstat(p)
+	var k lstatKind
+	switch {
+	case err == nil:
+		if fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir() {
+			k = lstatUnsafe
+		} else {
+			k = lstatDir
+		}
+	case os.IsNotExist(err):
+		k = lstatNotExist
+	default:
+		k = lstatUnsafe
+	}
+	cache[p] = k
+	return k
+}
+
+// wordHasUnknownExpansion reports whether tok contains an unresolved shell
+// expansion other than $HOME / ${HOME} (or $HOME when cmd itself assigns
+// HOME=).
+func wordHasUnknownExpansion(cmd string, tok shellToken) bool {
+	if !tok.unresolved {
+		return false
+	}
+	if strings.Contains(cmd, "HOME=") {
+		return true
+	}
+	replaced := homeVarRe.ReplaceAllString(tok.raw, "~")
+	if replaced == tok.raw {
+		return true
+	}
+	for _, rt := range tokenizeShell(replaced) {
+		if rt.unresolved {
+			return true
+		}
+	}
+	return false
+}
+
+// braceWordDotDotOverLink reports whether any candidate path head of word
+// (including values after "=", ":", "@" or a glued short option) resolves
+// under bases to a path with a symbolic link or unsafe component before "..".
+func braceWordDotDotOverLink(word string, bases []string, cache map[string]lstatKind) bool {
+	head := word
+	if open := strings.IndexByte(word, '{'); open >= 0 {
+		head = word[:open]
+	}
+	heads := []string{word}
+	add := func(v string) {
+		if v != "" && !containsString(heads, v) {
+			heads = append(heads, v)
+		}
+	}
+	for i := 0; i < len(head); i++ {
+		if head[i] == '=' || head[i] == ':' || head[i] == '@' {
+			add(head[i+1:])
+		}
+	}
+	if strings.HasPrefix(head, "-") {
+		if j := strings.IndexAny(head, "/~"); j > 0 {
+			add(head[j:])
+		}
+		for k := 2; k <= 8 && k < len(head); k++ {
+			if !strings.ContainsRune(head[1:k], '-') {
+				add(head[k:])
 			}
-			dotDot = true
+		}
+	}
+	for _, h := range heads {
+		if !holdsDotDot(h) {
+			continue
+		}
+		forms := braceHeadForms(h, bases)
+		if len(forms) == 0 {
+			return true
+		}
+		for _, start := range forms {
+			if dotDotHeadOverLink(start, cache) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// dotDotHeadOverLink reports whether any path component in front of a ".." in
+// p is a symbolic link on disk or cannot be determined safely (an Lstat error
+// other than not-exist, a non-directory entry before "..", an unknown variable
+// or shell pattern character, a relative path, or more than
+// maxDotDotComponents components). Plain existing directories and components
+// that do not exist at all return false.
+func dotDotHeadOverLink(p string, cache map[string]lstatKind) bool {
+	if !holdsDotDot(p) {
+		return false
+	}
+	if len(p) > maxResolvePathLen {
+		return true
+	}
+	var root, rest string
+	if strings.HasPrefix(p, "/") {
+		root = "/"
+		rest = p[1:]
+	} else if v := volumeNameOf(p); v != "" && len(v) == 2 && v[1] == ':' {
+		if len(p) < 3 || p[2] != '/' {
+			return true
+		}
+		root = v + "/"
+		rest = p[3:]
+	} else {
+		return true
+	}
+	rawParts := strings.Split(rest, "/")
+	lastDotDot := -1
+	for i, part := range rawParts {
+		if part == ".." {
+			lastDotDot = i
+		}
+	}
+	if lastDotDot < 0 {
+		return false
+	}
+	if lastDotDot > maxDotDotComponents {
+		return true
+	}
+	var stack []string
+	missingDepth := 0
+	for _, part := range rawParts[:lastDotDot] {
+		switch part {
+		case "", ".":
+			continue
+		case "..":
+			if missingDepth > 0 {
+				missingDepth--
+			}
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
+			}
+		default:
+			if strings.ContainsAny(part, "$`*?[{}]"+numberSeqMark+otherSeqMark) {
+				return true
+			}
+			stack = append(stack, part)
+			if missingDepth > 0 {
+				missingDepth++
+				continue
+			}
+			cur := root + strings.Join(stack, "/")
+			switch lstatCached(cache, cur) {
+			case lstatDir:
+			case lstatNotExist:
+				missingDepth = 1
+			default:
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// marksDotDot reports whether p has a ".." part that comes after a part with
+// a sequence mark, that is, after a part the braces made and no name on the
+// disk can be matched with.
+func marksDotDot(p string) bool {
+	marked := false
+	for _, part := range strings.Split(p, "/") {
+		if part == ".." && marked {
+			return true
 		}
 		if strings.ContainsAny(part, numberSeqMark+otherSeqMark) {
 			marked = true
 		}
 	}
-	if !dotDot {
-		return p, true
+	return false
+}
+
+// cancelsDotDot reports whether the text of a path holds a ".." part that a
+// later part removes as text, that is, a ".." with a part after it that is
+// not "..". Such a pair is resolved by the file system, not by the text: the
+// directory the ".." gives back is the target of the link in front of it, and
+// the part after it can be a name the braces made. The check does not follow
+// such a path, so it fails closed.
+func cancelsDotDot(p string) bool {
+	parts := strings.Split(p, "/")
+	for i, part := range parts {
+		if part == ".." && i+1 < len(parts) && parts[i+1] != ".." {
+			return true
+		}
 	}
-	r := physicalPath(p)
-	if r == "" {
-		return "", false
-	}
-	return r, true
+	return false
 }
 
 // holdsBraceList reports whether one of the words still holds a brace list
@@ -1064,6 +1468,313 @@ func expandLongBraces(s string, limit int) (out []string, ok bool) {
 	return []string{s}, true
 }
 
+// braceListHoldsDir reports whether an unquoted brace list inside the head
+// has an alternative that holds a "/". Such an alternative names a directory
+// in every word the list makes (a file name has no "/"), so a ".." right
+// after such a list can be the ".." of that directory, whose physical parent
+// the check does not know. A list of plain file names ("free/../free", where
+// the list is made by other text) does not show this.
+func braceListHoldsDir(head string) bool {
+	for i := 0; i < len(head); i++ {
+		if head[i] != '{' {
+			continue
+		}
+		end := openBraceEnd(head, i)
+		if end < 0 {
+			continue
+		}
+		if alts, list := rawBraceAlts(head[i+1 : end]); list {
+			for _, alt := range alts {
+				if strings.Contains(alt, "/") {
+					return true
+				}
+			}
+		} else if numberSeqRe.MatchString(head[i+1:end]) || letterSeqRe.MatchString(head[i+1:end]) {
+			// A sequence expression makes one word of unknown text, so a
+			// part it stands in can be any name, a directory among them.
+			return true
+		}
+		i = end
+	}
+	return false
+}
+
+// pathInsideDir reports whether the text of a brace word can name a path
+// under a directory this check does not read, because a part the check does
+// not treat as a directory stands in front of a "/": an option glued to a
+// relative path (tar -cf.claude/P{...}), a separator an option takes
+// (a:DIR/P{...}, @DIR/P{...}), or an empty brace alternative that keeps the
+// rest of the word as text ({DIR/P,{a}}). Such a word can be the protected
+// file under another spelling, so it fails closed.
+func pathInsideDir(p string) bool {
+	return strings.HasPrefix(p, "-") && strings.Contains(p, "/")
+}
+
+// literalBraceAlternatives returns the texts of a redirect target that the
+// word reader does not expand: the target as the shell got it and, when its
+// braces stand outside quoting, the words its brace lists make. A target
+// whose every brace is quoted makes no list in bash, so only the text as it
+// stands is returned.
+func literalBraceAlternatives(raw string) []string {
+	out := []string{raw}
+	if strings.ContainsRune(raw, '{') && !allBracesQuoted(raw) {
+		for _, w := range []string{unquoteWord(raw), expandRawBraces(raw)} {
+			if w != "" && !containsString(out, w) {
+				out = append(out, w)
+			}
+		}
+	}
+	return out
+}
+
+// quoteOrPlain copies one quoted run, one backslash pair or one plain
+// character of s from i into b, and returns the index after it.
+func quoteOrPlain(b *strings.Builder, s string, i int) int {
+	switch c := s[i]; c {
+	case '\'', '"':
+		for j := i + 1; j < len(s); j++ {
+			if s[j] == c {
+				b.WriteString(s[i : j+1])
+				return j + 1
+			}
+		}
+		b.WriteString(s[i:]) // an unterminated quote: the text as it stands
+		return len(s)
+	case '\\':
+		if i+1 < len(s) {
+			b.WriteString(s[i : i+2])
+			return i + 2
+		}
+		b.WriteString(s[i:])
+		return len(s)
+	default:
+		b.WriteByte(c)
+		return i + 1
+	}
+}
+
+// openBraceEnd returns the index of the "}" that closes the "{" at i of s,
+// or -1 when none does. Quoted braces and backslashes are not counted.
+func openBraceEnd(s string, i int) int {
+	depth := 0
+	for j := i; j < len(s); {
+		switch s[j] {
+		case '\'', '"':
+			closed := false
+			for k := j + 1; k < len(s); k++ {
+				if s[k] == s[j] {
+					j = k + 1
+					closed = true
+					break
+				}
+			}
+			if !closed {
+				return -1
+			}
+			continue
+		case '\\':
+			j += 2
+			continue
+		case '{':
+			depth++
+		case '}':
+			if depth--; depth == 0 {
+				return j
+			}
+		}
+		j++
+	}
+	return -1
+}
+
+// expandRawBraces returns the raw text of a word with the brace lists that
+// stand outside quoting expanded as bash expands them, keeping the quotes of
+// the words it makes. Several words are returned in one text, kept apart by
+// a blank. "" means the word makes more words than the check reads, or holds
+// a quote that does not close, so the caller fails closed on the word.
+func expandRawBraces(raw string) string {
+	var b strings.Builder
+	i := 0
+	for i < len(raw) {
+		if raw[i] != '{' {
+			i = quoteOrPlain(&b, raw, i)
+			continue
+		}
+		end := openBraceEnd(raw, i)
+		if end < 0 {
+			return "" // an unterminated quote or a brace that never closes
+		}
+		body := raw[i+1 : end]
+		// A group that is not a list keeps its braces: bash leaves them in
+		// the word, and the file the shell makes carries them. A text
+		// search cannot tell a list here: it stops its brackets at the first
+		// inner brace, so the comma of `{PATH,{a}}`, whose second
+		// alternative is a group of one word, is not seen. The body is
+		// asked for a comma at its own depth instead, and each alternative
+		// is expanded again, so the inner group is expanded as bash expands
+		// it.
+		mids := []string{raw[i : end+1]}
+		if alts, list := rawBraceAlts(body); list {
+			if alts == nil {
+				return ""
+			}
+			mids = alts
+		}
+		tails, ok := expandRawBracesTail(raw[end+1:])
+		if !ok || len(mids)*len(tails) > maxBraceWords {
+			return ""
+		}
+		for k, mid := range mids {
+			if k > 0 {
+				b.WriteByte(' ')
+			}
+			b.WriteString(mid)
+		}
+		for _, tail := range tails {
+			b.WriteString(tail)
+		}
+		return b.String()
+	}
+	return b.String()
+}
+
+// expandRawBracesTail returns the raw texts that follow a brace group, one
+// per expansion of the lists in it, so the caller can put each tail after the
+// alternatives. A text with no unquoted brace list is one text, and a brace
+// group that is not a list is kept with its braces.
+func expandRawBracesTail(s string) ([]string, bool) {
+	var b strings.Builder
+	i := 0
+	for i < len(s) {
+		if s[i] != '{' {
+			i = quoteOrPlain(&b, s, i)
+			continue
+		}
+		end := openBraceEnd(s, i)
+		if end < 0 {
+			return nil, false
+		}
+		if !holdsCommaAtDepth(s[i+1:end]) && !numberSeqRe.MatchString(s[i+1:end]) && !letterSeqRe.MatchString(s[i+1:end]) {
+			b.WriteString(s[i : end+1]) // not a list: the braces stay
+			i = end + 1
+			continue
+		}
+		inner, ok := expandRawBracesTail(s[i:])
+		if !ok {
+			return nil, false
+		}
+		head := b.String()
+		out := make([]string, 0, len(inner))
+		for _, w := range inner {
+			out = append(out, head+w)
+		}
+		return out, true
+	}
+	return []string{b.String()}, true
+}
+
+// holdsCommaAtDepth reports whether the body of a brace group holds a comma
+// that is not inside a group of its own, the comma that makes bash split the
+// group into alternatives. A text search cannot see it: the comma of
+// {{a},b} stands inside the braces the search cuts off.
+func holdsCommaAtDepth(body string) bool {
+	depth := 0
+	for i := 0; i < len(body); i++ {
+		switch c := body[i]; c {
+		case '\'', '"':
+			j := i + 1
+			for j < len(body) && body[j] != c {
+				j++
+			}
+			i = j
+		case '\\':
+			i++
+		case '{':
+			depth++
+		case '}':
+			if depth > 0 {
+				depth--
+			}
+		case ',':
+			if depth == 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// rawBraceAlts returns the alternatives of a brace body, each expanded in
+// turn, so a group of one word inside a list (`PATH,{a}`) gives the words
+// bash makes. list is false when the body holds no comma at its own depth and
+// no sequence expression, that is, when bash keeps the braces. nil with list
+// true means the body makes more words than the check reads.
+func rawBraceAlts(body string) (out []string, list bool) {
+	if !holdsCommaAtDepth(body) && !numberSeqRe.MatchString(body) && !letterSeqRe.MatchString(body) {
+		return nil, false
+	}
+	depth, last := 0, 0
+	var alts []string
+	for j := 0; j < len(body); j++ {
+		switch c := body[j]; c {
+		case '\'', '"':
+			for j++; j < len(body) && body[j] != c; j++ {
+			}
+		case '\\':
+			j++
+		case '{':
+			depth++
+		case '}':
+			if depth > 0 {
+				depth--
+			}
+		case ',':
+			if depth == 0 {
+				alts = append(alts, body[last:j])
+				last = j + 1
+			}
+		}
+	}
+	if alts == nil {
+		// A sequence expression, or a comma that stands only inside an
+		// inner group.
+		if numberSeqRe.MatchString(body) {
+			return []string{numberSeqMark}, true
+		}
+		if letterSeqRe.MatchString(body) {
+			return []string{otherSeqMark}, true
+		}
+		return nil, false
+	}
+	alts = append(alts, body[last:])
+	for _, alt := range alts {
+		if inner, isList := rawBraceAlts(alt); isList {
+			if inner == nil {
+				return nil, true
+			}
+			out = append(out, inner...)
+			continue
+		}
+		out = append(out, alt)
+		if len(out) > maxBraceWords {
+			return nil, true
+		}
+	}
+	// A sequence expression is one word for bash, not the numbers, so the
+	// caller reads it part by part with the mark still in it: the word that
+	// {1..70} makes is not known, and every part that does not hold it is
+	// compared as text.
+	for _, alt := range alts {
+		if numberSeqRe.MatchString(alt) || letterSeqRe.MatchString(alt) {
+			return []string{alt}, true
+		}
+	}
+	if len(out) > maxBraceWords {
+		return nil, true
+	}
+	return out, true
+}
+
 // pathParts returns the parts of a path between slashes, after `.` and
 // `..` parts are resolved.
 func pathParts(p string) []string {
@@ -1121,12 +1832,24 @@ func braceHeadForms(head string, bases []string) []string {
 	if strings.HasPrefix(head, "~") {
 		return nil // ~+, ~-, ~NAME: otherTildeWord reads these
 	}
-	if strings.HasPrefix(head, "/") {
+	if head == "" || head[0] == '/' {
 		return []string{head}
 	}
-	// stdpath.Clean keeps a last part that is the start of a file name.
+	// The parts are joined as they stand: stdpath.Clean would remove a
+	// ".." as text, while the kernel follows the link in front of it
+	// (home/lnk/../P is home/.claude/P when lnk links into .claude), and
+	// physicalPath resolves ".." with the disk. Only the empty and "."
+	// parts, which the kernel skips, are dropped.
 	under := func(dir string) string {
-		joined := stdpath.Clean(strings.TrimRight(dir, "/") + "/" + head)
+		parts := strings.Split(strings.TrimRight(dir, "/")+"/"+head, "/")
+		kept := parts[:0:0]
+		for i, c := range parts {
+			if (c == "" || c == ".") && i > 0 {
+				continue
+			}
+			kept = append(kept, c)
+		}
+		joined := strings.Join(kept, "/")
 		if head == "" || strings.HasSuffix(head, "/") {
 			joined = strings.TrimRight(joined, "/") + "/"
 		}
@@ -1142,4 +1865,200 @@ func braceHeadForms(head string, bases []string) []string {
 		}
 	}
 	return out
+}
+
+// braceHeadUnknown reports whether the head of a brace word can name a path
+// the check does not know, that is, whether the word must fail closed
+// instead of being resolved. The braces are read from the raw text of the
+// word, because the check does not know where the list ends: the head can
+// hold a whole list (`{DIR/LNK/..,{1..70}}/P`), the tail of one of its words
+// (`lnk/../settings.{json,{1..70}}`), or a plain path that ends before it.
+//
+// A word whose braces make no list of two or more words names one path as it
+// stands, and a word whose braces make a list of one word adds nothing that
+// is not known (`{DIR/../DIR,{a}}/P`); both are read. A word that makes no
+// list at all — quoted braces, a group of one word, an unclosed group — is
+// read as its text.
+//
+// A list of two or more words is not read when the text of the word holds a
+// ".." that a later part removes. The kernel walks a ".." after following
+// the link in front of it, so the directory the ".." gives back is the
+// physical parent of that link, and the words of the list can be names that
+// are symbolic links, so the check does not know what the word names. This
+// covers both shapes: the ".." right after a word of the list, and the ".."
+// in front of a word of the list, where the name the list made can be the
+// link.
+//
+// A list that makes no such ".." — `DIR/../DIR/{P,Q}`, where no part after
+// the ".." is a word of the list — is left to the disk walk, which resolves
+// it; only the head is given, so the test must ask the whole word.
+func braceHeadUnknown(word string) bool {
+	list, ok := braceListCount(word)
+	if !ok {
+		return true // an unclosed quote or group: the word is not known
+	}
+	if list < 1 {
+		return false // no unquoted list at all: the text names the path
+	}
+	// Where does the list reach? A group makes a directory when an
+	// alternative of it, or the text of the group, holds the "/" of one:
+	// `{DIR/P,{a}}` puts the words of the list under a directory, and the
+	// word after the group is the tail of such a word, so a ".." among the
+	// parts that follow stands after a name the list made and is not known
+	// here.
+	//
+	// A group of file names only (`{json,{1..70}}`) makes no directory: the
+	// path ends at that group, and a ".." of the parts in front of it belongs
+	// to plain text, which the caller walks with the disk. The one exception
+	// is a ".." right in front of such a group: the group can make the name
+	// that stands after the "..", and the directory it gives back is the
+	// physical parent of the part in front of the "..", which is a symbolic
+	// link in `lnk/../settings.{json,{1..70}}`.
+	dirs := map[int]bool{}
+	for i := 0; i < len(word); i++ {
+		if c := word[i]; c == '\'' || c == '"' {
+			k := i + 1
+			for k < len(word) && word[k] != c {
+				k++
+			}
+			if k == len(word) {
+				return true
+			}
+			i = k
+			continue
+		}
+		if word[i] != '{' {
+			continue
+		}
+		end := openBraceEnd(word, i)
+		if end < 0 {
+			return true
+		}
+		body := word[i+1 : end]
+		if strings.Contains(body, "/") {
+			dirs[i] = true
+		} else if alts, isList := rawBraceAlts(body); isList {
+			for _, alt := range alts {
+				if strings.Contains(alt, "/") {
+					dirs[i] = true
+					break
+				}
+			}
+		}
+		i = end
+	}
+	// Which ".." of the word are we left to resolve? Two of them cannot be,
+	// because the file name that stands after them can be a word of the
+	// list, and a word of a list can be the name of a symbolic link whose
+	// physical parent the check does not know.
+	//
+	//   - The ".." of a word of a group that spans it, as the ".." inside
+	//     `{DIR/LNK/..,{1..70}}/P`: the part after it is the last alternative
+	//     of the group, a name the list made.
+	//   - The ".." in front of a part that a group cuts, as the ".." of
+	//     `lnk/../settings.{json,{1..70}}`: the name the group made stands
+	//     after the ".." and can be the link that stands in front of it.
+	//
+	// Every other ".." of a brace word belongs to plain text, which the
+	// caller walks with the disk: `DIR/../DIR/P{json,{1..70}}` gives back
+	// the directory in front of the "..", whatever the list makes after it.
+	parts := strings.Split(word, "/")
+	for k, part := range parts {
+		if part != ".." || k == 0 {
+			continue
+		}
+		if braceCutPart(parts, k) {
+			return true
+		}
+		if braceCutsPartAfter(parts, k) {
+			return true
+		}
+	}
+	return false
+}
+
+// braceCutsPartAfter reports whether the part right after the ".." at index
+// k is cut by an unquoted brace group, that is, whether the list of the word
+// makes the name that follows the ".." of the head
+// (`lnk/../settings.{json,{1..70}}`). A group further down the word lists
+// only file names, which the walk of the caller compares part by part.
+func braceCutsPartAfter(parts []string, k int) bool {
+	if k+1 >= len(parts) {
+		return false
+	}
+	part := parts[k+1]
+	for i := 0; i < len(part); i++ {
+		if part[i] == '{' && openBraceEnd(part, i) >= 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// braceCutPart reports whether a brace group of the word reaches the ".." at
+// part index at of the given parts, that is, whether the parts from the ".."
+// on stand inside an unquoted group. Such a ".." is a part of a word the list
+// made, so the name after it can be a symbolic link and the directory the
+// ".." gives back is not known here. A group that stands after the ".."
+// (`lnk/../settings.{json,{1..70}}`) does not reach it: the caller walks the
+// ".." with the disk and the name the list made is compared part by part.
+func braceCutPart(parts []string, at int) bool {
+	p := strings.Join(parts, "/")
+	// The byte at which the ".." part starts and the byte after it.
+	pos := 0
+	for i := 0; i < at; i++ {
+		pos += len(parts[i]) + 1
+	}
+	end := pos + len(parts[at])
+	for i := 0; i < len(p); i++ {
+		if p[i] != '{' {
+			continue
+		}
+		clo := openBraceEnd(p, i)
+		if clo < 0 {
+			continue
+		}
+		if i < pos && clo >= end {
+			return true // the group spans the ".."
+		}
+		if i >= end {
+			return false // the group stands after the ".."
+		}
+		i = clo
+	}
+	return false
+}
+
+func braceListCount(word string) (list int, ok bool) {
+	for i := 0; i < len(word); i++ {
+		if c := word[i]; c == '\'' || c == '"' {
+			j := i + 1
+			for j < len(word) && word[j] != c {
+				j++
+			}
+			if j == len(word) {
+				return 0, false
+			}
+			i = j
+			continue
+		}
+		switch word[i] {
+		case '\\':
+			i++
+		case '{':
+			end := openBraceEnd(word, i)
+			if end < 0 {
+				return 0, false
+			}
+			alts, isList := rawBraceAlts(word[i+1 : end])
+			if isList {
+				if alts == nil {
+					return maxBraceWords + 1, true
+				}
+				return len(alts), true
+			}
+			i = end
+		}
+	}
+	return 0, true
 }
