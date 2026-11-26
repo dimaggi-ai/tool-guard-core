@@ -44,21 +44,34 @@ the project adheres to [Semantic Versioning](https://semver.org/).
     and may stand in the text of `eval`, `trap` or another quoted command.
     A list the hook cannot read in its bounds is denied;
   - a relative path with `..` after a directory that the command changes to
-    with a value the hook cannot read, such as `cd $D` or `env -C"$D"`, and
-    after a directory glued to `-C`, such as `env -Clnk`. The directory is
-    read under the cwd of the tool call, also when the hook process runs in
-    another directory;
+    with a value the hook cannot read, such as `cd $D` or `env -C"$D"`;
+  - a relative path after a directory glued to `-C`, such as `env -Clnk`. The
+    directory is read under the cwd of the tool call, also when the hook
+    process runs in another directory;
   - a write to `/dev/stdout` or `/dev/stderr` when that stream may be a
     file opened for reading, such as `cat 2< P 2>/dev/stderr` or
     `exec 1>&0; echo x > /dev/stdout`;
   - a brace list in a word with an extended glob pattern, such as
-    `@(settings)`.
+    `@(settings)`;
+  - a redirect written as `>|`, `>!`, `>>!`, `&>!`, `&>>!` or `>?`, and a
+    redirect after a descriptor move such as `1>&0-`;
+  - a name split by a backslash, quotes and a newline, which `eval` or
+    `bash -c` joins into one word;
+  - a name written with `$'...'` escapes, such as `$'.cl\x61ude'`, also in
+    the text of `eval`.
+- After a directory change the hook cannot resolve, a relative word whose last part can be the protected file name is denied.
+- The hook reads brace lists, escapes and nested texts within a work counter.
+  A command over the counter is denied. Deeply nested brace lists and very
+  long words end in well under a second.
 - One call that was denied before is now allowed: a read inside `bash -c`
   after an option that does not change what runs, such as `-e`, `-x` or
   `--norc`. Calls that write no protected path stay allowed, such as a write
   to `/dev/stdout` or `/proc/sys/vm/drop_caches`, an empty word after the
   text of `bash -c`, and a relative `apply_patch` target such as
-  `bin/run.sh`, which the hook places under the working directory.
+  `bin/run.sh`, which the hook places under the working directory. Braces
+  that are not a path stay allowed too, such as
+  `python3 -c 'print({"a":1,"b":{"c":2}})'`, `echo '{"a":1}' > out.json`,
+  `curl -d '{"k":"v"}' URL` and `touch file{1..100}.txt`.
 - `-dispatch` now reads the shell tool of every dialect, such as
   `run_command`, not only `Bash`. A command it does not classify is no longer
   allowed. Another tool is read as a shell command only when it carries a
