@@ -676,11 +676,9 @@ func shellTouchesProtectedPOSIX(cmd string, prefixes []string, depth int, inheri
 	}
 	// Directories a relative path is also read under (protectedBases). The
 	// order of the commands is not followed, so this can add a deny and
-	// cannot remove one.
-	bases, over := protectedBases(toks, frags, homeAlts, append(append([]string{}, inherited...), work...), prefixes)
-	if over {
-		return true, "a command with more directories than the check reads"
-	}
+	// cannot remove one. A command that names more directories than this
+	// list holds is judged by the net (netCheck).
+	bases := protectedBases(toks, frags, homeAlts, append(append([]string{}, inherited...), work...), prefixes)
 	if hit, target := shellTokensTouchProtected(toks, prefixes, depth, "", bases); hit {
 		return true, target
 	}
@@ -759,23 +757,10 @@ func shellTouchesProtectedPOSIX(cmd string, prefixes []string, depth int, inheri
 	}
 
 	// The name rule (protect_mention.go): the text names a protected path
-	// and the command is not made of read-only programs alone.
+	// and the command is not made of read-only programs alone. Words the
+	// name rule cannot read are judged by the net (netCheck).
 	name := commandNamesProtected(toks, frags, bases, work, homeAlts, prefixes)
-	unknownDir := false
-	if name == "" {
-		name = shortRaw(unknownDirWord(cmd, bases))
-		unknownDir = name != ""
-	}
-	if name == "" {
-		name = shortRaw(unreadWord(cmd, toks, bases, prefixes))
-	}
 	if name != "" && !shellOnlyReads(cmd, 0) {
-		return true, name
-	}
-	// A word under a directory the check does not know, in a command that
-	// writes with a redirection: the target can be that word under another
-	// spelling.
-	if unknownDir && strings.ContainsRune(harmlessRedirRe.ReplaceAllString(cmd, ""), '>') {
 		return true, name
 	}
 
@@ -829,11 +814,8 @@ func commandTextNamesProtected(cmd string, prefixes, work []string) bool {
 	if over {
 		return true
 	}
-	bases, over := protectedBases(toks, frags, homeAlts, work, prefixes)
-	if over {
-		return true
-	}
-	if commandNamesProtected(toks, frags, bases, work, homeAlts, prefixes) != "" || unknownDirWord(cmd, bases) != "" || unreadWord(cmd, toks, bases, prefixes) != "" {
+	bases := protectedBases(toks, frags, homeAlts, work, prefixes)
+	if commandNamesProtected(toks, frags, bases, work, homeAlts, prefixes) != "" || netNames(cmd, prefixes, bases) != "" {
 		return true
 	}
 	links, over := linkToProtected(toks, bases, homeAlts, prefixes)
@@ -1536,12 +1518,6 @@ func writeTargetTouchesProtected(t redirTarget, toks []shellToken, prefixes []st
 				if hit, target := namesProtected(rebaseWord(altT, base).value, prefixes); hit {
 					return true, target
 				}
-				// A brace word that stays one word also names a path in
-				// the part before the list, so the unread-word rule reads
-				// it part by part.
-				if unreadWord(t.raw, []shellToken{{kind: tokWord, value: t.value, raw: t.raw, marked: t.value}}, bases, prefixes) != "" {
-					return true, shortRaw(t.raw)
-				}
 			}
 		}
 	}
@@ -1771,7 +1747,10 @@ func stdinShellTouchesProtected(toks []shellToken, prefixes []string, depth int,
 	return false, ""
 }
 
-// maxBraceWords bounds the words one brace expansion may produce.
+// maxBraceWords bounds the words one brace expansion of the old rules may
+// produce. Above it the net reads the words of the list without letter
+// case and counts a directory above a protected path as a name of it
+// (netPattern.big).
 const maxBraceWords = 64
 
 // expandBraceWords performs the comma form of bash brace expansion on the
@@ -1814,6 +1793,11 @@ func expandBraceWords(words []shellToken) []shellToken {
 				continue
 			}
 			made, ok := expandQuotedBraces(w.raw, maxBraceWords)
+			if !ok && !strings.ContainsAny(w.raw, "$`") && netListFits(w.raw) {
+				// Only too long: the net reads every word of the list.
+				out = append(out, w)
+				continue
+			}
 			if !ok || strings.ContainsAny(w.raw, "$`") {
 				w.unresolved = true
 				out = append(out, w)
@@ -1837,6 +1821,12 @@ func expandBraceWords(words []shellToken) []shellToken {
 			}
 		}
 		if !ok || holdsBraceList(expanded) {
+			// A list that is only too long is read by the net, which
+			// makes every word of it (netCheck).
+			if !strings.ContainsAny(w.raw, "$`") && netListFits(w.raw) {
+				out = append(out, w)
+				continue
+			}
 			w.unresolved = true
 			out = append(out, w)
 			continue

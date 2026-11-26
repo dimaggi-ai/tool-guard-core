@@ -134,9 +134,13 @@ type netPattern struct {
 	accept int32
 	fold   bool
 	hasDyn bool
-	mark   []uint32
-	gen    uint32
-	stack  []int32
+	// big: the pattern is one word of a brace list of more than
+	// maxBraceWords words. Such a word is read without letter case, and a
+	// directory above a protected path that it names counts as a name.
+	big   bool
+	mark  []uint32
+	gen   uint32
+	stack []int32
 }
 
 func newNetPattern(atoms []atom, fold bool) *netPattern {
@@ -313,9 +317,6 @@ func (p *netPattern) spells(b *netBudget, set []int32, rel string) bool {
 // fixedName returns the name the set must read next, when there is only
 // one, and the set after it.
 func (p *netPattern) fixedName(b *netBudget, set []int32) (string, []int32, bool) {
-	if p.fold {
-		return "", nil, false
-	}
 	var buf []byte
 	for {
 		if len(set) != 1 {
@@ -344,6 +345,55 @@ func (p *netPattern) fixedName(b *netBudget, set []int32) (string, []int32, bool
 	}
 }
 
+// anyPart returns the positions after one or more characters other than /,
+// expansions included.
+func (p *netPattern) anyPart(b *netBudget, set []int32) []int32 {
+	seen := map[int32]bool{}
+	var out []int32
+	cur := set
+	for len(cur) > 0 {
+		var nxt []int32
+		for c := 0; c < 256; c++ {
+			if c == '/' {
+				continue
+			}
+			if !b.charge(len(cur) + 1) {
+				return out
+			}
+			for _, y := range p.step(cur, byte(c), true) {
+				if !seen[y] {
+					seen[y] = true
+					out = append(out, y)
+					nxt = append(nxt, y)
+				}
+			}
+		}
+		cur = nxt
+	}
+	return out
+}
+
+// procMagic reports whether the pattern, read from /proc (or from the task
+// directory of a process when top is false), can name a directory of a
+// process: any name, then cwd, root, exe, fd or map_files.
+func (p *netPattern) procMagic(b *netBudget, set []int32, top bool) bool {
+	after := p.step(p.anyPart(b, set), '/', true)
+	if len(after) == 0 {
+		return false
+	}
+	for _, name := range []string{"cwd", "root", "exe", "fd", "map_files"} {
+		if e := p.steps(b, after, name); len(e) > 0 && (p.accepts(e) || len(p.step(e, '/', false)) > 0) {
+			return true
+		}
+	}
+	if top {
+		if task := p.step(p.steps(b, after, "task"), '/', false); len(task) > 0 {
+			return p.procMagic(b, task, false)
+		}
+	}
+	return false
+}
+
 // hasName reports whether the pattern holds a literal character other than
 // . and /.
 func (p *netPattern) hasName() bool {
@@ -358,7 +408,7 @@ func (p *netPattern) hasName() bool {
 // literal returns the text of a pattern that is one fixed word with one
 // start and one end.
 func (p *netPattern) literal() (string, bool) {
-	if len(p.starts) != 1 {
+	if len(p.starts) != 1 || p.fold {
 		return "", false
 	}
 	var sb strings.Builder
@@ -749,6 +799,56 @@ func expandItems(b *netBudget, items []bitem) [][]mchar {
 	return words
 }
 
+// expandItemsSeqText is expandItems with each sequence left as the text
+// {first..last}, which braceAtoms reads as a digits or a range atom.
+func expandItemsSeqText(b *netBudget, items []bitem) [][]mchar {
+	words := [][]mchar{nil}
+	for _, it := range items {
+		if !it.group {
+			// A brace or comma outside a list is text.
+			ch := it.ch
+			if ch.k == mMeta && (ch.c == '{' || ch.c == '}' || ch.c == ',') {
+				ch.k = mLit
+			}
+			for k := range words {
+				words[k] = append(words[k], ch)
+			}
+			continue
+		}
+		var parts [][]mchar
+		if it.isSeq {
+			if len(it.seq) == 0 {
+				continue
+			}
+			lo, hi := it.seq[0], it.seq[len(it.seq)-1]
+			w := []mchar{{c: '{', k: mMeta, st: it.ch.st}}
+			for _, t := range []string{lo, "..", hi} {
+				for j := 0; j < len(t); j++ {
+					w = append(w, mchar{c: t[j], k: mLit})
+				}
+			}
+			w = append(w, mchar{c: '}', k: mMeta})
+			parts = append(parts, w)
+		} else {
+			for _, alt := range it.alts {
+				parts = append(parts, expandItemsSeqText(b, alt)...)
+			}
+		}
+		var next [][]mchar
+		for _, w := range words {
+			for _, part := range parts {
+				b.charge(len(w) + len(part))
+				nw := make([]mchar, 0, len(w)+len(part))
+				nw = append(nw, w...)
+				nw = append(nw, part...)
+				next = append(next, nw)
+			}
+		}
+		words = next
+	}
+	return words
+}
+
 // buildPatterns returns the patterns of a reading. exactOK allows the
 // exact expansion of well formed brace words. cause is causeList when the
 // list makes too many words.
@@ -764,13 +864,27 @@ func buildPatterns(b *netBudget, ms []mchar, exactOK, fold, flags bool) ([]*netP
 		if lists > netMaxList {
 			return nil, causeList
 		}
-		if all <= netMaxList && all*len(ms) <= netMaxExpandBytes {
+		if all <= maxBraceWords {
 			var out []*netPattern
 			for _, w := range expandItems(b, items) {
 				out = append(out, newNetPattern(atomsOf(nil, w, false, flags), fold))
 			}
 			return out, 0
 		}
+		// A long list: every word of its lists, with each sequence kept
+		// as a digits or a range atom, read without letter case.
+		var out []*netPattern
+		if lists*len(ms) <= netMaxExpandBytes {
+			for _, w := range expandItemsSeqText(b, items) {
+				out = append(out, newNetPattern(braceAtoms(w, flags), true))
+			}
+		} else {
+			out = append(out, newNetPattern(braceAtoms(ms, flags), true))
+		}
+		for _, p := range out {
+			p.big = true
+		}
+		return out, 0
 	}
 	return []*netPattern{newNetPattern(braceAtoms(ms, flags), fold)}, 0
 }
@@ -964,6 +1078,7 @@ func digitVal(c byte) int {
 // characters of raw readings mark a start and an end and are dropped.
 func readingChars(s, home string) (ms []mchar, magic bool) {
 	startNext := true
+	assign := assignPrefixRe.MatchString(s)
 	mark := func() {
 		if n := len(ms); n > 0 {
 			ms[n-1].en = true
@@ -982,8 +1097,12 @@ func readingChars(s, home string) (ms []mchar, magic bool) {
 		case c == '\'' || c == '"':
 			mark()
 		case c == '~' && startNext:
+			// Where bash reads a tilde (the start of a word, a word a
+			// brace list makes, after = and : of an assignment), the
+			// prefix runs to the next / and ~+ or ~- is magic.
+			word := i == 0 || s[i-1] == '{' || s[i-1] == ',' || (assign && (s[i-1] == '=' || s[i-1] == ':'))
 			end := i + 1
-			for end < len(s) && s[end] != '/' && !isNetDelim(s[end]) {
+			for end < len(s) && s[end] != '/' && (word && strings.IndexByte(":,{}='\"", s[end]) < 0 || !word && !isNetDelim(s[end])) {
 				end++
 			}
 			if end > i+1 {
@@ -1045,6 +1164,9 @@ func readingChars(s, home string) (ms []mchar, magic bool) {
 			if c == ',' {
 				mark()
 			}
+			if c == '{' {
+				startNext = true
+			}
 		case c == ':' && isURLColon(s, i):
 			emit(c, mLit)
 		case isNetDelim(c):
@@ -1063,6 +1185,9 @@ func readingChars(s, home string) (ms []mchar, magic bool) {
 	}
 	return ms, magic
 }
+
+// assignPrefixRe matches a word that starts with NAME=.
+var assignPrefixRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
 
 // levelOneChars reads one shell word with its quotes: quoted characters
 // are literal, unquoted { } , * ? [ ] are meta, expansions are dyn and
@@ -1243,7 +1368,21 @@ type netEntry struct {
 type netDir struct {
 	names []string
 	set   map[string]bool
+	lower map[string][]string // names by their lower-case form, made on use
 	ok    bool
+}
+
+// folded returns the names of the directory equal to name without letter
+// case.
+func (d *netDir) folded(name string) []string {
+	if d.lower == nil {
+		d.lower = make(map[string][]string, len(d.names))
+		for _, n := range d.names {
+			k := strings.ToLower(n)
+			d.lower[k] = append(d.lower[k], n)
+		}
+	}
+	return d.lower[strings.ToLower(name)]
 }
 
 type netFS struct {
@@ -1257,6 +1396,7 @@ func (f *netFS) lstat(p string) netEntry {
 		if e.kind == kLink && !e.read {
 			e.read = true
 			if f.b.lookup() {
+				walkLookups.Add(1)
 				e.target, _ = os.Readlink(p)
 				e.target = filepath.ToSlash(e.target)
 			}
@@ -1267,6 +1407,7 @@ func (f *netFS) lstat(p string) netEntry {
 	var e netEntry
 	e.read = true
 	if f.b.lookup() {
+		walkLookups.Add(1)
 		if fi, err := os.Lstat(p); err == nil {
 			switch {
 			case fi.Mode()&os.ModeSymlink != 0:
@@ -1293,6 +1434,7 @@ func (f *netFS) readDir(p string) *netDir {
 	if !f.b.lookup() {
 		return d
 	}
+	walkLookups.Add(1)
 	fh, err := os.Open(p)
 	if err != nil {
 		return d
@@ -1334,6 +1476,13 @@ func (f *netFS) readDir(p string) *netDir {
 
 // netMagicRe matches a path whose meaning depends on the process that
 // opens it: the directories and open files of a process.
+// netProcRe matches a path under a directory of a process, whether that
+// process is there or not.
+var netProcRe = regexp.MustCompile(`^/proc/[^/]+/(task/[^/]+/)?(cwd|root|exe|fd|map_files)(/|$)`)
+
+// netProcTaskRe matches the task directory of a process.
+var netProcTaskRe = regexp.MustCompile(`^/proc/[^/]+/task$`)
+
 var netMagicRe = regexp.MustCompile(`^/proc/[^/]+/(task/[^/]+/)?(cwd|root|exe|fd/[^/]+|map_files/[^/]+)$|^/dev/fd/[^/]+$|^/dev/(stdin|stdout|stderr)$`)
 
 func parentDir(d string) string {
@@ -1404,6 +1553,9 @@ func (f *netFS) resolve(dir, text string, hops int) (string, uint8, bool) {
 			if rest != "" {
 				cur = joinDir(cur, rest)
 			}
+			if netProcRe.MatchString(cur) {
+				return cur, kMissing, true
+			}
 			return cur, kMissing, false
 		}
 	}
@@ -1439,6 +1591,9 @@ type netCtx struct {
 	fold    bool
 	homes   []string
 	homeDyn bool
+	// noReads: a command made of reads only is judged like any other
+	// (netNames).
+	noReads bool
 }
 
 func newNetCtx(cmd string, prefixes []string) *netCtx {
@@ -1543,6 +1698,12 @@ func (c *netCtx) walk(p *netPattern, base string, collect, strict bool) (names, 
 						names = true
 						return true
 					}
+					// A word of a long brace list that names a directory
+					// above a protected path counts as its name.
+					if _, above := c.relBelow(path, t.path); p.big && kind == kDir && above {
+						names = true
+						return true
+					}
 				}
 			} else if kind == kDir {
 				dirs = append(dirs, path)
@@ -1567,6 +1728,10 @@ func (c *netCtx) walk(p *netPattern, base string, collect, strict bool) (names, 
 		}
 		seen[key] = true
 		c.b.charge(len(st.set) + 1)
+		if (st.dir == "/proc" || netProcTaskRe.MatchString(st.dir)) && p.procMagic(c.b, st.set, st.dir == "/proc") {
+			magic = true
+			return
+		}
 		if !collect {
 			for _, t := range c.targets {
 				if (strict || !st.first) && c.atOrUnder(st.dir, t.path) {
@@ -1590,6 +1755,16 @@ func (c *netCtx) walk(p *netPattern, base string, collect, strict bool) (names, 
 			}
 			if name != "." && name != ".." {
 				if d := c.fs.readDir(st.dir); d.ok {
+					if p.fold {
+						// Every name of the directory equal to it without
+						// letter case.
+						for _, real := range d.folded(name) {
+							if child(st.dir, real, set) {
+								return
+							}
+						}
+						continue
+					}
 					if !d.set[name] {
 						continue
 					}
@@ -1711,6 +1886,13 @@ func (c *netCtx) newReading(text string, ms []mchar, magic, exactOK, flags bool)
 		r.cause |= causeMagic
 	}
 	pats, cause := buildPatterns(c.b, ms, exactOK, c.fold, flags)
+	// A name and a .. after it are also read as nothing, as a program that
+	// cleans the path text reads them (a{b/../set.json is set.json).
+	if lex, ok := lexicalDotDot(ms); ok {
+		more, cause2 := buildPatterns(c.b, lex, exactOK, c.fold, flags)
+		pats = append(pats, more...)
+		cause |= cause2
+	}
 	r.pats = pats
 	r.cause |= cause
 	for _, p := range pats {
@@ -1733,6 +1915,54 @@ func (c *netCtx) newReading(text string, ms []mchar, magic, exactOK, flags bool)
 		}
 	}
 	return r
+}
+
+// lexicalDotDot returns the characters with each part that a ".." part
+// follows removed, together with the "..". ok is false when there is no
+// such pair.
+func lexicalDotDot(ms []mchar) ([]mchar, bool) {
+	isSlash := func(m mchar) bool { return m.k == mLit && m.c == '/' }
+	// Parts as ranges between literal slashes.
+	type part struct{ from, to int }
+	var parts []part
+	from := 0
+	for i := 0; i <= len(ms); i++ {
+		if i == len(ms) || isSlash(ms[i]) {
+			parts = append(parts, part{from, i})
+			from = i + 1
+		}
+	}
+	dotdot := func(p part) bool {
+		return p.to-p.from == 2 && ms[p.from].k == mLit && ms[p.from].c == '.' && ms[p.from+1].k == mLit && ms[p.from+1].c == '.'
+	}
+	var keep []part
+	changed := false
+	for _, p := range parts {
+		if dotdot(p) && len(keep) > 0 {
+			prev := keep[len(keep)-1]
+			if prev.to > prev.from && !dotdot(prev) {
+				keep = keep[:len(keep)-1]
+				changed = true
+				continue
+			}
+		}
+		keep = append(keep, p)
+	}
+	if !changed {
+		return nil, false
+	}
+	var out []mchar
+	for i, p := range keep {
+		if i > 0 {
+			out = append(out, mchar{c: '/', k: mLit})
+		}
+		out = append(out, ms[p.from:p.to]...)
+	}
+	if len(out) == 0 {
+		return nil, false
+	}
+	out[0].st = ms[0].st
+	return out, true
 }
 
 // judge walks the reading under every base. names: a reading reaches a
@@ -1840,6 +2070,23 @@ func (c *netCtx) runReadings(run string) []netReading {
 		}
 	}
 	return out
+}
+
+// netListFits reports whether the brace lists of a word make at most
+// netMaxList words, so the net reads the word.
+func netListFits(raw string) bool {
+	ms, _ := levelOneChars(raw, "")
+	ok, any := wellFormedBraces(ms)
+	if !ok || !any {
+		return false
+	}
+	b := &netBudget{}
+	alts, _ := parseBraces(b, ms, 0, false)
+	if len(alts) == 0 {
+		return false
+	}
+	lists, _ := braceCounts(alts[0], netMaxList)
+	return lists <= netMaxList && !b.over
 }
 
 // netStreamRe matches the standard output and error as a path.
@@ -2189,6 +2436,88 @@ func netCheck(cmd string, prefixes, work []string) (bool, string) {
 
 const netOverReason = "a command too large to check"
 
+// netNames returns a reason when the command text names a protected path,
+// whatever the programs of the command do, or "". inherited are the
+// directories the text is also read under.
+func netNames(cmd string, prefixes, inherited []string) string {
+	if runtime.GOOS == "windows" {
+		return ""
+	}
+	c := newNetCtx(cmd, prefixes)
+	if len(c.targets) == 0 {
+		return ""
+	}
+	c.noReads = true
+	hit, why := c.check(cmd, 0, inherited, false)
+	if !hit && c.b.over {
+		return netOverReason
+	}
+	if hit && why == "" {
+		why = shortRaw(cmd)
+	}
+	return why
+}
+
+// unreadWord is the name check of one command under the bases. It returns
+// a reason when the text names a protected path, or "". It is kept for the
+// tests of the long brace-list rule; the net reads every word.
+func unreadWord(cmd string, _ []shellToken, bases, prefixes []string) string {
+	return netNames(cmd, prefixes, bases)
+}
+
+// netDirsReason is the reason for a command that names more directories at
+// or above a protected path than the check reads.
+const netDirsReason = "a command with more directories than the check reads"
+
+// tooManyDirs reports whether more than maxProtectedBases different
+// readings name an existing directory at or above a protected path.
+func (c *netCtx) tooManyDirs(readings []netReading, bases []string) bool {
+	texts := map[string]bool{}
+	for _, r := range readings {
+		texts[r.text] = true
+	}
+	if len(texts) <= maxProtectedBases {
+		return false
+	}
+	above := func(d string) bool {
+		for _, t := range c.targets {
+			if c.atOrUnder(t.path, d) {
+				return true
+			}
+		}
+		return false
+	}
+	counted := map[string]bool{}
+	for _, r := range readings {
+		if counted[r.text] {
+			continue
+		}
+		froms := []string{""}
+		if r.rel {
+			froms = bases
+		}
+	pats:
+		for _, p := range r.pats {
+			for _, from := range froms {
+				_, _, dirs := c.walk(p, from, true, true)
+				if c.b.over {
+					return true
+				}
+				for _, d := range dirs {
+					if above(d) {
+						counted[r.text] = true
+						break pats
+					}
+				}
+			}
+		}
+		if len(counted) > maxProtectedBases {
+			return true
+		}
+	}
+	return false
+}
+
 // check runs the rules on one text. inherited are the directories of the
 // text around it, and uncertain whether one of its changes is not known.
 func (c *netCtx) check(cmd string, depth int, inherited []string, inhUncertain bool) (bool, string) {
@@ -2348,7 +2677,7 @@ func (c *netCtx) check(cmd string, depth int, inherited []string, inhUncertain b
 		if names {
 			return true, shortRaw(w.tok.raw)
 		}
-		if cause == 0 {
+		if cause == 0 || c.noReads {
 			continue
 		}
 		if w.redirect {
@@ -2361,7 +2690,7 @@ func (c *netCtx) check(cmd string, depth int, inherited []string, inhUncertain b
 	}
 
 	// Streams.
-	if strings.Contains(cmd, "/dev/") || strings.Contains(cmd, "/proc/") {
+	if !c.noReads && (strings.Contains(cmd, "/dev/") || strings.Contains(cmd, "/proc/")) {
 		if !c.streamsSafe(toks, bases, uncertain) {
 			return true, "a write to the standard output or error after a redirection the check cannot read"
 		}
@@ -2369,7 +2698,7 @@ func (c *netCtx) check(cmd string, depth int, inherited []string, inhUncertain b
 
 	// Texts the command runs.
 	shellTexts, unknownProg := netShellTexts(toks)
-	if unknownProg {
+	if unknownProg && !c.noReads {
 		return true, "a shell command whose program the check cannot know"
 	}
 	for _, text := range append(shellTexts, extractCommandSubsts(cmd)...) {
@@ -2381,9 +2710,22 @@ func (c *netCtx) check(cmd string, depth int, inherited []string, inhUncertain b
 		return true, netOverReason
 	}
 
+	// More directories at or above a protected path than the check reads.
+	if c.tooManyDirs(readings, bases) {
+		if c.b.over {
+			return true, netOverReason
+		}
+		return true, netDirsReason
+	}
+
 	// A command made of reads only writes nothing.
-	if shellOnlyReads(cmd, 0) && redirectOperatorsAreOrdinary(cmd) {
+	if !c.noReads && shellOnlyReads(cmd, 0) && redirectOperatorsAreOrdinary(cmd) {
 		return false, ""
+	}
+
+	// The shell option nocaseglob makes a pattern match without letter case.
+	if strings.Contains(strings.ToLower(cmd), "nocaseglob") {
+		return true, "nocaseglob"
 	}
 
 	// Rule 1: a reading of any run or word.

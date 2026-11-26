@@ -105,7 +105,8 @@ var extglobRe = regexp.MustCompile(`[@?+*!]\([^()]*\)`)
 // is not checked and is denied.
 const maxShellFragments = 20000
 
-// maxProtectedBases bounds the directories protectedBases returns.
+// maxProtectedBases bounds the directories protectedBases returns, and the
+// directories at or above a protected path one command may name (netCheck).
 const maxProtectedBases = 64
 
 // shellFragments returns every piece of the command text that could be a
@@ -459,79 +460,6 @@ func holdsUnknownDir(word string) bool {
 	return false
 }
 
-// unknownDirWord returns the first word of the command that names a path
-// under a directory the check does not know (otherTildeWord), also when the
-// word is relative and stands under one of the bases (cd /dev/fd && cat
-// 3/f), or "".
-func unknownDirWord(cmd string, bases []string) string {
-	if w := otherTildeWord(cmd); w != "" {
-		return w
-	}
-	if len(bases) == 0 {
-		return ""
-	}
-	for _, word := range strings.FieldsFunc(shellPlainText(cmd), isShellSplit) {
-		if word == "" || strings.ContainsRune("/~-+", rune(word[0])) {
-			continue
-		}
-		for _, base := range bases {
-			if base == "~" || strings.HasPrefix(base, "~/") {
-				continue
-			}
-			if holdsUnknownDir(strings.TrimRight(base, "/") + "/" + word) {
-				return word
-			}
-		}
-	}
-	return ""
-}
-
-// assignWordRe matches the start of a word in the form NAME=VALUE. bash
-// reads a tilde after the "=" and after each ":" of such a word.
-var assignWordRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
-
-// otherTildeWord returns the first word of the command that otherTildeRe
-// or procCwdRe matches, or "". Such a word counts as the name of a protected path: the
-// directory is not known, so it can be a protected one. Quotes are not
-// looked at, so a quoted word, which bash leaves as it is, counts too.
-func otherTildeWord(cmd string) string {
-	var toks []shellToken
-	for _, word := range strings.FieldsFunc(shellPlainText(cmd), isShellSplit) {
-		if holdsUnknownDir(word) {
-			return word
-		}
-		// The standard output or error of the shell, in a command that can
-		// open a file for input on that descriptor first (1<FILE).
-		if streamTargetRe.MatchString(collapseSlashDots(word)) && strings.ContainsRune(cmd, '<') {
-			if toks == nil {
-				toks = tokenizeShell(cmd)
-			}
-			if !knownStream(word, toks) {
-				return word
-			}
-		}
-		variants := []string{word}
-		if strings.ContainsRune(word, '{') {
-			if expanded, ok := expandBraces(word); ok {
-				variants = append(variants, expanded...)
-			}
-		}
-		for _, v := range variants {
-			if otherTildeRe.MatchString(v) {
-				return v
-			}
-			if loc := assignWordRe.FindStringIndex(v); loc != nil {
-				for _, part := range strings.Split(v[loc[1]:], ":") {
-					if otherTildeRe.MatchString(part) {
-						return part
-					}
-				}
-			}
-		}
-	}
-	return ""
-}
-
 // networkURLRe matches a word that holds a network address. The text after
 // the scheme starts with a host name, so it is not a path on this machine.
 // A file:// address is not matched: it names a local path.
@@ -725,8 +653,9 @@ func isProtectedBase(form string, prefixes []string) bool {
 // directory is used: `cd DIR`, `pushd DIR`, `env -C DIR`, `CDPATH=DIR` and
 // `HOME=DIR` all count, and so does a relative fragment under a directory
 // found before it (cd ~ && cd .claude). This can add a deny and cannot remove
-// one. over is true when there are more than maxProtectedBases.
-func protectedBases(toks []shellToken, frags, homeAlts, inherited, prefixes []string) (bases []string, over bool) {
+// one. It holds at most maxProtectedBases directories; the net reads the
+// directories of a command that names more (netCheck).
+func protectedBases(toks []shellToken, frags, homeAlts, inherited, prefixes []string) (bases []string) {
 	seen := map[string]bool{}
 	add := func(b string) {
 		if !seen[b] {
@@ -773,36 +702,32 @@ func protectedBases(toks []shellToken, frags, homeAlts, inherited, prefixes []st
 				add(dir)
 			}
 		}
-		if len(bases) > maxProtectedBases {
-			return nil, true
+		if len(bases) >= maxProtectedBases {
+			return bases
 		}
-	}
-	// A directory that the command names in another way (git -C DIR,
-	// make -C DIR, env -C DIR): it counts when a relative word with ".."
-	// names a protected path, or a directory above one, under it.
-	for _, dir := range dotDotBases(frags, bases, homeAlts, prefixes) {
-		add(dir)
-	}
-	if len(bases) > maxProtectedBases {
-		return nil, true
 	}
 	for round := 0; round < 4; round++ {
 		before := len(bases)
 		for _, frag := range frags {
 			for _, form := range fragmentForms(frag, bases, homeAlts) {
+				// A pattern is read by the net, which matches it against
+				// the directories that are there (netCheck).
+				if strings.ContainsAny(form, "*?[") {
+					continue
+				}
 				if isProtectedBase(form, prefixes) {
 					add(form)
 				}
 			}
-			if len(bases) > maxProtectedBases {
-				return nil, true
+			if len(bases) >= maxProtectedBases {
+				return bases
 			}
 		}
 		if len(bases) == before {
 			break
 		}
 	}
-	return bases, false
+	return bases
 }
 
 // cdDirectories returns the directories a cd operand can name: the operand,
@@ -822,85 +747,6 @@ func cdDirectories(form string) []string {
 				break
 			}
 			out = append(out, filepath.ToSlash(m))
-		}
-	}
-	return out
-}
-
-// maxDotDotWords bounds the directories and the relative words dotDotBases
-// reads.
-const maxDotDotWords = 32
-
-// dotDotBases returns each fragment that is a directory on the file system
-// and under which another fragment, a relative path with a ".." part, names
-// a protected path, something inside one, or a directory above one.
-//
-// A relative directory is read as it is (under the directory of this
-// process) and under each directory in bases, which holds the cwd of the
-// tool call: the hook process can run in another directory.
-func dotDotBases(frags, bases, homeAlts, prefixes []string) []string {
-	var rels []string
-	for _, f := range frags {
-		if f == "" || strings.ContainsRune("/~-+", rune(f[0])) || len(rels) >= maxDotDotWords {
-			continue
-		}
-		for _, part := range strings.Split(f, "/") {
-			if part == ".." {
-				rels = append(rels, f)
-				break
-			}
-		}
-	}
-	if len(rels) == 0 {
-		return nil
-	}
-	// A directory can also be the value of an option glued to it:
-	// env -CDIR, tar -xCDIR, env --chdir=DIR.
-	var dirs []string
-	for _, f := range frags {
-		switch {
-		case strings.HasPrefix(f, "--"):
-			if eq := strings.IndexByte(f, '='); eq >= 0 {
-				dirs = append(dirs, f[eq+1:])
-			}
-		case strings.HasPrefix(f, "-"):
-			for k := 2; k < len(f) && k <= 16 && f[k-1] != '/'; k++ {
-				dirs = append(dirs, f[k:])
-			}
-		default:
-			dirs = append(dirs, f)
-		}
-	}
-	var out []string
-	checked := 0
-	for _, word := range dirs {
-		if word == "" || word[0] == '-' || word[0] == '+' || strings.ContainsAny(word, "*?[") || len(word) > maxResolvePathLen {
-			continue
-		}
-		for _, dir := range fragmentForms(word, bases, homeAlts) {
-			isDir := false
-			for _, cand := range literalPathCandidates(dir) {
-				if fi, err := os.Stat(cand); err == nil && fi.IsDir() {
-					isDir = true
-					break
-				}
-			}
-			if !isDir {
-				continue
-			}
-			if checked++; checked > maxDotDotWords {
-				return out
-			}
-			for _, rel := range rels {
-				if rel == word {
-					continue
-				}
-				joined := strings.TrimRight(dir, "/") + "/" + rel
-				if hit, _ := namesProtected(joined, prefixes); hit || isAboveProtected(joined, prefixes) {
-					out = append(out, dir)
-					break
-				}
-			}
 		}
 	}
 	return out
@@ -1099,9 +945,6 @@ func holdsBraceList(words []string) bool {
 	}
 	return false
 }
-
-// maxUnreadBraceWords bounds the words that unreadWord makes from one word.
-const maxUnreadBraceWords = 4096
 
 // Marks that expandLongBraces puts in place of a sequence expression.
 const (
