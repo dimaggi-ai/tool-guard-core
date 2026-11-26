@@ -217,15 +217,14 @@ another name, such as an alias or a copy of the program. It also does not see an
 name pattern with the files that exist, so a pattern that matches a link to a
 protected directory counts.
 
-The hook reads a brace list that makes up to 64 words word by word. A longer
-list is read without letter case: it counts as the name of a protected path
-when one of its words, in any letter case, can be the path. In such a list
-a sequence, such as `{1..5000}`, is read as any number. When the comma lists
-of one word make more than 4096 words, the word counts as the name of a
-protected path. Brace groups nested more than 128 deep are not expanded: the
-hook reads the word as any mix of its parts. A command that holds the word
-`nocaseglob` counts as the name of a protected path, because that shell
-option makes a pattern match without letter case.
+The hook reads a brace list that makes up to 64 words word by word.
+The hook does not expand a brace list that makes more than 64 words. Such a
+list counts as the name of a protected path when one of its words, in any
+letter case, can be the path. In such a list a sequence, such as
+`{1..5000}`, is read as any number. When the comma lists of one word make
+more than 4096 words, the word counts as the name of a protected path. Brace
+groups nested more than 128 deep are not expanded: the hook reads the word as
+any mix of its parts. A command that holds the word `nocaseglob` counts in the same way, because that shell option makes a pattern match without letter case.
 
 The check of one command has a work counter: 2,000,000 steps and 10,000 file
 system lookups, for the command and the texts it runs. A command over the
