@@ -55,21 +55,38 @@ func TestReview090LongBraceCost(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
 	cdir := filepath.Join(home, ".claude")
-	if err := os.MkdirAll(cdir, 0o755); err != nil {
+	// lnk leads to .claude/sub, so lnk/.. is .claude and the word names the
+	// protected file.
+	if err := os.MkdirAll(filepath.Join(cdir, "sub"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(cdir, filepath.Join(home, "lnk")); err != nil {
+	if err := os.Symlink(filepath.Join(cdir, "sub"), filepath.Join(home, "lnk")); err != nil {
 		t.Fatal(err)
 	}
 	file := filepath.Join(cdir, "settings.json")
-	prefixes := []string{file}
+	prefixes := []string{filepath.ToSlash(file)}
+	saved, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(home); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := os.Chdir(saved); err != nil {
+			t.Fatal(err)
+		}
+	}()
 	look0 := procSyscalls()
 	for _, n := range []int{10, 70, 200, 500} {
 		word := "lnk/../settings.{json,{1.." + itoa(n) + "}}"
 		cmd := "python3 w.py " + word
 		start := time.Now()
-		_ = commandNamesProtected(tokenizeShell(cmd), []string{word}, []string{filepath.ToSlash(home)}, nil, nil, prefixes)
-		os.Stderr.WriteString("COST n=" + itoa(n) + " " + time.Since(start).Round(time.Microsecond).String() + "\n")
+		hit, _ := shellTouchesProtectedRec(cmd, prefixes, 0, nil, []string{filepath.ToSlash(home)})
+		t.Logf("COST n=%d %s", n, time.Since(start).Round(time.Microsecond))
+		if !hit {
+			t.Errorf("n=%d: long list after a link into the protected directory allowed", n)
+		}
 	}
 	// The same word over a plain directory (no link) stays allowed, so the
 	// denial above comes from the link and not from the size of the list.
@@ -84,7 +101,7 @@ func TestReview090LongBraceCost(t *testing.T) {
 			t.Errorf("n=%d: plain dir/../dir long list denied: %s", n, got)
 		}
 	}
-	os.Stderr.WriteString("COST statLookups=" + itoa(procSyscalls()-look0) + "\n")
+	t.Logf("COST statLookups=%d", procSyscalls()-look0)
 	if got := procSyscalls() - look0; got > 200 {
 		t.Errorf("the long brace list asked the disk %d times", got)
 	}

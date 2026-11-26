@@ -12,22 +12,49 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 - The pre-release review of 2026-11-25 found calls that wrote to a path named
   with `-protect-path` and were allowed. `tg hook` now denies them:
-  - a redirect target that holds a brace list, such as `> {P,}` or
-    `> P.{json,}`;
+  - a redirect target that holds a brace list, such as `> {P,}`. This
+    includes a list in quotes or inside another list, such as
+    `> ''{settings.json,{a}}`;
   - a path under `/proc/self/cwd` or `/dev/fd` written with an empty, `.` or
     `..` part, such as `/proc/self//cwd`, in a shell command and in a
-    file-write tool;
+    file-write tool. This includes a path that reaches them from another
+    directory under `/dev`, such as `/dev/shm/../fd/3`, a path through a
+    symbolic link to `/proc/self/cwd`, and a long brace list under
+    `/proc/self`;
   - an `apply_patch` target with `..` after a symbolic link, and patch text
-    under an alias key such as `cmd`;
+    under an alias key such as `cmd`. The hook also reads patch text under
+    other keys, such as `content` or `args`, in nested objects and in arrays.
+    It places a relative target under a work directory key, such as `workdir`
+    or `cwd`;
   - a command passed in a shell option, such as `fish --init-command=...`, or
-    after `bash -c` and another option;
+    after `bash -c` and another option. The hook now reads all fish options,
+    including the short and prefix forms, such as `-C`, `--co` and `--i`;
+  - a fish option that writes a file, such as `-o`, `--debug-output` or
+    `--profile`, when the file is a protected path or is not known;
+  - a word after the text of `bash -c` that the text can run, such as
+    `bash -c 'eval "$1"' _ 'echo x > P'`;
   - a long brace list after `=` or after a short option glued to the path,
     such as `-cfP.{json,{1..70}}`, and one with `..` after a symbolic link.
+- The review also found calls that were denied although they write no
+  protected path. `tg hook` now allows them:
+  - an empty word after the text of `bash -c`, and `bash ''`;
+  - a read inside `bash -c` after an option that does not change what runs,
+    such as `-e`, `-x` or `--norc`;
+  - a write to `/dev/stdout`, `/dev/stderr`, `/dev/fd/1` or `/dev/fd/2`, and
+    to a file under `/proc` that is not a process directory, such as
+    `/proc/sys/vm/drop_caches`;
+  - a long brace list that names no protected path;
+  - a relative `apply_patch` target such as `bin/run.sh`. The hook places it
+    under the working directory, not under `/`.
 - `-dispatch` now reads the shell tool of every dialect, such as
-  Antigravity's `run_command`, not only `Bash`. A command it does not classify
-  is no longer allowed.
+  `run_command`, not only `Bash`. A command it does not classify is no longer
+  allowed. Another tool is read as a shell command only when it carries a
+  command parameter and its tool group is `shell`. Other tools that the
+  dispatch list does not name, such as `Glob` or `WebSearch`, keep the policy
+  decision.
 - With `-escalate-as deny`, the audit record of a converted escalation now
-  says `denied` and gives the conversion as the reason.
+  says `denied` and gives the conversion as the reason. The reason the hook
+  returns also names the rule, such as `Escalated by: [escalate-git]`.
 - [`policies/README.md`](policies/README.md) lists all ten shipped policies.
 
 - The example shell policy now matches recursive and force flags as separate

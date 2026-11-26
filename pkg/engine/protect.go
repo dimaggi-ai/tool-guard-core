@@ -198,10 +198,22 @@ func violatesProtectedPaths(env *domain.ActionEnvelope, prefixes []string) (bool
 		for _, fp := range collectFilePaths(params) {
 			// A path through another process's working directory or an
 			// open descriptor names a directory not known here.
-			if _, self := selfCwdRest(fp); !self && procPathUnknown(fp) {
+			rest, self := selfCwdRest(fp)
+			if !self && (procPathUnknown(fp) || procDirUnknown(fp)) {
 				return true, fmt.Sprintf("protected path: write through %s denied by -protect-paths (directory not known)", shortRaw(fp))
 			}
-			for _, reading := range pathReadings(fp, dirs) {
+			for i, reading := range pathReadings(fp, dirs) {
+				// A path through /proc/self/cwd is the path under each
+				// directory the call says it runs in, and those readings
+				// follow. With no such directory it is not known, and a ".."
+				// after it gives the physical parent of that directory,
+				// which the text does not show.
+				if i == 0 && self && len(dirs) > 0 && !strings.Contains(rest+"/", "/../") {
+					continue
+				}
+				if linkIntoProc(reading) {
+					return true, fmt.Sprintf("protected path: write through %s denied by -protect-paths (directory not known)", shortRaw(reading))
+				}
 				// The same path under the directory the call says it runs
 				// in can go through /proc or /dev/fd (cwd "/proc/self"
 				// with file "cwd/P", cwd "/dev/fd/3" with file "P"), so
@@ -697,9 +709,6 @@ func shellTouchesProtectedPOSIX(cmd string, prefixes []string, depth int, inheri
 		if found, lnWrites := linkBeforeDotDot(cmd); lnWrites || (found && !onlyReadsOrLinks(cmd, 0)) {
 			return true, "a link that the same command makes, with .. after it"
 		}
-		if dotDotAfterLinkName(cmd, bases) && commandTextNamesProtected(cmd, prefixes, work) {
-			return true, "a name of .. that a word of a brace list made, over a link"
-		}
 	}
 
 	// A shell call that holds an option of its own which makes the shell run
@@ -763,138 +772,36 @@ func shellTouchesProtectedPOSIX(cmd string, prefixes []string, depth int, inheri
 	return false, ""
 }
 
-// dotDotAfterLinkName reports whether a word of a brace list can reach a ".."
-// over a symbolic link on disk (or over a prefix that cannot be checked
-// safely), as `lnk/../settings.{json,{1..70}}` does: the list can make the
-// name that follows the "..", and the directory the ".." gives back is the
-// physical parent of the link that stands in front of it, so the file the
-// kernel reaches is not the file the word spells. A word whose components in
-// front of every ".." are plain existing directories or do not exist at all
-// does not trigger this rule and is left to physical-path resolution.
-func dotDotAfterLinkName(cmd string, bases []string) bool {
-	cache := map[string]lstatKind{}
-	for _, tok := range tokenizeShell(cmd) {
-		if tok.kind != tokWord || tok.value == "" {
-			continue
-		}
-		rawWord := tok.raw
-		if tok.unresolved {
-			rawWord = homeVarRe.ReplaceAllString(rawWord, "~")
-		}
-		if !braceHeadUnknown(rawWord) {
-			continue
-		}
-		if wordHasUnknownExpansion(cmd, tok) {
-			return true
-		}
-		if _, ok := braceListCount(rawWord); !ok {
-			return true
-		}
-		if braceWordDotDotOverLink(unquoteWord(rawWord), bases, cache) {
-			return true
-		}
-	}
-	return false
-}
-
 // shellCommandRunOptionNamesProtected reports whether a call of a shell holds
-// an option that makes the shell run commands, and whether the text the shell
-// runs names a protected path. Such a text is a program for the shell and not
-// only an argument, so the call is denied whatever the rest of the call does:
-// bash -c -i 'cat F' can run what it prints, while bash -c 'cat F' only reads
-// it.
-//
-// The options that matter are the options of the shell, that is the words of
-// the call that stand before the text the -c runs, and the clusters that
-// carry the c of -c together with one of their letters (bash -ic CMD). A word
-// after that text is a positional parameter of the -c command and bash reads
-// nothing there (bash -c 'cat F' -i), and a plain option that only changes
-// how the shell behaves (-e, -x, --norc) is not of this kind either: the text
-// of the -c is read by the ordinary rules in both cases, so a read of a
-// protected path stays allowed.
+// an option that makes the shell read commands of its own beyond the text it
+// runs (-i, -s, --rcfile, --init-file, fish -i), and whether a text the shell
+// runs names a protected path. An interactive shell reads startup files whose
+// aliases can change what a program name in the text runs, so such a call is
+// denied whatever the text does: bash -c -i 'cat F' is denied, while
+// bash -c 'cat F' only reads it. The options are read by parseShellCall, so a
+// word after the text of -c is a positional parameter and changes nothing
+// (bash -c 'cat F' -i). A call whose options cannot be read is treated the
+// same way.
 func shellCommandRunOptionNamesProtected(cmd string, prefixes, work []string) bool {
 	for _, seg := range splitShellSegments(tokenizeShell(cmd)) {
 		words := stripCommandPrefix(commandWords(seg))
-		if len(words) < 3 || words[0].unresolved || words[0].raw != words[0].value {
+		if len(words) < 2 || words[0].unresolved || words[0].raw != words[0].value {
 			continue
 		}
 		if !shellInterpreters[filepath.Base(words[0].value)] {
 			continue
 		}
-		// The text of the command: the first word after the program name
-		// that is not an option. The words before it that start with a dash
-		// are the options of the shell; a word after the first text is a
-		// positional parameter of the -c command, not an option of the
-		// shell, and bash reads nothing there.
-		text := -1
-		for k, w := range words[1:] {
-			if w.unresolved || w.value == "" || (w.value[0] == '-' && len(w.value) > 1) {
-				continue
-			}
-			text = k
-			break
-		}
-		if text < 0 {
+		call := parseShellCall(words[0].value, words[1:])
+		if call.known && !call.runsInput {
 			continue
 		}
-		// An option that makes the shell run commands: among the options of
-		// the shell, or a cluster that carries the c of -c together with one
-		// of their letters (bash -ic CMD).
-		var runOpt string
-		for _, w := range words[1 : 1+text] {
-			if w.unresolved || w.value == "" || w.value[0] != '-' {
-				continue
-			}
-			if shellRunsCommandOption(w.value) || (clusterHoldsShortOption(w.value, 'c') && clusterHoldsRunLetter(w.value)) {
-				runOpt = w.value
-			}
-		}
-		if runOpt == "" {
-			continue
-		}
-		// The text the shell runs, read as the -c rule reads it.
-		for _, arg := range append(shellDashCArgs(words[1:]), shellOptionCommands(words[1:])...) {
+		for _, arg := range call.commands {
 			if commandTextNamesProtected(arg.marked, prefixes, work) {
 				return true
 			}
 		}
 	}
 	return false
-}
-
-// shellRunsCommandOption reports whether the word is an option that makes a
-// shell run commands: the option that starts an interactive shell, the option
-// that reads commands from the standard input, an option whose value is a
-// command, or an option that reads a file the shell runs.
-func shellRunsCommandOption(v string) bool {
-	switch v {
-	case "-i", "--interactive", "-s", "-C", "--command":
-		return true
-	}
-	for _, o := range []string{"--rcfile", "--init-file", "--init-command", "--private-config", "--command"} {
-		if v == o || strings.HasPrefix(v, o+"=") {
-			return true
-		}
-	}
-	return clusterHoldsRunLetter(v)
-}
-
-// clusterHoldsRunLetter reports whether the word is a cluster of shell short
-// options that carries one of the letters that make the shell run commands:
-// i for an interactive shell, s for reading the standard input, C for the
-// command option of fish.
-func clusterHoldsRunLetter(v string) bool {
-	return clusterHoldsShortOption(v, 'i') || clusterHoldsShortOption(v, 's') || clusterHoldsShortOption(v, 'C')
-}
-
-// clusterHoldsShortOption reports whether the word is a cluster of shell
-// short options (a dash, no second dash, and letters after it) that holds the
-// given option letter.
-func clusterHoldsShortOption(v string, c rune) bool {
-	if len(v) < 3 || v[0] != '-' || v[1] == '-' {
-		return false
-	}
-	return strings.ContainsRune(v[1:], c)
 }
 
 // commandTextNamesProtected reports whether the command text names a
@@ -1120,7 +1027,7 @@ func nestedTexts(cmd string) (texts []string, ok bool) {
 		}
 		switch prog := filepath.Base(words[0].value); {
 		case shellInterpreters[prog]:
-			for _, arg := range append(shellDashCArgs(words[1:]), shellOptionCommands(words[1:])...) {
+			for _, arg := range parseShellCall(prog, words[1:]).writeCheckTexts() {
 				texts = append(texts, arg.marked)
 			}
 		case prog == "eval":
@@ -1527,7 +1434,7 @@ func onlyReadsOrLinks(cmd string, depth int) bool {
 			continue
 		}
 		if prog == "ln" || prog == "eval" ||
-			(shellInterpreters[prog] && (len(shellDashCArgs(words[1:])) > 0 || len(shellOptionCommands(words[1:])) > 0)) {
+			(shellInterpreters[prog] && len(parseShellCall(prog, words[1:]).commands) > 0) {
 			continue // ln, or a text that is read below
 		}
 		if !segmentOnlyReads(seg, 0) {
@@ -1604,7 +1511,7 @@ func shellTokensTouchProtected(toks []shellToken, prefixes []string, depth int, 
 			// A target under a directory this check does not know
 			// (/proc/self/cwd, /dev/fd/3, /dev/stdin, a ".." under
 			// /dev/pts) can be the protected file.
-			if procPathUnknown(value) || procDirUnknown(value) {
+			if unknownTarget(value, toks) {
 				return true, shortRaw(value)
 			}
 			if hit, target := namesProtected(value, prefixes); hit {
@@ -1620,7 +1527,7 @@ func shellTokensTouchProtected(toks []shellToken, prefixes []string, depth int, 
 			if w.value == t.value {
 				for _, alt := range literalBraceAlternatives(t.raw) {
 					altT := shellToken{kind: tokWord, value: alt, raw: alt, marked: alt}
-					if procPathUnknown(alt) || procDirUnknown(alt) {
+					if unknownTarget(alt, toks) {
 						return true, shortRaw(alt)
 					}
 					if hit, target := namesProtected(rebaseWord(altT, base).value, prefixes); hit {
@@ -1644,7 +1551,7 @@ func shellTokensTouchProtected(toks []shellToken, prefixes []string, depth int, 
 	// makes no brace list.
 	for _, t := range redirectTargets(toks) {
 		for _, w := range []shellToken{{kind: tokWord, value: t.value, raw: t.raw, marked: t.value}, rebaseWord(shellToken{kind: tokWord, value: t.value, raw: t.raw, marked: t.value}, base)} {
-			if procPathUnknown(w.value) || procDirUnknown(w.value) || (t.raw != t.value && !allBracesQuoted(t.raw) && (procPathUnknown(w.raw) || procDirUnknown(w.raw))) {
+			if unknownTarget(w.value, toks) || (t.raw != t.value && !allBracesQuoted(t.raw) && unknownTarget(w.raw, toks)) {
 				return true, shortRaw(w.raw)
 			}
 		}
@@ -1658,7 +1565,7 @@ func shellTokensTouchProtected(toks []shellToken, prefixes []string, depth int, 
 		// A shell that reads its commands from standard input
 		// (`echo 'rm f' | bash`, `bash <<< 'rm f'`): the text it will run
 		// is elsewhere in the command, so every word is checked.
-		if base == "" && len(words) > 0 && shellInterpreters[filepath.Base(words[0].value)] && shellReadsStdin(words[1:]) {
+		if base == "" && len(words) > 0 && shellInterpreters[filepath.Base(words[0].value)] && shellReadsStdin(words[0].value, words[1:]) {
 			if hit, target := stdinShellTouchesProtected(toks, prefixes, depth, bases); hit {
 				return true, target
 			}
@@ -1674,13 +1581,18 @@ func shellTokensTouchProtected(toks []shellToken, prefixes []string, depth int, 
 		// glued into such an option after the -c command, which reads as a
 		// single word (fish -c 'echo ok' -C'echo x > $X').
 		if base == "" && shellInterpreters[prog] {
-			args := shellDashCArgs(words[1:])
-			if len(args) > 0 {
-				if glued := gluedCommandTail(words[1:]); glued != "" {
-					args = append(args, shellToken{kind: tokWord, value: glued, raw: glued, marked: glued})
+			call := parseShellCall(prog, words[1:])
+			// A file the shell writes because an option names it
+			// (fish -o FILE, --profile FILE).
+			for _, f := range call.files {
+				if f.unresolved {
+					return true, shortRaw(f.raw)
+				}
+				if hit, target := matchLiteralPath(f.value, prefixes); hit {
+					return true, target
 				}
 			}
-			for _, arg := range append(args, shellOptionCommands(words[1:])...) {
+			for _, arg := range call.writeCheckTexts() {
 				if depth >= maxShellSubstDepth {
 					return true, shortRaw(arg.raw)
 				}
@@ -1794,30 +1706,9 @@ func stripCommandPrefix(words []shellToken) []shellToken {
 // shellReadsStdin reports whether a shell started with these arguments reads
 // its commands from standard input: it has the -s option, or it has no -c
 // command and no script file.
-func shellReadsStdin(args []shellToken) bool {
-	if len(shellDashCArgs(args)) > 0 {
-		return false
-	}
-	for i := 0; i < len(args); i++ {
-		v := args[i].value
-		if args[i].unresolved || v == "" {
-			return false
-		}
-		if v[0] != '-' && v[0] != '+' {
-			return false // a script file
-		}
-		if strings.HasPrefix(v, "--") {
-			if v == "--rcfile" || v == "--init-file" {
-				i++
-			}
-			continue
-		}
-		if v[0] == '-' && strings.ContainsRune(v, 's') {
-			return true
-		}
-		i += strings.Count(v, "o") + strings.Count(v, "O")
-	}
-	return true
+func shellReadsStdin(prog string, args []shellToken) bool {
+	c := parseShellCall(prog, args)
+	return c.stdin || !c.known
 }
 
 // stdinShellTouchesProtected is the check for a command that holds a shell
@@ -1898,10 +1789,24 @@ func expandBraceWords(words []shellToken) []shellToken {
 			// as it is (`> '{P,}'` makes the file "{P,}"). A word with
 			// a live brace next to a quoted one is not read and fails
 			// closed.
-			if braceExprRe.MatchString(w.raw) && !allBracesQuoted(w.raw) {
-				w.unresolved = true
+			//
+			// A live brace is expanded with the quoting kept in mind
+			// (`''{P,{a}}` makes P and {a}). A word that holds an expansion
+			// as well, or whose list the reader cannot expand, is not read
+			// and fails closed.
+			if !holdsLiveBrace(w.raw) {
+				out = append(out, w)
+				continue
 			}
-			out = append(out, w)
+			made, ok := expandQuotedBraces(w.raw, maxBraceWords)
+			if !ok || strings.ContainsAny(w.raw, "$`") {
+				w.unresolved = true
+				out = append(out, w)
+				continue
+			}
+			for _, e := range made {
+				out = append(out, shellToken{kind: tokWord, value: e, raw: quoteBraces(e), marked: e})
+			}
 			continue
 		}
 		expanded, ok := expandBraces(w.value)
@@ -1926,6 +1831,22 @@ func expandBraceWords(words []shellToken) []shellToken {
 		}
 	}
 	return out
+}
+
+// quoteBraces returns a raw text for a word that bash has already expanded:
+// a backslash goes in front of each character the reader would expand again.
+func quoteBraces(v string) string {
+	if !strings.ContainsAny(v, "{},'\"\\$`") {
+		return v
+	}
+	var b strings.Builder
+	for i := 0; i < len(v); i++ {
+		if strings.IndexByte("{},'\"\\$`", v[i]) >= 0 {
+			b.WriteByte('\\')
+		}
+		b.WriteByte(v[i])
+	}
+	return b.String()
 }
 
 // braceExprRe matches a brace group bash would expand: one with a comma or a
@@ -2029,217 +1950,6 @@ func braceSequence(body string) []string {
 var shellInterpreters = map[string]bool{
 	"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true,
 	"ash": true, "mksh": true, "rbash": true, "fish": true,
-}
-
-// shellDashCArgs returns the words a shell may run as its -c command. words
-// are the arguments after the program name. The -c flag is any single-dash
-// option cluster that holds a "c" (-c, -lc, -ce, -cx). Every later word that
-// is not an option is returned, because options and their arguments may stand
-// between -c and the command (bash -c -e 'cmd', bash -c -- 'cmd'). That also
-// returns the positional arguments after the command; checking one of them as
-// a command can add a deny and cannot remove one. A fish -C or --init-command
-// before the -c takes a word of its own, which is skipped here and read as a
-// command by shellOptionCommands (fish -C 'echo hi' -c 'echo x > P').
-func shellDashCArgs(words []shellToken) []shellToken {
-	isOption := func(v string) bool {
-		return len(v) > 1 && (v[0] == '-' || v[0] == '+')
-	}
-	i := 0
-	found := false
-	for ; i < len(words); i++ {
-		v := words[i].value
-		if v == "--" || !isOption(v) {
-			return nil // options ended before a -c
-		}
-		if strings.HasPrefix(v, "--") {
-			if v == "--rcfile" || v == "--init-file" || shellLongCommandOption(v) != "" {
-				i++ // the option takes one argument
-			}
-			continue
-		}
-		if v[0] == '-' {
-			if shellShortCommandOption(v) != "" {
-				if v[len(v)-1] == 'C' {
-					i++ // fish -C takes the next word: fish -iC 'cmd'
-				}
-				continue
-			}
-			if strings.ContainsRune(v[1:], 'c') {
-				found = true
-				i++
-				break
-			}
-		}
-		// -o NAME, -O NAME, +o NAME, +O NAME: each o or O in the cluster
-		// takes one following word (bash -oe pipefail -c 'cmd').
-		i += strings.Count(v, "o") + strings.Count(v, "O")
-	}
-	if !found {
-		return nil
-	}
-	var out []shellToken
-	afterDashDash := false
-	for ; i < len(words); i++ {
-		v := words[i].value
-		if !afterDashDash && v == "--" {
-			afterDashDash = true
-			continue
-		}
-		if !afterDashDash && isOption(v) && !words[i].unresolved {
-			continue
-		}
-		out = append(out, words[i])
-	}
-	return out
-}
-
-// shellLongCommandNames name the long shell options whose value is a command
-// the shell runs: fish --init-command and --command. bash spells the same
-// option -c and has no long form of it.
-var shellLongCommandNames = []string{"init-command", "command"}
-
-// shellLongCommandOption returns the command-bearing long option a word is:
-// the whole name (--init-command), the name before an "="
-// (fish --init-command='rm f'), or a unique prefix of one, which getopt_long
-// accepts (fish --init-c 'rm f', fish --comm 'rm f'). "" means the option
-// carries no command: bash --rcfile=F or --rcfile F names a file.
-func shellLongCommandOption(v string) string {
-	if !strings.HasPrefix(v, "--") || len(v) < 3 {
-		return ""
-	}
-	name := v[2:]
-	if eq := strings.IndexByte(name, '='); eq >= 0 {
-		name = name[:eq]
-	}
-	for _, full := range shellLongCommandNames {
-		if len(name) >= 3 && strings.HasPrefix(full, name) {
-			return full
-		}
-	}
-	return ""
-}
-
-// shellShortCommandOption returns the cluster of a single-dash option whose
-// last letter asks for a command to run: fish -C, also inside a cluster
-// (fish -iC CMD). A cluster ending in another letter carries no command:
-// bash -C takes no argument.
-func shellShortCommandOption(v string) string {
-	if len(v) < 2 || v[0] != '-' || (len(v) > 1 && v[1] == '-') {
-		return ""
-	}
-	if strings.IndexByte(v[1:], 'C') >= 0 {
-		return v
-	}
-	return ""
-}
-
-// shellOptionCommands returns the words a shell runs as a command because an
-// option carries them: the argument of -C, of a cluster ending in C, or of a
-// command-bearing long option, whether its command stands in the next word
-// (fish --init-command 'rm f') or after an "=" (fish --init-command='rm f'),
-// and the value glued after such a short option (fish -C'rm f').
-//
-// The scan stops at the first word that is not an option and does not follow
-// a -c or a command-bearing option, because that word is a script operand and
-// everything after it belongs to the script, not to the shell
-// (sh ./configure --prefix=$PREFIX). Other long options --NAME=VALUE are left
-// alone: --rcfile, --prefix, --dir and --host name a file or a value, not a
-// command the shell runs.
-func shellOptionCommands(words []shellToken) []shellToken {
-	var out []shellToken
-	sawC := false // a -c or a command option was read: later words may still be options
-	for i := 0; i < len(words); i++ {
-		v := words[i].value
-		if v == "--" {
-			break
-		}
-		if strings.HasPrefix(v, "--") {
-			if shellLongCommandOption(v) == "" {
-				continue // --rcfile=F, --prefix=F: a file or a value, not a command
-			}
-			sawC = true
-			if eq := strings.IndexByte(v, '='); eq > 2 {
-				val := v[eq+1:]
-				out = append(out, shellToken{kind: tokWord, value: val, raw: val, marked: markedAfterEq(words[i]), unresolved: words[i].unresolved})
-				continue
-			}
-			if i+1 < len(words) {
-				out = append(out, words[i+1])
-				i++
-			}
-			continue
-		}
-		if v == "-" || v[0] != '-' {
-			if !sawC {
-				break // a script operand: the shell options ended
-			}
-			continue // after -c, a word is the command string or a positional
-		}
-		if shellShortCommandOption(v) == "" {
-			sawC = sawC || strings.ContainsRune(v[1:], 'c')
-			continue
-		}
-		sawC = true
-		// The C that carries the command is the last letter of the cluster,
-		// so the command is the next word (-C, -iC), or it is glued to a
-		// command: fish -C'echo x > $X' is one word, whose quotes the
-		// tokenizer already resolved. A cluster may hold a second C, which
-		// is only another option letter.
-		k := strings.IndexByte(v, 'C')
-		if k == len(v)-1 {
-			if i+1 < len(words) {
-				out = append(out, words[i+1])
-				i++
-			}
-			continue
-		}
-		out = append(out, gluedTailToken(words[i], k+1))
-	}
-	return out
-}
-
-// gluedCommandTail returns the text of a glued command option in the
-// arguments of a shell: fish -C'echo x > $X' is one word that the tokenizer
-// reads as -Cecho x > $X, and --init-command='rm f' as one word with an "=".
-// "" means no such word is present.
-func gluedCommandTail(words []shellToken) string {
-	for _, w := range words {
-		v := w.value
-		if k := strings.IndexByte(v, 'C'); k >= 0 && k+1 < len(v) && shellShortCommandOption(v[:k+1]) != "" {
-			return w.marked[k+1:]
-		}
-		if strings.HasPrefix(v, "--") && strings.Contains(v, "=") && shellLongCommandOption(v) != "" {
-			return markedAfterEq(w)
-		}
-	}
-	return ""
-}
-
-// gluedTailToken returns the word of a glued option value: the text of the
-// token from byte cut, which keeps every expansion mark of the value. The cut
-// cannot be placed when a mark stands at or before it, so the whole marked
-// text is kept and the check fails closed on it.
-func gluedTailToken(w shellToken, cut int) shellToken {
-	val := w.value[cut:]
-	marked := w.marked
-	if i := strings.IndexByte(marked, shellUnresolvedMark); i >= 0 && i < cut {
-		marked = marked[i:]
-	} else if len(marked) >= cut {
-		marked = marked[cut:]
-	}
-	if w.raw == w.value {
-		return shellToken{kind: tokWord, value: val, raw: val, marked: val}
-	}
-	return shellToken{kind: tokWord, value: val, raw: val, marked: marked, unresolved: w.unresolved}
-}
-
-// markedAfterEq returns the marked text of a --NAME=VALUE word after the
-// first "=", which keeps every expansion mark of the value.
-func markedAfterEq(w shellToken) string {
-	if i := strings.IndexByte(w.marked, '='); i >= 0 {
-		return w.marked[i+1:]
-	}
-	return w.marked
 }
 
 // shellCommandArgTouchesProtected checks one word that a shell runs as a

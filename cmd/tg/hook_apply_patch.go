@@ -40,37 +40,96 @@ func applyPatchTextKey(k string) bool {
 
 // applyPatchText returns the patch text of an apply_patch call. Codex CLI
 // 0.166.0 sends it in the parameter command. Every key applyPatchTextKey
-// accepts is read, in sorted order. A list of strings is joined, one string
-// per line.
+// accepts is read, in sorted order. So is every other string in the tool
+// input, at any depth in objects and lists, that holds a file marker: a
+// harness may put the patch under a key this list does not know (changes,
+// args, input.patch). A list of strings is joined, one string per line.
 func applyPatchText(params map[string]json.RawMessage) string {
-	var keys []string
-	for k := range params {
-		if applyPatchTextKey(k) {
-			keys = append(keys, k)
-		}
-	}
-	sort.Strings(keys)
 	var parts []string
-	for _, k := range keys {
-		raw := params[k]
-		var s string
-		if json.Unmarshal(raw, &s) == nil {
-			parts = append(parts, s)
-			continue
+	for _, k := range sortedKeys(params) {
+		if applyPatchTextKey(k) {
+			var s string
+			if json.Unmarshal(params[k], &s) == nil {
+				parts = append(parts, s)
+				continue
+			}
+			var list []string
+			if json.Unmarshal(params[k], &list) == nil {
+				parts = append(parts, list...)
+				continue
+			}
 		}
-		var list []string
-		if json.Unmarshal(raw, &list) == nil {
-			parts = append(parts, list...)
-		}
+		parts = append(parts, patchStrings(params[k], 0)...)
 	}
 	return strings.Join(parts, "\n")
 }
 
+// maxPatchValueDepth bounds how deep patchStrings reads nested values.
+const maxPatchValueDepth = 16
+
+// patchStrings returns the strings in a JSON value that hold a file marker.
+// A list of strings that holds one is returned whole, one string per line.
+// A value nested deeper than maxPatchValueDepth is returned as its JSON
+// text, which still shows a marker it holds.
+func patchStrings(raw json.RawMessage, depth int) []string {
+	if depth > maxPatchValueDepth {
+		if holdsPatchMarker(string(raw)) {
+			return []string{string(raw)}
+		}
+		return nil
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		if holdsPatchMarker(s) {
+			return []string{s}
+		}
+		return nil
+	}
+	var strs []string
+	if json.Unmarshal(raw, &strs) == nil {
+		if holdsPatchMarker(strings.Join(strs, "\n")) {
+			return strs
+		}
+		return nil
+	}
+	var out []string
+	var list []json.RawMessage
+	if json.Unmarshal(raw, &list) == nil {
+		for _, v := range list {
+			out = append(out, patchStrings(v, depth+1)...)
+		}
+		return out
+	}
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(raw, &obj) == nil {
+		for _, k := range sortedKeys(obj) {
+			out = append(out, patchStrings(obj[k], depth+1)...)
+		}
+	}
+	return out
+}
+
+// holdsPatchMarker reports whether a text holds a file marker of a patch.
+func holdsPatchMarker(s string) bool {
+	for _, m := range applyPatchMarkers {
+		if strings.Contains(s, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// applyPatchWorkDirKeys are the normalised parameter names that can name the
+// directory a relative patch path stands in.
+var applyPatchWorkDirKeys = map[string]bool{
+	"workdir": true, "workdirectory": true, "workingdir": true, "workingdirectory": true, "cwd": true,
+}
+
 // applyPatchWorkDirKey reports whether a parameter names the directory a
-// relative patch path stands in.
+// relative patch path stands in: workdir, working_dir, working_directory,
+// cwd, workingDir, work_dir and the other spellings normParamName folds.
 func applyPatchWorkDirKey(k string) bool {
-	n := normParamName(k)
-	return n == "workdir" || n == "workdirectory"
+	return applyPatchWorkDirKeys[normParamName(k)]
 }
 
 // collapseDotParts removes the empty and "." components of a path, which the
@@ -142,19 +201,19 @@ func applyPatchEnvelopes(base *domain.ActionEnvelope, cwd string) (envs []*domai
 	if json.Unmarshal(base.Parameters, &params) != nil {
 		return nil, "", false
 	}
-	// A workdir in the tool input places a relative patch path, as cwd does
-	// for the harness call. It is kept only when it is not absolute: the
-	// engine already joins a relative parameter named cwd, workdir or
-	// workingDir onto the absolute directories of the call, so joining an
-	// absolute one here would drop the "workdir" key the engine needs for
-	// that and leave the relative directory unseen.
-	var relWorkDirs []string
+	// A work directory in the tool input places a relative patch path, as
+	// cwd does for the harness call. An absolute one is used as it is. A
+	// relative one is placed under cwd and is also kept as it is.
+	var workDirs []string
 	for _, k := range sortedKeys(params) {
 		if applyPatchWorkDirKey(k) {
 			var d string
 			if json.Unmarshal(params[k], &d) == nil {
-				if d = strings.TrimSpace(d); d != "" && !strings.HasPrefix(d, "/") {
-					relWorkDirs = append(relWorkDirs, strings.TrimRight(d, "/"))
+				if d = strings.TrimSpace(d); d != "" {
+					if t := strings.TrimRight(d, "/"); t != "" {
+						d = t
+					}
+					workDirs = append(workDirs, d)
 				}
 			}
 		}
@@ -184,14 +243,15 @@ func applyPatchEnvelopes(base *domain.ActionEnvelope, cwd string) (envs []*domai
 		}
 		mm["patch"] = patch
 		mm["content"] = content
+		// "" stands for the target as the patch spells it: a relative
+		// target stays relative, and is not placed under the root.
 		dirs := []string{""}
 		if !absolute {
 			if strings.HasPrefix(cwd, "/") {
 				dirs = append(dirs, strings.TrimRight(cwd, "/"))
 			}
-			for _, wd := range relWorkDirs {
-				if strings.HasPrefix(cwd, "/") {
-					// Absolute, so the engine joins the bare target onto it.
+			for _, wd := range workDirs {
+				if !strings.HasPrefix(wd, "/") && strings.HasPrefix(cwd, "/") {
 					dirs = append(dirs, strings.TrimRight(cwd, "/")+"/"+wd)
 				}
 				dirs = append(dirs, wd)
@@ -200,7 +260,11 @@ func applyPatchEnvelopes(base *domain.ActionEnvelope, cwd string) (envs []*domai
 		for j, d := range dirs {
 			// Not path.Join: it removes "link/.." lexically, and the kernel
 			// follows the link first. The check resolves links itself.
-			full := collapseDotParts(d + "/" + target)
+			full := target
+			if d != "" {
+				full = strings.TrimSuffix(d, "/") + "/" + target
+			}
+			full = collapseDotParts(full)
 			if full == "" {
 				full = "."
 			}

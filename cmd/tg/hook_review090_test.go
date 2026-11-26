@@ -105,18 +105,23 @@ func TestReview090ProtectedPathBypasses(t *testing.T) {
 		{"lnk/../P.{json,{1..70}}", bashEv("python3 w.py "+home+"/lnk/../settings.{json,{1..70}}", home)},
 	}
 	for _, c := range cases {
-		if got := review090Hook(t, c.ev, file); got != "deny" {
-			t.Errorf("%s: decision %q, want deny", c.name, got)
-		}
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			if got := review090Hook(t, c.ev, file); got != "deny" {
+				t.Errorf("decision %q, want deny", got)
+			}
+		})
 	}
 	// A plain dir/../dir with a long list is still read.
-	free := filepath.Join(home, "free")
-	if err := os.MkdirAll(free, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if got := review090Hook(t, bashEv("cat "+free+"/../free/set.{json,{1..70}}", home), file); got == "deny" {
-		t.Errorf("free/../free long brace list: decision deny, want not deny")
-	}
+	t.Run("free/../free long brace list", func(t *testing.T) {
+		free := filepath.Join(home, "free")
+		if err := os.MkdirAll(free, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if got := review090Hook(t, bashEv("cat "+free+"/../free/set.{json,{1..70}}", home), file); got == "deny" {
+			t.Errorf("decision deny, want not deny")
+		}
+	})
 }
 
 func review090AgyHook(t *testing.T, ev map[string]interface{}, protect string) string {

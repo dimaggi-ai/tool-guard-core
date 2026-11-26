@@ -54,54 +54,50 @@ func TestReview090LinkBraceDenial(t *testing.T) {
 	cmd := "python3 w.py " + word
 
 	for _, withLink := range []bool{true, false} {
-		home, file := build(t, withLink)
-		saved, err := os.Getwd()
-		if err != nil {
-			t.Fatal(err)
+		name := "plain directory"
+		if withLink {
+			name = "link into the protected directory"
 		}
-		if err := os.Chdir(filepath.Join(home, "cwd")); err != nil {
-			t.Fatal(err)
-		}
-		prefixes := []string{filepath.ToSlash(file)}
-		bases := []string{filepath.ToSlash(home), filepath.ToSlash(filepath.Join(home, "cwd"))}
-		unread := unreadWord(cmd, tokenizeShell(cmd), bases, prefixes)
-		hit, reason := shellTouchesProtectedRec(cmd, prefixes, 0, nil, bases)
-		name := commandNamesProtected(tokenizeShell(cmd), []string{word}, bases, nil, nil, prefixes)
-		os.Stderr.WriteString("LINK=" + boolS(withLink) + " unread=[" + unread + "] name=[" + name + "] whole=" + boolS(hit) + " " + reason + "\n")
-		if withLink && unread == "" {
-			t.Errorf("with the link: unreadWord allowed the word, want denied")
-		}
-		if withLink && !hit {
-			t.Errorf("with the link: the command was allowed, want denied")
-		}
-		if !withLink && name != "" {
-			t.Errorf("with a plain directory: the name rule read %s, want nothing", name)
-		}
-		// With a plain directory of that name, the word read under the
-		// working directory is known and leads outside the protected
-		// directory, and the name rule says nothing. The base of the event
-		// home holds a directory of that name, so the same word can name a
-		// link the text does not show, and unreadWord keeps the fail-closed
-		// answer for that base; the hook test of the shipped policy covers
-		// the final verdict.
-		if !withLink && name != "" {
-			t.Errorf("with a plain directory: the name rule read %s, want nothing", name)
-		}
-		if !withLink && unread == "" {
-			t.Errorf("with a plain directory: unreadWord says nothing, want the fail-closed answer for the home base")
-		}
-		if false {
-			t.Logf("with a plain directory: unreadWord reads %s (fail-closed on an unknown name); the name rule stays silent", unread)
-		}
-		if err := os.Chdir(saved); err != nil {
-			t.Fatal(err)
-		}
+		t.Run(name, func(t *testing.T) {
+			home, file := build(t, withLink)
+			saved, err := os.Getwd()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chdir(filepath.Join(home, "cwd")); err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := os.Chdir(saved); err != nil {
+					t.Fatal(err)
+				}
+			}()
+			prefixes := []string{filepath.ToSlash(file)}
+			bases := []string{filepath.ToSlash(home), filepath.ToSlash(filepath.Join(home, "cwd"))}
+			unread := unreadWord(cmd, tokenizeShell(cmd), bases, prefixes)
+			hit, _ := shellTouchesProtectedRec(cmd, prefixes, 0, nil, bases)
+			named := commandNamesProtected(tokenizeShell(cmd), []string{word}, bases, nil, nil, prefixes)
+			if withLink {
+				if unread == "" {
+					t.Errorf("unreadWord allowed the word, want denied")
+				}
+				if !hit {
+					t.Errorf("the command was allowed, want denied")
+				}
+				return
+			}
+			// Under both bases the word names a file outside the
+			// protected directory: home/settings.json, and nothing under
+			// the plain file cwd/lnk.
+			if named != "" {
+				t.Errorf("the name rule read %s, want nothing", named)
+			}
+			if unread != "" {
+				t.Errorf("unreadWord read %s, want nothing", unread)
+			}
+			if hit {
+				t.Errorf("the command was denied, want allowed")
+			}
+		})
 	}
-}
-
-func boolS(b bool) string {
-	if b {
-		return "true"
-	}
-	return "false"
 }

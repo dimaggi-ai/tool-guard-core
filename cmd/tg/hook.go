@@ -78,7 +78,7 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	protectSelf := fs.Bool("protect-self", false, "shorthand: also protect the policy dir/file and $HOME/.claude from writes")
 	auditLog := fs.String("audit-log", "", "append each hook decision to this SHA-256 hash-chained JSONL log (tamper-evident, verify with `tg verify`); empty disables")
 	unknownToolsDeny := fs.Bool("unknown-tools-deny", false, "deny any tool_name not declared in scope.tool_names of some loaded ENFORCEMENT policy (closes the tool-name-spoofing/new-tool-goes-ungoverned class); mirrors tg-proxy's -unknown-tools-deny")
-	dispatch := fs.String("dispatch", "", "gh_read: after policy evaluation allows a shell tool call (a known shell tool name or any tool in group shell), allow verified gh reads; validated literal pwd/ls return no decision in the claude dialect and ask in other dialects; everything else asks and every internal error denies")
+	dispatch := fs.String("dispatch", "", "gh_read: after policy evaluation allows a shell tool call (a known shell tool name, or a tool in group shell with a command parameter), allow verified gh reads; validated literal pwd/ls return no decision in the claude dialect and ask in other dialects; everything else asks and every internal error denies")
 
 	parseErr := fs.Parse(args)
 	// Until input is decoded, auto has no known harness. Include both
@@ -325,6 +325,11 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	before := dec
 	dec, reason = applyEscalateAs(*escalateAs, dec, reason)
 	if before == "ask" && dec == "deny" && result != nil {
+		// The reason names the rule that escalated, as the engine's
+		// reason does ("Escalated by: [escalate-git]").
+		if er := strings.TrimSpace(result.DecisionReason); er != "" && !strings.Contains(reason, er) {
+			reason = strings.TrimRight(reason, "\n. ") + ". " + er
+		}
 		// The harness got a deny, so the audit record says the call was
 		// denied. Decision keeps the engine's escalation.
 		r := *result
@@ -339,12 +344,29 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 // dispatchShellTool reports whether -dispatch reads the tool as a shell
 // command. It shares one predicate with the protected-path check in the
 // engine (engine.IsShellTool) and adds the group test: a shell tool name the
-// hook does not know (run_terminal_cmd, execute_command, ...) still lands in
-// the "shell" group via hookToolGroup, so it is dispatched too. Before, only
-// the listed names were dispatched — an Antigravity run_command call kept the
-// plain allow, and so did any unlisted shell tool.
+// hook does not know (run_terminal_cmd, execute_command, ...) lands in the
+// "shell" group via hookToolGroup, and it is dispatched when its input has a
+// command parameter (command, cmd, CommandLine, ...). Every unknown tool name
+// lands in that group, so a tool without such a parameter (Glob, Grep, Task,
+// TodoWrite, WebSearch, an MCP tool) is not dispatched and keeps the
+// decision of the policy.
 func dispatchShellTool(env *domain.ActionEnvelope) bool {
-	return engine.IsShellTool(env.ToolName) || env.ToolGroup == "shell"
+	if engine.IsShellTool(env.ToolName) {
+		return true
+	}
+	if env.ToolGroup != "shell" {
+		return false
+	}
+	var params map[string]json.RawMessage
+	if json.Unmarshal(env.Parameters, &params) != nil {
+		return false
+	}
+	for k := range params {
+		if commandAliasNames[normParamName(k)] {
+			return true
+		}
+	}
+	return false
 }
 
 // hookNoDecision is the decision value for a proven unrelated command. The
@@ -1121,7 +1143,8 @@ once this hook is actually enforcing policy.
 
 -dispatch gh_read (enforcement mode only) changes what an allowed call to a
 shell tool returns (a known shell tool name such as Bash, run_command or
-powershell, or any tool name in the shell tool group): a verified gh read
+powershell, or a tool in the shell tool group that has a command parameter;
+other tools keep the policy decision): a verified gh read
 allows; a validated literal pwd or ls returns no decision in the claude
 dialect so the client's permission rules apply.
 Other dialects ask for pwd or ls, and every other command asks in all

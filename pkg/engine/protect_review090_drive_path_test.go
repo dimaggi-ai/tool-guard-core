@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 )
@@ -14,6 +13,6 @@ func TestPhysicalPathCachedDriveShape(t *testing.T) {
 	// separator form, and a plain POSIX path as the control.
 	for _, p := range []string{`C:\dir\..\x`, `C:dir\..\x`, `C:/dir/../x`, `c:/a/b/../x`, `/x/../y`, `rel/../y`} {
 		slash := filepath.ToSlash(p)
-		os.Stderr.WriteString("WIN [" + p + "] volOf=[" + volumeNameOf(slash) + "] phys=[" + physicalPathCached(slash, map[string]string{}) + "]\n")
+		t.Logf("WIN [%s] volOf=[%s] phys=[%s]", p, volumeNameOf(slash), physicalPathCached(slash, map[string]string{}))
 	}
 }
