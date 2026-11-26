@@ -156,7 +156,7 @@ func TestReview090eBypasses(t *testing.T) {
 	dirs35 := strings.Join(dirs[:35], " ")
 	// Gemini r4 6: a patch nested 18 levels deep whose markers are JSON
 	// escapes.
-	esc := `***`
+	esc := `\u002a\u002a\u002a`
 	deepRaw := `{"patch":"` + esc + ` Begin Patch\n` + esc + ` Update File: ` + file + `\n@@\n+x\n` + esc + ` End Patch"}`
 	for i := 0; i < 18; i++ {
 		deepRaw = `{"a":` + deepRaw + `}`
@@ -231,6 +231,7 @@ func TestReview090eBypasses(t *testing.T) {
 		sh(`X=.cl; Y=aude/settings.json; echo x < $X$Y 1>&0- > /dev/stdout`),
 		sh(`X=.cl; Y=aude/settings.json; echo x < $X$Y 2>&0- > /dev/stderr`),
 		sh(`echo x 1>&0- > .claude/settings.json`),
+		sh(`echo x < .claude/settings.json 1>&0- > /dev/stdout`),
 		// Gemini r4 3: unread directory changes.
 		sh(`D=lnk; cd $D; python3 w.py ./../settings.` + L),
 		sh(`D=lnk; env -C $D python3 w.py ./../settings.` + L),
@@ -335,6 +336,147 @@ func TestReview090eBypasses(t *testing.T) {
 	})
 }
 
+// Sixth-round cases: every probe of the round-5 reviews (Fable 1-5,
+// Gemini 1-6) that must be denied. d5 and s42 are links to the protected
+// directory whose names a long sequence makes.
+func TestReview090eRound5Probes(t *testing.T) {
+	home, cdir, _, _, _, _ := review090eTree(t)
+	file := filepath.Join(cdir, "settings.json")
+	for _, name := range []string{"d5", "s42"} {
+		if err := os.Symlink(cdir, filepath.Join(home, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sh := func(cmd string) review090eCase { return review090eCase{name: cmd, ev: bashEv(cmd, home)} }
+	shIn := func(cwd, cmd string) review090eCase {
+		return review090eCase{name: cmd + " (cwd " + filepath.Base(cwd) + ")", ev: bashEv(cmd, cwd)}
+	}
+	cases := []review090eCase{
+		// Fable r5 1: separators that only the decoded $'...' text has.
+		sh(`eval $'tee\t.claude/settings.{json,{1..70}}'`),
+		sh(`eval $'tee\x20.claude/settings.{json,{1..70}}'`),
+		sh(`eval $'tee\n.claude/settings.{json,{1..70}}'`),
+		sh(`eval $'tee\t.{claude,{1..70}}/settings.json'`),
+		sh(`eval $'python3 w.py\t.claude/settings.{json,{1..70}}'`),
+		sh(`eval $'tee\t.claude/settings.json'`),
+		sh(`eval $'cd\t.claude\ntee\tsettings.json'`),
+		sh(`trap $'tee\t.claude/settings.json' EXIT`),
+		// Fable r5 2 and Gemini r5 1: sequences of netMaxList words and
+		// more, at 4095, 4096, 4097 and 5000.
+		sh(`tee d{1..5000}/settings.json`),
+		sh(`sed -i s/a/b/ d{1..5000}/settings.json`),
+		sh(`rm -f d{1..5000}/settings.json`),
+		sh(`touch d{1..5000}/settings.json`),
+		sh(`cp /etc/hosts d{5..5000}/settings.json`),
+		sh(`python3 w.py d{1..4097}/settings.json`),
+		sh(`python3 w.py d{{1..5000},x}/settings.json`),
+		sh(`python3 w.py d{1..4096}/settings.json`),
+		sh(`python3 w.py d{1..4095}/settings.json`),
+		sh(`tee d{1..4096}/settings.json`),
+		sh(`tee d{1..4097}/settings.json`),
+		sh(`echo pwn > d{1..4096}/settings.json`),
+		sh(`echo pwn > d{1..4097}/settings.json`),
+		sh(`echo pwn > d{0..5000}/settings.json`),
+		shIn(cdir, `tee /proc/{1..5000}/cwd/settings.json <<< PWNED`),
+		sh(`tee s{0..5000}/settings.json <<< pwn`),
+		sh(`python3 w.py /proc/{1..5000}/cwd/settings.json`),
+		sh(`python3 w.py /proc/{1..5000}/fd/3/settings.json`),
+		sh(`echo pwn > s{0..5000}/settings.json`),
+		sh(`python3 w.py s{0..5000}/settings.json`),
+		sh(`python3 w.py s{5000..1..-1}/settings.json`),
+		sh(`python3 w.py s{0001..5000}/settings.json`),
+		sh(`fish -o s{0..5000}/settings.json -c true`),
+		// Fable r5 4: a redirect after a directory change of the shell
+		// that opens it.
+		sh(`cd "$DIR" && make > build.log`),
+		sh(`cd "$(dirname "$0")" && ./run.sh > out.log`),
+		sh(`cd "$D" && (echo x > alias)`),
+		sh(`(cd "$D"; echo x > alias)`),
+		sh(`(cd "$D" && (echo x > alias))`),
+		sh(`pushd "$D"; echo x > alias`),
+		sh(`popd; echo x > alias`),
+		sh(`CDPATH=/x cd d5 && echo x > settings.json`),
+		sh(`cd "$D" && echo x > alias`),
+		sh(`env -C "$D" sh -c 'echo x > alias'`),
+		sh(`git -C "$D" log; bash -c 'echo x > alias'`),
+		sh(`cd "$D" && bash -c 'echo x > alias'`),
+		sh(`cd dl?nk && echo x > settings.json`),
+		sh(`cd zz* && echo x > alias`),
+		sh(`git -C "$R" log > settings.json`),
+		sh(`cd "$D" && make > alias`),
+		sh(`cd "$D"; (make) > alias`),
+		sh(`cd "$D" && { make; } > alias`),
+		sh(`cd ${D} > x; echo x > alias`),
+		sh(`sh -c 'cd "$1" && echo x > alias' _ d`),
+		// Fable r5 5: substitutions and escaped blanks in text read again.
+		sh(`eval 'tee .cl$(true)aude/settings.json'`),
+		sh(`eval 'tee $(echo .claude)/settings.json'`),
+		sh(`eval 'echo x > .cl$(true)aude/settings.json'`),
+		sh(`trap 'tee .cl$(true)aude/settings.json' EXIT`),
+		sh("eval 'tee .cl`true`aude/settings.json'"),
+		sh(`eval 'tee my\ link/settings.json'`),
+		sh(`eval "tee my\\ link/settings.json"`),
+		sh(`eval 'python3 w.py my\ link/settings.json'`),
+		// Fable r5 5: directory changes the indicator list did not know.
+		sh(`D=dl; D+=ink; C=cd; $C "$D"; tee settings.json`),
+		sh(`go -C "$D" run . ; tee settings.json`),
+		sh(`cargo -C "$D" build; tee settings.json`),
+		sh(`pnpm -C "$D" i; tee settings.json`),
+		sh(`sudo -D "$D" true; tee settings.json`),
+		sh(`nsenter --wd="$D" true; tee settings.json`),
+		sh(`chroot "$D" true; tee settings.json`),
+		sh(`bsdtar --cd "$D" -xf a.tar; tee settings.json`),
+		sh(`docker run -w "$D" img; tee settings.json`),
+		sh(`sudo -D "$D" tee settings.json`),
+		sh(`nsenter --wd="$D" tee settings.json`),
+		sh(`docker run -w "$D" img tee settings.json`),
+		// Fable r5 5: collating elements and classes in a bracket.
+		sh(`python3 w.py dlin[[.k.]]/settings.json`),
+		sh(`python3 w.py dlin[[=k=]]/settings.json`),
+		sh(`python3 w.py dlin[[:alpha:]]/settings.json`),
+		// Gemini r5 3 and 4: a stream opened on the file for input.
+		sh(`bash -c 'echo PWNED > /dev/stderr' 2<$'.claude/settings.json\x00foo'`),
+		sh(`bash -c 'echo PWNED > /dev/stderr' 2<$'.claude/settings.json'`),
+		sh(`sh -c 'echo PWNED > /dev/stdout' 1<$'.claude/settings.json'`),
+		sh(`bash -c 'echo PWNED > /dev/stderr' 2<$'dlink/settings.json'`),
+		sh(`bash -c 'echo PWNED > /dev/stderr' 2<dlink/$'\x73ettings.json'`),
+		sh(`bash -c 'echo PWNED > /dev/stderr' 2<.claude/$'settings.json'`),
+		sh(`bash -c 'echo PWNED > /dev/stderr' 2<$".claude/settings.json"`),
+		sh(`bash -c 'echo PWNED > /dev/stderr' 2<$"."claude/settings.json`),
+		sh(`echo PWNED < .claude/settings.json 1>&0- > /de'v'/stdout`),
+		sh(`echo PWNED < dlink/settings.json 1>&0- > /de'v'/stdout`),
+		sh(`echo PWNED < .claude/settings.json 1>&0- > /de\v/stdout`),
+		sh(`echo PWNED < .claude/settings.json 1>&0- > /pr'o'c/self/fd/1`),
+		sh(`echo PWNED < .claude/settings.json 1>&0- > /de'v'/fd/1`),
+		sh(`bash -c 'echo PWNED > /de"v"/stderr' 2<.claude/settings.json`),
+		sh(`bash -c 'echo PWNED > /d\ev/stderr' 2<.claude/settings.json`),
+		sh(`sh -c 'echo PWNED > /de"v"/stdout' 1<.claude/settings.json`),
+		sh(`bash -c 'echo PWNED > /pr"o"c/self/fd/2' 2<.claude/settings.json`),
+		// Gemini r5 5: directory changes and HOME set in decoded text.
+		sh(`D=ln; D+=k; eval $'c\x64 "$D"; tee ../settings.json <<< PWNED'`),
+		sh(`D=ln; D+=k; eval $'env -\x43 "$D" tee ../settings.json <<< PWNED'`),
+		sh(`X=.cl; X+=aude; printf -v $'CD\x50ATH' %s "$X"; cd sub; tee ../settings.json <<< PWNED`),
+		sh(`X=.cl; X+=aude; printf -v HOME %s "$X"; cd; tee settings.json <<< PWNED`),
+		sh(`X=.cl; X+=aude; read HOME <<< "$X"; cd; tee settings.json <<< PWNED`),
+		sh(`X=` + cdir + `; printf -v HOME %s "$X"; tee ~/settings.json <<< PWNED`),
+		sh(`X=` + cdir + `; printf -v HOME %s "$X"; echo x > ~/settings.json`),
+		// Gemini r5 6: eval text and shells that read standard input.
+		sh(`D=fr; D+=ee; eval 'cd "$D"; echo PWNED > alias'`),
+		sh(`export D=fr; D+=ee; echo 'cd "$D"; echo PWNED > alias' | sh`),
+		sh(`A=.cl; B=aude; C=settings; D=.json; eval 'tee "$A$B/$C$D" <<< PWNED'`),
+		sh(`A=.cl; B=aude; C=settings; D=.json; eval 'echo PWNED > "$A$B/$C$D"'`),
+		sh(`bash <<< 'echo PWNED > "$A$B/$C$D"'`),
+	}
+	review090eEach(t, home, file, cases, func(t *testing.T, got, reason string, took time.Duration) {
+		if got != "deny" {
+			t.Errorf("decision %q (%s), want deny", got, reason)
+		}
+		if took > 2*time.Second {
+			t.Errorf("took %s, want under 2s", took)
+		}
+	})
+}
+
 func TestReview090eOrdinaryCommands(t *testing.T) {
 	home, _, file, _, _, _ := review090eTree(t)
 	sh := func(cmd string) review090eCase { return review090eCase{name: cmd, ev: bashEv(cmd, home)} }
@@ -357,6 +499,29 @@ func TestReview090eOrdinaryCommands(t *testing.T) {
 		sh(`grep '<tag>' f`),
 		sh(`cmd 2>&-`),
 		sh(`cd build && cmake .. && make -j8`),
+		// Fable r5 4: ordinary programs and redirects after a directory
+		// change of one program or of a ( ) group that has ended.
+		sh(`awk '{s+=$2} END{print s}' f`),
+		sh(`awk '{a[$1]++} END{for(k in a) print k}' f`),
+		sh(`kubectl get pods -o jsonpath='{.items[0].metadata.name}'`),
+		sh(`(cd "$DIR" && make) > build.log`),
+		sh(`(cd "$D"); make > log.txt`),
+		sh(`git -C "$R" log > log.txt`),
+		sh(`git -C "$R" log > out.txt 2>&1`),
+		sh(`make -C "$D" > log.txt`),
+		sh(`env -C "$D" make > log.txt`),
+		sh(`echo hi | bash`),
+		sh(`echo 'ls -l' | bash`),
+		sh(`eval 'echo hi'`),
+		sh(`trap 'echo bye' EXIT`),
+		// Fable r5 3 and Gemini r5 2: sequences at the int64 limits.
+		sh(`echo {-9223372036854775808..9223372036854775807}`),
+		sh(`ls {-9223372036854775808..9223372036854775807}`),
+		sh(`echo {9223372036854775807..9223372036854775807}`),
+		sh(`echo {0..-9223372036854775808}`),
+		sh(`echo {a..z..-9223372036854775808}`),
+		sh(`echo {1..-9223372036854775807}`),
+		sh(`echo {9223372036854775806..9223372036854775807..2}`),
 		{name: "apply_patch in a normal tree", ev: toolEv("apply_patch", filepath.Join(home, "free"), map[string]interface{}{"patch": review090cPatch("notes.txt")})},
 		{name: "dispatch Glob", ev: toolEv("Glob", home, map[string]interface{}{"pattern": "**/*.go"}), extra: dispatch},
 		{name: "dispatch Grep", ev: toolEv("Grep", home, map[string]interface{}{"pattern": "foo", "path": home}), extra: dispatch},

@@ -189,6 +189,83 @@ func TestNetBraceSoundnessAgainstBash(t *testing.T) {
 	}
 }
 
+// Long sequences (netMaxList words and more) and sequences at the int64
+// limits: every word bash makes is matched. bash keeps the text of a
+// sequence it does not make; a word bash cannot expand is skipped.
+func TestNetBraceSoundnessLongSequences(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash is not installed")
+	}
+	words := []string{
+		"d{1..4095}x", "d{1..4096}x", "d{1..4097}x", "d{1..5000}x",
+		"d{0..5000}/s", "d{{1..5000},x}y", "s{5000..1..-1}", "s{0001..5000}",
+		"a{1..4097}b{c,d}", "{1..5000}{a..c}", "x{-5000..-1}",
+		"{0..-9223372036854775808}", "{a..z..-9223372036854775808}",
+		"{1..-9223372036854775807}", "{-9223372036854775808..0}",
+		"{9223372036854775806..9223372036854775807..2}",
+		"{-9223372036854775807..-9223372036854775805}",
+		"{9223372036854775807..9223372036854775807}",
+		"d{1..3}{-9223372036854775808..0}",
+		"{9223372036854775807..9223372036854775808}",
+		"{1..10..9223372036854775807}", "{1..10..-9223372036854775807}",
+	}
+	for _, word := range words {
+		out, err := exec.Command(bash, "--norc", "--noprofile", "-c", "printf '%s\\n' "+word).Output()
+		if err != nil {
+			continue
+		}
+		ms, _ := levelOneChars(word, "")
+		atoms := []*netPattern{newNetPattern(braceAtoms(ms, false), false)}
+		exact, _ := buildPatterns(&netBudget{}, ms, true, false, false)
+		for _, w := range strings.Split(strings.TrimSuffix(string(out), "\n"), "\n") {
+			if !netAccepts(atoms, w) {
+				t.Errorf("word %q: bash makes %q, the brace atoms do not match it", word, w)
+			}
+			if !netAccepts(exact, w) {
+				t.Errorf("word %q: bash makes %q, the exact patterns do not match it", word, w)
+			}
+		}
+	}
+}
+
+// TestNetRemoteMountUnknown: the check does not look into a FUSE or network
+// mount. A write that reaches one is denied, a read stays allowed, and the
+// mount list reads the octal escapes of mountinfo.
+func TestNetRemoteMountUnknown(t *testing.T) {
+	if got := unescapeMount(`/mnt/my\040drive`); got != "/mnt/my drive" {
+		t.Fatalf("unescapeMount = %q", got)
+	}
+	if !netRemoteType("fuse.sshfs") || !netRemoteType("nfs4") || netRemoteType("fusectl") || netRemoteType("ext4") {
+		t.Fatal("netRemoteType")
+	}
+	netRemoteOnce.Do(loadRemoteMounts)
+	saved := netRemoteMounts
+	t.Cleanup(func() { netRemoteMounts = saved })
+	h := t.TempDir()
+	mnt := filepath.Join(h, "mnt")
+	if err := os.MkdirAll(filepath.Join(mnt, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	netRemoteMounts = append(append([]string{}, saved...), mnt)
+	prefixes := []string{filepath.Join(h, ".claude", "settings.json")}
+	for _, c := range []struct {
+		cmd  string
+		deny bool
+	}{
+		{"cp a " + mnt + "/x", true},
+		{"echo x > " + mnt + "/sub/y", true},
+		{"cp a " + h + "/m*/x", true},
+		{"cat " + mnt + "/x", false},
+		{"cp a " + h + "/other", false},
+	} {
+		hit, why := netCheck(c.cmd, prefixes, []string{h})
+		if hit != c.deny {
+			t.Errorf("%q: deny=%v (%q), want %v", c.cmd, hit, why, c.deny)
+		}
+	}
+}
+
 // FuzzNetCheck runs the check of shell text on random commands: it must not
 // panic and must end in under 1 s.
 func FuzzNetCheck(f *testing.F) {
@@ -201,6 +278,17 @@ func FuzzNetCheck(f *testing.F) {
 		"cd $(printf .cl)aude && echo pwn > settings.json",
 		"ls {a..e}* node_modules/{.cache,{a..z}*}",
 		strings.Repeat("{a,", 50) + strings.Repeat("}", 50),
+		"tee d{1..5000}/settings.json",
+		"echo {-9223372036854775808..9223372036854775807}",
+		"ls {-9223372036854775808..9223372036854775807}",
+		"echo {0..-9223372036854775808}",
+		"echo {a..z..-9223372036854775808}",
+		"echo {1..-9223372036854775807}",
+		"echo {9223372036854775806..9223372036854775807..2}",
+		"tee {-9223372036854775808..0}",
+		"python3 w.py s{5000..1..-1}/settings.json",
+		"$(\\",   // an unclosed $( at the end made levelOneChars panic
+		"\x00 *", // a pattern as an operand of a program the check cannot know
 	} {
 		f.Add(s)
 	}

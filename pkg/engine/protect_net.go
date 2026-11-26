@@ -29,6 +29,7 @@ package engine
 // are matched against the atoms with an automaton, one directory at a time.
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -36,6 +37,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode/utf8"
 )
 
@@ -119,6 +121,9 @@ type atom struct {
 	// startAt: a path may start at this atom. endAt: a path may end
 	// after it.
 	startAt, endAt bool
+	// skipTo, when above 0: the atoms from this one to skipTo are
+	// optional together. Text between two brace marks is kept whole.
+	skipTo int32
 }
 
 // netPattern is a list of atoms read as an automaton. A position is an
@@ -213,6 +218,9 @@ func (p *netPattern) addClosure(out []int32, q int32) []int32 {
 		a := &p.atoms[i]
 		if a.opt || a.kind == aStar || a.kind == aDyn || a.kind == aDigits {
 			p.stack = append(p.stack, p.start[i+1])
+		}
+		if a.skipTo > 0 {
+			p.stack = append(p.stack, p.start[a.skipTo])
 		}
 	}
 	return out
@@ -413,7 +421,7 @@ func (p *netPattern) literal() (string, bool) {
 	}
 	var sb strings.Builder
 	for i, a := range p.atoms {
-		if a.kind != aLit || a.opt || (a.endAt && i != len(p.atoms)-1) {
+		if a.kind != aLit || a.opt || a.skipTo > 0 || (a.endAt && i != len(p.atoms)-1) {
 			return "", false
 		}
 		sb.WriteString(a.s)
@@ -504,6 +512,17 @@ func atomsOf(out []atom, ms []mchar, opt, flags bool) []atom {
 			// text when no file matches. A star holds both.
 			flush()
 			j := closes[i]
+			for k := i + 1; k+1 < j; k++ {
+				if ms[k].c == '[' && strings.IndexByte(".=:", ms[k+1].c) >= 0 {
+					// A collating element, an equivalence class or a
+					// character class ([[.k.]]) has a ] of its own: the
+					// star runs to the end of the part.
+					for j+1 < len(ms) && ms[j+1].c != '/' {
+						j++
+					}
+					break
+				}
+			}
 			out = append(out, atom{kind: aStar, opt: opt, startAt: st})
 			for k := i + 1; k <= j; k++ {
 				if flags && ms[k].en {
@@ -620,10 +639,8 @@ func parseBraces(b *netBudget, ms []mchar, i int, inGroup bool) ([][]bitem, int)
 				body := galts[0]
 				if seq, ok := braceSeqItems(body); ok {
 					cur = append(cur, bitem{seq: seq, isSeq: true, group: true})
-					// Keep the start and end marks of the text.
-					if len(seq) > 0 {
-						cur[len(cur)-1].ch = m
-					}
+					// Keep the start mark of the text.
+					cur[len(cur)-1].ch = m
 				} else if b.charge(len(body)) {
 					// The copy of the body is charged, so deep groups of
 					// one word cost the budget and not the time limit.
@@ -673,6 +690,12 @@ func braceSeqItems(body []bitem) ([]string, bool) {
 	return braceSequence2(sb.String())
 }
 
+// braceSequence2 returns the words of a sequence as bash makes them. A
+// sequence of netMaxList words or more returns an empty, non-nil list: the
+// readers read it as any digits. A number or an increment bash does not
+// read (out of the int64 range, or the increment -2^63) or a span over
+// 2^63-1 makes no sequence, as in bash, which keeps the text. The count is computed without
+// overflow and the loop runs at most netMaxList times.
 func braceSequence2(s string) ([]string, bool) {
 	if m := braceIntSeqRe.FindStringSubmatch(s); m != nil {
 		lo, err1 := strconv.ParseInt(m[1], 10, 64)
@@ -680,26 +703,34 @@ func braceSequence2(s string) ([]string, bool) {
 		if err1 != nil || err2 != nil {
 			return nil, false
 		}
-		inc := int64(1)
+		inc := uint64(1)
 		if m[4] != "" {
 			v, err := strconv.ParseInt(m[4], 10, 64)
-			if err != nil {
+			if err != nil || v == math.MinInt64 {
 				return nil, false
 			}
 			if v < 0 {
 				v = -v
 			}
 			if v != 0 {
-				inc = v
+				inc = uint64(v)
 			}
 		}
-		span := hi - lo
-		if span < 0 {
-			span = -span
+		var span uint64
+		if hi >= lo {
+			span = uint64(hi) - uint64(lo)
+		} else {
+			span = uint64(lo) - uint64(hi)
+		}
+		if span > math.MaxInt64 {
+			// bash computes the span in intmax_t; when it overflows,
+			// bash makes no sequence and keeps the text.
+			return nil, false
 		}
 		if span/inc >= netMaxList {
 			return []string{}, true // too long: read as digits
 		}
+		count := span/inc + 1
 		width := 0
 		for _, e := range []string{m[1], m[2]} {
 			t := strings.TrimLeft(e, "+-")
@@ -707,12 +738,16 @@ func braceSequence2(s string) ([]string, bool) {
 				width = len(e)
 			}
 		}
-		var out []string
-		step := inc
-		if hi < lo {
-			step = -inc
-		}
-		for v := lo; (step > 0 && v <= hi) || (step < 0 && v >= hi); v += step {
+		out := make([]string, 0, count)
+		for k := uint64(0); k < count; k++ {
+			// lo + k*inc (or lo - k*inc) stays between lo and hi, so it
+			// does not overflow when done in uint64.
+			var v int64
+			if hi >= lo {
+				v = int64(uint64(lo) + k*inc)
+			} else {
+				v = int64(uint64(lo) - k*inc)
+			}
 			t := strconv.FormatInt(v, 10)
 			if width > 0 {
 				neg := strings.HasPrefix(t, "-")
@@ -733,27 +768,30 @@ func braceSequence2(s string) ([]string, bool) {
 		return out, true
 	}
 	if m := braceCharSeqRe.FindStringSubmatch(s); m != nil {
-		lo, hi := m[1][0], m[2][0]
+		lo, hi := int(m[1][0]), int(m[2][0])
 		inc := 1
 		if m[4] != "" {
-			v, err := strconv.Atoi(m[4])
-			if err != nil {
+			v, err := strconv.ParseInt(m[4], 10, 64)
+			if err != nil || v == math.MinInt64 {
 				return nil, false
 			}
 			if v < 0 {
 				v = -v
 			}
+			if v > 256 {
+				v = 256 // any larger increment makes the first letter only
+			}
 			if v != 0 {
-				inc = v
+				inc = int(v)
 			}
 		}
 		var out []string
 		if lo <= hi {
-			for c := int(lo); c <= int(hi); c += inc {
+			for c := lo; c <= hi; c += inc {
 				out = append(out, string(rune(c)))
 			}
 		} else {
-			for c := int(lo); c >= int(hi); c -= inc {
+			for c := lo; c >= hi; c -= inc {
 				out = append(out, string(rune(c)))
 			}
 		}
@@ -859,10 +897,10 @@ func expandItemsSeqText(b *netBudget, items []bitem) [][]mchar {
 		}
 		var parts [][]mchar
 		if it.isSeq {
-			if len(it.seq) == 0 {
-				continue
+			lo, hi := "0", "1" // a sequence too long to list: any digits
+			if len(it.seq) > 0 {
+				lo, hi = it.seq[0], it.seq[len(it.seq)-1]
 			}
-			lo, hi := it.seq[0], it.seq[len(it.seq)-1]
 			w := []mchar{{c: '{', k: mMeta, st: it.ch.st}}
 			for _, t := range []string{lo, "..", hi} {
 				for j := 0; j < len(t); j++ {
@@ -948,12 +986,13 @@ func braceAtoms(ms []mchar, flags bool) []atom {
 	if first < 0 || last < first {
 		return atomsOf(nil, ms, false, flags)
 	}
+	keep := keptBraces(ms, 0)
 	out := atomsOf(nil, ms[:first], false, flags)
 	i := first
 	for i <= last {
 		m := ms[i]
 		if m.k == mMeta && (m.c == '{' || m.c == '}' || m.c == ',') {
-			out = atomsOf(out, ms[i:i+1], true, flags)
+			out = atomsOf(out, ms[i:i+1], !keep[i], flags)
 			if m.c == '{' {
 				// A sequence body: {x..y}.
 				j := i + 1
@@ -989,10 +1028,131 @@ func braceAtoms(ms []mchar, flags bool) []atom {
 		for j <= last && !(ms[j].k == mMeta && (ms[j].c == '{' || ms[j].c == '}' || ms[j].c == ',')) {
 			j++
 		}
-		out = atomsOf(out, ms[i:j], true, flags)
+		out = braceUnitAtoms(out, ms[i:j], flags)
 		i = j
 	}
 	return atomsOf(out, ms[last+1:], false, flags)
+}
+
+// keptBraces returns the indexes (plus off) of the { and } of each group
+// that no reading can make a list or a sequence: one with no comma at its
+// own level, no .. and no expansion in it, and no comma or expansion after
+// it. Bash keeps such braces as text. (Bash skips a } with no comma before
+// it: a{b}c,d} is the list b}c and d, so a comma after the group counts.)
+func keptBraces(ms []mchar, off int) map[int]bool {
+	keep := map[int]bool{}
+	// tail[k]: a comma or an expansion at k or after it.
+	tail := make([]bool, len(ms)+1)
+	for k := len(ms) - 1; k >= 0; k-- {
+		tail[k] = tail[k+1] || ms[k].k == mDyn || ms[k].k == mMeta && ms[k].c == ','
+	}
+	type open struct {
+		at          int
+		comma, dyns bool
+	}
+	var stack []open
+	for k, m := range ms {
+		if len(stack) > 0 {
+			top := &stack[len(stack)-1]
+			if m.k == mDyn {
+				for q := range stack {
+					stack[q].dyns = true
+				}
+			}
+			if m.c == '.' && k > 0 && ms[k-1].c == '.' {
+				for q := range stack {
+					stack[q].dyns = true
+				}
+			}
+			if m.k == mMeta && m.c == ',' {
+				top.comma = true
+			}
+		}
+		if m.k != mMeta {
+			continue
+		}
+		switch m.c {
+		case '{':
+			stack = append(stack, open{at: k})
+		case '}':
+			if len(stack) == 0 {
+				continue
+			}
+			top := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if !top.comma && !top.dyns && !tail[k+1] {
+				keep[top.at+off] = true
+				keep[k+off] = true
+			}
+		}
+	}
+	return keep
+}
+
+// braceUnitAtoms adds the atoms of the text between two brace marks. Bash
+// keeps such text whole: every word of a list holds all of it or none of
+// it. An expansion in the text can bring a comma or a brace to a later
+// reading, so the text is cut at each expansion, and at each bracket
+// expression that holds one, which is read as an expansion. Each piece
+// between the cuts is optional as a whole; each cut is an optional
+// expansion. A text with .. and an expansion can become a sequence: it
+// also gets optional digits and letters.
+func braceUnitAtoms(out []atom, ms []mchar, flags bool) []atom {
+	hasDyn, dots := false, false
+	for k, m := range ms {
+		if m.k == mDyn {
+			hasDyn = true
+		}
+		if k > 0 && m.c == '.' && ms[k-1].c == '.' && m.k == mLit && ms[k-1].k == mLit {
+			dots = true
+		}
+	}
+	if hasDyn && dots {
+		st := flags && len(ms) > 0 && ms[0].st
+		out = append(out, atom{kind: aDigits, opt: true, startAt: st})
+		out = append(out, atom{kind: aRange, opt: true, lo: 'A', hi: 'z', startAt: st})
+		return atomsOf(out, ms, true, flags)
+	}
+	closes := closingBrackets(ms)
+	from := 0
+	piece := func(to int) {
+		if to <= from {
+			return
+		}
+		n0 := len(out)
+		out = atomsOf(out, ms[from:to], false, flags)
+		if len(out) > n0 {
+			out[n0].skipTo = int32(len(out))
+		}
+	}
+	for k := 0; k < len(ms); k++ {
+		end := -1
+		if ms[k].k == mDyn {
+			end = k
+		} else if ms[k].k == mMeta && ms[k].c == '[' && closes[k] > k {
+			for q := k + 1; q < closes[k]; q++ {
+				if ms[q].k == mDyn {
+					end = closes[k]
+					break
+				}
+			}
+		}
+		if end < 0 {
+			continue
+		}
+		piece(k)
+		a := atom{kind: aDyn, opt: true, startAt: flags && ms[k].st}
+		for q := k; q <= end; q++ {
+			if flags && ms[q].en {
+				a.endAt = true
+			}
+		}
+		out = append(out, a)
+		k = end
+		from = end + 1
+	}
+	piece(len(ms))
+	return out
 }
 
 // ---- readings ----
@@ -1171,11 +1331,26 @@ func netDollarBody(body string) string {
 	return b.String()
 }
 
+// dollarQuoteClosed reports whether the $'...' text whose quote is at
+// s[q] ends with a closing quote.
+func dollarQuoteClosed(s string, q int) bool {
+	for j := q + 1; j < len(s); j++ {
+		if s[j] == '\\' {
+			j++
+			continue
+		}
+		if s[j] == '\'' {
+			return true
+		}
+	}
+	return false
+}
+
 // netLetterEscapes are the letters of the $'...' escapes of one control
 // character, in the order of netLetterBytes.
-const netLetterEscapes = "abefnrtv"
+const netLetterEscapes = "abefnrtvE"
 
-var netLetterBytes = []byte{7, 8, 27, 12, '\n', '\r', '\t', 11}
+var netLetterBytes = []byte{7, 8, 27, 12, '\n', '\r', '\t', 11, 27}
 
 // decodeText is one decoded reading; letters decodes the letter escapes.
 func decodeText(s string, letters bool) []string {
@@ -1415,6 +1590,13 @@ func levelOneChars(raw, home string) (ms []mchar, magic bool) {
 			lit('$')
 			return i + 1
 		}
+		if next > len(s) {
+			// An unclosed expansion, such as "$(\": it runs to the end.
+			next = len(s)
+		}
+		if next <= i {
+			next = i + 1
+		}
 		if isExp {
 			name := s[i+1 : next]
 			if name == "HOME" || name == "{HOME}" {
@@ -1453,16 +1635,20 @@ func levelOneChars(raw, home string) (ms []mchar, magic bool) {
 				i++
 			}
 		case c == '$' && i+1 < len(raw) && raw[i+1] == '\'':
+			// The body is decoded as bash does, up to a NUL.
 			end := skipDollarSingleQuote(raw, i+1)
-			body := raw[i+2 : max(i+2, end-1)]
-			texts := decodedTexts("\\" + "z" + body) // keeps the escapes
-			for j := 0; j < len(texts[0]); j++ {
-				lit(texts[0][j])
+			body := raw[i+2:]
+			if dollarQuoteClosed(raw, i+1) {
+				body = raw[i+2 : end-1]
 			}
-			if len(texts) > 1 {
-				magic = magic || false
+			text := netDollarBody(body)
+			for j := 0; j < len(text); j++ {
+				lit(text[j])
 			}
 			i = end
+		case c == '$' && i+1 < len(raw) && raw[i+1] == '"':
+			// $"..." is a double-quoted text.
+			i++
 		case c == '\'':
 			end := skipSingleQuoteRaw(raw, i)
 			for j := i + 1; j < end-1 || (j < end && end == len(raw) && raw[end-1] != '\''); j++ {
@@ -1595,7 +1781,83 @@ type netFS struct {
 	dirs map[string]*netDir
 }
 
+// netRemoteMounts holds the mount points of FUSE and network file systems.
+// A call into one of them can wait on another process or host without end,
+// so the check does not look into them: a path at or under one is unknown.
+var (
+	netRemoteOnce   sync.Once
+	netRemoteMounts []string
+)
+
+// netRemoteTypes are the file system types the check does not look into.
+var netRemoteTypes = map[string]bool{
+	"nfs": true, "nfs4": true, "cifs": true, "smb3": true, "smbfs": true,
+	"9p": true, "ceph": true, "afs": true, "glusterfs": true, "lustre": true,
+}
+
+func netRemoteType(t string) bool {
+	if t == "fusectl" {
+		return false
+	}
+	return t == "fuse" || t == "fuseblk" || strings.HasPrefix(t, "fuse.") || netRemoteTypes[t]
+}
+
+// unescapeMount undoes the octal escapes of a field of mountinfo.
+func unescapeMount(s string) string {
+	if !strings.Contains(s, `\`) {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+3 < len(s) {
+			if v, err := strconv.ParseUint(s[i+1:i+4], 8, 8); err == nil {
+				b.WriteByte(byte(v))
+				i += 3
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
+func loadRemoteMounts() {
+	data, err := os.ReadFile("/proc/self/mountinfo")
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		for i := 6; i+1 < len(fields); i++ {
+			if fields[i] != "-" {
+				continue
+			}
+			if netRemoteType(fields[i+1]) {
+				netRemoteMounts = append(netRemoteMounts, strings.TrimRight(unescapeMount(fields[4]), "/"))
+			}
+			break
+		}
+	}
+}
+
+// remote reports whether the path p is at or under a mount point of a
+// FUSE or network file system.
+func remote(p string) bool {
+	netRemoteOnce.Do(loadRemoteMounts)
+	for _, m := range netRemoteMounts {
+		if m == "" || p == m || strings.HasPrefix(p, m+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 func (f *netFS) lstat(p string) netEntry {
+	if remote(p) {
+		// Unknown: a directory, so that the walk enters it and finds it
+		// unknown.
+		return netEntry{kind: kDir, read: true}
+	}
 	if e, ok := f.ent[p]; ok {
 		if e.kind == kLink && !e.read {
 			e.read = true
@@ -1635,7 +1897,7 @@ func (f *netFS) readDir(p string) *netDir {
 	}
 	d := &netDir{}
 	f.dirs[p] = d
-	if !f.b.lookup() {
+	if remote(p) || !f.b.lookup() {
 		return d
 	}
 	walkLookups.Add(1)
@@ -1711,7 +1973,10 @@ func (f *netFS) enter(dir, name string, hops int) (string, uint8, bool) {
 		return parentDir(dir), kDir, false
 	}
 	p := joinDir(dir, name)
-	if netMagicRe.MatchString(p) {
+	if (strings.HasPrefix(p, "/proc/") || strings.HasPrefix(p, "/dev/")) && netMagicRe.MatchString(p) {
+		return p, kMissing, true
+	}
+	if remote(p) {
 		return p, kMissing, true
 	}
 	if _, ok := f.ent[p]; !ok {
@@ -1818,7 +2083,9 @@ func newNetCtx(cmd string, prefixes []string) *netCtx {
 			}
 			seen[p] = true
 			t := netTarget{path: p, base: filepath.Base(p)}
-			if fi, err := os.Stat(p); err == nil && fi.IsDir() {
+			if remote(p) {
+				// Not looked into; the path itself still counts.
+			} else if fi, err := os.Stat(p); err == nil && fi.IsDir() {
 				t.dir = true
 				if d := c.fs.readDir(p); d.ok {
 					t.names = d.names
@@ -1932,6 +2199,10 @@ func (c *netCtx) walk(p *netPattern, base string, collect, strict bool) (names, 
 		}
 		seen[key] = true
 		c.b.charge(len(st.set) + 1)
+		if remote(st.dir) {
+			magic = true
+			continue
+		}
 		if (st.dir == "/proc" || netProcTaskRe.MatchString(st.dir)) && p.procMagic(c.b, st.set, st.dir == "/proc") {
 			magic = true
 			return
@@ -2405,15 +2676,17 @@ func (c *netCtx) streamsSafe(toks []shellToken, bases []string, uncertain bool) 
 			if o.operand == nil {
 				return false
 			}
-			home := ""
-			if len(c.homes) > 0 {
-				home = c.homes[0]
+			homes := c.homes
+			if len(homes) == 0 {
+				homes = []string{""}
 			}
-			ms, magic := levelOneChars(o.operand.raw, home)
-			r := c.newReading(o.operand.raw, ms, magic, true, false)
-			names, cause := c.judge(r, bases, uncertain, true)
-			if names || cause != 0 {
-				return false
+			for _, home := range homes {
+				ms, magic := levelOneChars(o.operand.raw, home)
+				r := c.newReading(o.operand.raw, ms, magic, true, false)
+				names, cause := c.judge(r, bases, uncertain, true)
+				if names || cause != 0 {
+					return false
+				}
 			}
 		default:
 			return false
@@ -2422,41 +2695,157 @@ func (c *netCtx) streamsSafe(toks []shellToken, bases []string, uncertain bool) 
 	return true
 }
 
-// netIndicatorProgs are programs whose -C option changes the directory.
-var netIndicatorProgs = map[string]bool{
-	"env": true, "git": true, "make": true, "gmake": true, "bmake": true,
-	"tar": true, "gtar": true, "bsdtar": true, "ninja": true, "cmake": true,
-	"meson": true, "patch": true,
-}
-
-// dirIndicators reads the directory changes of the command. It returns the
-// operands of the changes, the operands that are patterns, whether a bare
-// cd goes to the home directory, and whether a change cannot be resolved.
-func dirIndicators(toks []shellToken) (ops, globs []string, bareCd, uncertain bool) {
-	classify := func(marked string) {
-		if marked != "" {
-			ops = append(ops, marked)
-		}
-		switch {
-		case strings.ContainsRune(marked, rune(shellUnresolvedMark)) || strings.ContainsAny(marked, "$`"):
-			uncertain = true
-		case marked == "-" || marked == "":
-			uncertain = true
-		case strings.HasPrefix(marked, "~") && marked != "~" && !strings.HasPrefix(marked, "~/"):
-			uncertain = true
-		case strings.ContainsAny(marked, "*?["):
-			globs = append(globs, marked)
+// namesStreamDir reports whether a reading of the text (raw, sigma,
+// decoded or joined) holds /dev/ or /proc/, so a stream may be written.
+func namesStreamDir(cmd, joined string) bool {
+	texts := []string{cmd, sigmaText(cmd), sigmaText(joined)}
+	if strings.ContainsAny(cmd, "\\$") {
+		texts = append(texts, decodedTexts(cmd)...)
+		texts = append(texts, decodedTexts(joined)...)
+	}
+	for _, t := range texts {
+		if strings.Contains(t, "/dev/") || strings.Contains(t, "/proc/") {
+			return true
 		}
 	}
-	for _, seg := range splitShellSegments(toks) {
+	return false
+}
+
+// netIndicatorProgs are programs with a short option that changes the
+// directory they run in, and the letters of those options.
+var netIndicatorProgs = map[string]string{
+	"env": "C", "git": "C", "make": "C", "gmake": "C", "bmake": "C",
+	"tar": "C", "gtar": "C", "bsdtar": "C", "ninja": "C", "cmake": "C",
+	"meson": "C", "patch": "Cd", "go": "C", "cargo": "C", "pnpm": "C",
+	"sudo": "D", "nsenter": "w", "docker": "w", "podman": "w",
+	"unzip": "d",
+}
+
+// netRootProgs are programs whose first operand is a directory the rest
+// of the command runs in.
+var netRootProgs = map[string]bool{"chroot": true}
+
+// netGroupPaths returns, for each token, the path of the ( ) groups it is
+// in: "/" outside every group, "/1/" in the first group, "/1/2/" in a
+// group in it. A group runs in a child shell: a directory change in it
+// does not move the shell outside it.
+func netGroupPaths(toks []shellToken) []string {
+	out := make([]string, len(toks))
+	stack := []string{"/"}
+	n := 0
+	for i, t := range toks {
+		if t.kind == tokSep && t.value == ")" && len(stack) > 1 {
+			stack = stack[:len(stack)-1]
+		}
+		out[i] = stack[len(stack)-1]
+		if t.kind == tokSep && t.value == "(" {
+			n++
+			stack = append(stack, stack[len(stack)-1]+strconv.Itoa(n)+"/")
+		}
+	}
+	return out
+}
+
+// netSegments splits the tokens as splitShellSegments does and returns the
+// group path of each segment.
+func netSegments(toks []shellToken) (segs [][]shellToken, paths []string) {
+	gp := netGroupPaths(toks)
+	var cur []shellToken
+	curPath := ""
+	for i, t := range toks {
+		if t.kind == tokSep {
+			if len(cur) > 0 {
+				segs = append(segs, cur)
+				paths = append(paths, curPath)
+				cur = nil
+			}
+			continue
+		}
+		if len(cur) == 0 {
+			curPath = gp[i]
+		}
+		cur = append(cur, t)
+	}
+	if len(cur) > 0 {
+		segs = append(segs, cur)
+		paths = append(paths, curPath)
+	}
+	return segs, paths
+}
+
+// netGlob is an operand of a directory change that is a pattern.
+type netGlob struct {
+	text  string
+	shell bool   // a change of the shell (cd), not of one program
+	path  string // the group path of the change
+}
+
+// netDirInfo is what dirIndicators reads.
+type netDirInfo struct {
+	ops   []string  // the operands of the changes
+	globs []netGlob // the operands that are patterns
+	// bareCd: the group paths of a cd with no operand, which goes to the
+	// home directory.
+	bareCd []string
+	// uncertain: a change, of the shell or of one program, the check
+	// cannot resolve.
+	uncertain bool
+	// shellUnc: the group paths of the changes of the shell (cd, pushd,
+	// popd, chdir, CDPATH) the check cannot resolve.
+	shellUnc []string
+}
+
+// dirIndicators reads the directory changes of the command: the changes
+// of the shell (cd, pushd, popd, chdir and CDPATH) and the options and
+// operands that make one program run in another directory.
+func dirIndicators(toks []shellToken) netDirInfo {
+	var d netDirInfo
+	classify := func(marked string, shell bool, path string) {
+		if marked != "" {
+			d.ops = append(d.ops, marked)
+		}
+		unc := false
+		switch {
+		case strings.ContainsRune(marked, rune(shellUnresolvedMark)) || strings.ContainsAny(marked, "$`"):
+			unc = true
+		case marked == "-" || marked == "":
+			unc = true
+		case strings.HasPrefix(marked, "~") && marked != "~" && !strings.HasPrefix(marked, "~/"):
+			unc = true
+		case strings.ContainsAny(marked, "*?["):
+			d.globs = append(d.globs, netGlob{text: marked, shell: shell, path: path})
+		}
+		if unc {
+			d.uncertain = true
+			if shell {
+				d.shellUnc = append(d.shellUnc, path)
+			}
+		}
+	}
+	shellUnc := func(path string) {
+		d.uncertain = true
+		d.shellUnc = append(d.shellUnc, path)
+	}
+	segs, paths := netSegments(toks)
+	for si, seg := range segs {
+		path := paths[si]
 		words := commandWords(seg)
+		firstOp := len(words) // the index of the first word after words[0] that is not an option
+		for k := 1; k < len(words); k++ {
+			if !strings.HasPrefix(words[k].value, "-") {
+				firstOp = k
+				break
+			}
+		}
 		for i, w := range words {
 			v := w.value
 			if strings.Contains(w.raw, "CDPATH") || strings.Contains(v, "CDPATH") {
-				uncertain = true
+				// CDPATH moves every later cd: read it as a change of the
+				// outer shell.
+				shellUnc("/")
 			}
 			if v == "-execdir" || v == "-okdir" {
-				uncertain = true
+				d.uncertain = true
 			}
 			switch filepath.Base(v) {
 			case "cd", "pushd", "chdir":
@@ -2475,57 +2864,76 @@ func dirIndicators(toks []shellToken) (ops, globs []string, bareCd, uncertain bo
 					break
 				}
 				if operand == nil {
-					bareCd = true
+					d.bareCd = append(d.bareCd, path)
 				} else if operand.unresolved {
-					uncertain = true
+					shellUnc(path)
 				} else {
-					classify(operand.marked)
+					classify(operand.marked, true, path)
 				}
 			case "popd":
-				uncertain = true
+				shellUnc(path)
+			}
+			if i > 0 && !strings.HasPrefix(v, "-") {
+				// The first operand of chroot; any operand of a program
+				// the check cannot know.
+				first := firstOp == i
+				if words[0].unresolved || first && netRootProgs[filepath.Base(words[0].value)] {
+					classify(w.marked, false, path)
+				}
 			}
 			if strings.HasPrefix(v, "--") {
 				name := strings.ToLower(w.marked[2:])
-				if strings.HasPrefix(name, "ch") || strings.HasPrefix(name, "dir") || strings.HasPrefix(name, "cwd") || strings.HasPrefix(name, "work") {
+				if strings.HasPrefix(name, "ch") || strings.HasPrefix(name, "dir") || strings.HasPrefix(name, "cwd") || strings.HasPrefix(name, "work") || strings.HasPrefix(name, "cd") || strings.HasPrefix(name, "wd") {
 					if eq := strings.IndexByte(w.marked, '='); eq >= 0 {
-						classify(w.marked[eq+1:])
+						classify(w.marked[eq+1:], false, path)
 					} else if i+1 < len(words) {
-						classify(words[i+1].marked)
+						classify(words[i+1].marked, false, path)
 					}
 				}
 				continue
 			}
 			if len(v) > 1 && v[0] == '-' {
-				k := strings.IndexByte(w.marked, 'C')
+				letters := ""
+				if len(words) > 0 && words[0].unresolved {
+					// A program the check cannot know: any letter.
+					letters = w.marked[1:]
+				}
+				for _, prev := range words[:i] {
+					letters += netIndicatorProgs[filepath.Base(prev.value)]
+				}
+				k := -1
+				for q := 1; q < len(w.marked); q++ {
+					if strings.IndexByte(letters, w.marked[q]) >= 0 {
+						k = q
+						break
+					}
+				}
 				if k <= 0 {
 					continue
 				}
-				known := len(words) > 0 && words[0].unresolved
-				for _, prev := range words[:i] {
-					if netIndicatorProgs[filepath.Base(prev.value)] {
-						known = true
-					}
-				}
-				if !known {
-					continue
-				}
 				if rest := w.marked[k+1:]; rest != "" {
-					classify(rest)
+					classify(rest, false, path)
 				} else if i+1 < len(words) {
-					classify(words[i+1].marked)
+					classify(words[i+1].marked, false, path)
 				} else {
-					uncertain = true
+					d.uncertain = true
 				}
 			}
 		}
 	}
-	return ops, globs, bareCd, uncertain
+	return d
 }
 
 // homeAssignments returns the literal values of HOME= in the command, and
 // whether one is not literal.
 func homeAssignments(toks []shellToken) (vals []string, dyn bool) {
 	for _, t := range toks {
+		if t.kind == tokWord && (t.value == "HOME" || strings.HasPrefix(t.value, "HOME+=")) {
+			// printf -v HOME, read HOME, HOME+=...: a value the check
+			// does not read.
+			dyn = true
+			continue
+		}
 		if t.kind != tokWord || !strings.HasPrefix(t.value, "HOME=") {
 			continue
 		}
@@ -2546,10 +2954,12 @@ type netWriteTarget struct {
 	tok      shellToken
 	raw      string
 	redirect bool
+	path     string // a redirect: the group path of the shell that opens it
 }
 
 func netWriteTargets(toks []shellToken) []netWriteTarget {
 	var out []netWriteTarget
+	gp := netGroupPaths(toks)
 	for i, t := range toks {
 		if t.kind != tokRedirWrite && t.kind != tokRedirDup {
 			continue
@@ -2561,7 +2971,7 @@ func netWriteTargets(toks []shellToken) []netWriteTarget {
 		if t.kind == tokRedirDup && isBareFd(op.value) {
 			continue
 		}
-		out = append(out, netWriteTarget{tok: op, raw: op.raw, redirect: true})
+		out = append(out, netWriteTarget{tok: op, raw: op.raw, redirect: true, path: gp[i]})
 	}
 	for _, seg := range splitShellSegments(toks) {
 		words := stripCommandPrefix(commandWords(seg))
@@ -2598,23 +3008,67 @@ func netWriteTargets(toks []shellToken) []netWriteTarget {
 // netShellTexts returns the texts that shells in the command run, and
 // whether one of them starts with a program name the check cannot know.
 func netShellTexts(toks []shellToken) (texts []string, unknownProg bool) {
+	addText := func(text string) {
+		texts = append(texts, text)
+		for _, s := range splitShellSegments(tokenizeShell(text)) {
+			if w := stripCommandPrefix(commandWords(s)); len(w) > 0 && w[0].unresolved {
+				unknownProg = true
+			}
+		}
+	}
+	stdinShell := false
 	for _, seg := range splitShellSegments(toks) {
 		words := stripCommandPrefix(commandWords(seg))
-		if len(words) < 2 || words[0].unresolved || !shellInterpreters[filepath.Base(words[0].value)] {
+		if len(words) == 0 || words[0].unresolved {
+			continue
+		}
+		switch filepath.Base(words[0].value) {
+		case "eval":
+			// eval runs its words joined with blanks.
+			if len(words) > 1 {
+				var parts []string
+				for _, w := range words[1:] {
+					parts = append(parts, w.marked)
+				}
+				// An eval text whose words the check cannot read is the
+				// old check's case: here only its writes are read.
+				texts = append(texts, strings.Join(parts, " "))
+			}
+			continue
+		case "trap":
+			// trap runs its first operand later.
+			for _, w := range words[1:] {
+				texts = append(texts, w.marked)
+			}
+			continue
+		}
+		if !shellInterpreters[filepath.Base(words[0].value)] {
 			continue
 		}
 		call := parseShellCall(filepath.Base(words[0].value), words[1:])
+		if call.stdin || !call.known {
+			stdinShell = true
+		}
+		if len(words) < 2 {
+			continue
+		}
 		for _, arg := range call.writeCheckTexts() {
-			texts = append(texts, arg.marked)
-			for _, s := range splitShellSegments(tokenizeShell(arg.marked)) {
-				if w := stripCommandPrefix(commandWords(s)); len(w) > 0 && w[0].unresolved {
-					unknownProg = true
-				}
-			}
+			addText(arg.marked)
 		}
 		for _, arg := range words[1:] {
 			if strings.ContainsAny(arg.value, " \t\n;|&<>()`") || strings.Contains(arg.raw, "$(") || strings.Contains(arg.raw, "`") {
 				texts = append(texts, arg.marked)
+			}
+		}
+	}
+	if stdinShell {
+		// A shell that reads its commands from the standard input can run
+		// any word of the command (echo 'rm f' | bash, bash <<< 'rm f'). A
+		// word with no blank or operator in it is one program name, which
+		// writes no file the check reads.
+		for _, t := range toks {
+			if t.kind == tokWord && strings.ContainsAny(t.marked, " \t\n;|&<>()`") {
+				texts = append(texts, t.marked)
 			}
 		}
 	}
@@ -2739,8 +3193,31 @@ func (c *netCtx) check(cmd string, depth int, inherited []string, inhUncertain b
 		joinToks = tokenizeShell(sigmaText(joined))
 	}
 
+	// The decoded texts of the command ($'...' escapes and the quote
+	// removal of later readings), each read again as a command: a blank or
+	// a newline in one separates words and commands there.
+	var decTexts []string
+	var decToks [][]shellToken
+	if strings.ContainsAny(cmd, "\\$") {
+		sig := sigmaText(cmd)
+		for _, d := range decodedTexts(cmd) {
+			if d == cmd || d == joined || d == sig || containsString(decTexts, d) {
+				continue
+			}
+			if !c.b.charge(len(d)) {
+				return true, netOverReason
+			}
+			decTexts = append(decTexts, d)
+			decToks = append(decToks, tokenizeShell(d))
+		}
+	}
+
 	// HOME values and directory changes.
-	vals, homeDyn := homeAssignments(append(append(append([]shellToken{}, toks...), sigToks...), joinToks...))
+	allToks := append(append(append([]shellToken{}, toks...), sigToks...), joinToks...)
+	for _, dt := range decToks {
+		allToks = append(allToks, dt...)
+	}
+	vals, homeDyn := homeAssignments(allToks)
 	saved := c.homes
 	defer func() { c.homes = saved }()
 	for _, v := range vals {
@@ -2748,21 +3225,69 @@ func (c *netCtx) check(cmd string, depth int, inherited []string, inhUncertain b
 			c.homes = append(c.homes, v)
 		}
 	}
-	ops, globs, bareCd, uncertain := dirIndicators(toks)
-	o2, g2, b2, u2 := dirIndicators(sigToks)
-	ops = append(ops, o2...)
-	globs = append(globs, g2...)
-	bareCd = bareCd || b2
-	uncertain = uncertain || u2 || inhUncertain
-	if joinToks != nil {
-		o3, g3, b3, u3 := dirIndicators(joinToks)
-		ops = append(ops, o3...)
-		globs = append(globs, g3...)
-		bareCd = bareCd || b3
-		uncertain = uncertain || u3
+	if homeDyn && !containsString(c.homes, "") {
+		// A HOME the check cannot read: ~ and $HOME are read as any text.
+		c.homes = append(append([]string{}, c.homes...), "")
 	}
-	if bareCd && homeDyn {
-		uncertain = true
+	// The directory changes, read from each token stream. A redirect is
+	// opened by the shell of its group: a change of the shell in that
+	// group or in a group around it moves it (shellMoves).
+	streams := [][]shellToken{toks, sigToks}
+	if joinToks != nil {
+		streams = append(streams, joinToks)
+	}
+	streams = append(streams, decToks...)
+	var infos []netDirInfo
+	var ops []string
+	var globs []netGlob
+	bareCd := false
+	uncertain := inhUncertain
+	for _, st := range streams {
+		d := dirIndicators(st)
+		if homeDyn {
+			d.shellUnc = append(d.shellUnc, d.bareCd...)
+			if len(d.bareCd) > 0 {
+				d.uncertain = true
+			}
+		}
+		infos = append(infos, d)
+		ops = append(ops, d.ops...)
+		globs = append(globs, d.globs...)
+		bareCd = bareCd || len(d.bareCd) > 0
+		uncertain = uncertain || d.uncertain
+	}
+	redirs := make([][]netWriteTarget, len(streams))
+	for i, st := range streams {
+		for _, w := range netWriteTargets(st) {
+			if w.redirect {
+				redirs[i] = append(redirs[i], w)
+			}
+		}
+	}
+	// globShell: a cd to a pattern that names no directory, by group path.
+	var globShell []string
+	shellMoves := func(k int) bool {
+		if inhUncertain || len(globShell) > 0 && containsString(globShell, "/") {
+			return true
+		}
+		for i, d := range infos {
+			unc := d.shellUnc
+			if i == 0 {
+				unc = append(append([]string{}, unc...), globShell...)
+			}
+			if len(unc) == 0 {
+				continue
+			}
+			if len(redirs[i]) != len(redirs[0]) || k >= len(redirs[i]) {
+				return true
+			}
+			for _, u := range unc {
+				if strings.HasPrefix(redirs[i][k].path, u) {
+					return true
+				}
+			}
+		}
+		return false
 	}
 
 	// Rule 1 readings: every run of the raw text (and of the text with the
@@ -2775,6 +3300,7 @@ func (c *netCtx) check(cmd string, depth int, inherited []string, inhUncertain b
 	if joined != cmd && !containsString(texts, joined) {
 		texts = append(texts, joined)
 	}
+	texts = append(texts, decTexts...)
 	seenRun := map[string]bool{}
 	for _, text := range texts {
 		for _, run := range cutRuns(text) {
@@ -2806,10 +3332,12 @@ func (c *netCtx) check(cmd string, depth int, inherited []string, inhUncertain b
 	// Bases: every existing directory a reading names, under the bases
 	// found so far.
 	var bases []string
+	baseSet := map[string]bool{}
 	addBase := func(d string) bool {
-		if d == "" || containsString(bases, d) {
+		if d == "" || baseSet[d] {
 			return false
 		}
+		baseSet[d] = true
 		bases = append(bases, d)
 		return true
 	}
@@ -2867,9 +3395,9 @@ func (c *netCtx) check(cmd string, depth int, inherited []string, inhUncertain b
 		}
 	}
 	for _, g := range globs {
-		ms, _ := readingChars(g, home)
+		ms, _ := readingChars(g.text, home)
 		found := false
-		for _, p := range c.newReading(g, ms, false, true, false).pats {
+		for _, p := range c.newReading(g.text, ms, false, true, false).pats {
 			for _, base := range bases {
 				if _, _, dirs := c.walk(p, base, true, true); len(dirs) > 0 {
 					found = true
@@ -2878,6 +3406,11 @@ func (c *netCtx) check(cmd string, depth int, inherited []string, inhUncertain b
 		}
 		if !found {
 			uncertain = true
+			if g.shell {
+				// The group path is of the stream the glob came from;
+				// read it as a change of the outer shell.
+				globShell = append(globShell, "/")
+			}
 		}
 	}
 	if c.b.over {
@@ -2886,33 +3419,51 @@ func (c *netCtx) check(cmd string, depth int, inherited []string, inhUncertain b
 
 	// Rule 2: redirect targets and operands of programs that write, read
 	// with their quotes.
+	rk := -1
 	for _, w := range netWriteTargets(toks) {
+		unc := uncertain
+		if w.redirect {
+			rk++
+			unc = shellMoves(rk)
+		}
 		if netStreamRe.MatchString(w.tok.value) {
 			continue
 		}
-		ms, magic := levelOneChars(w.raw, home)
-		r := c.newReading(w.raw, ms, magic, true, false)
-		names, cause := c.judge(r, bases, uncertain, true)
-		if c.b.over {
-			return true, netOverReason
+		// One reading per home: a ~ or $HOME is each home the command
+		// can have.
+		hs := homesOr(c.homes)
+		if !strings.ContainsAny(w.raw, "~$") {
+			hs = hs[:1]
 		}
-		if names {
+		deny := false
+		for _, h := range hs {
+			ms, magic := levelOneChars(w.raw, h)
+			r := c.newReading(w.raw, ms, magic, true, false)
+			names, cause := c.judge(r, bases, unc, true)
+			if c.b.over {
+				return true, netOverReason
+			}
+			switch {
+			case names:
+				deny = true
+			case cause == 0 || c.noReads:
+			case w.redirect:
+				deny = true
+			case cause == causeBase && !r.dots && !c.anyLastPart(r):
+			default:
+				deny = true
+			}
+			if deny {
+				break
+			}
+		}
+		if deny {
 			return true, shortRaw(w.tok.raw)
 		}
-		if cause == 0 || c.noReads {
-			continue
-		}
-		if w.redirect {
-			return true, shortRaw(w.tok.raw)
-		}
-		if cause == causeBase && !r.dots && !c.anyLastPart(r) {
-			continue
-		}
-		return true, shortRaw(w.tok.raw)
 	}
 
 	// Streams.
-	if !c.noReads && (strings.Contains(cmd, "/dev/") || strings.Contains(cmd, "/proc/")) {
+	if !c.noReads && namesStreamDir(cmd, joined) {
 		if !c.streamsSafe(toks, bases, uncertain) {
 			return true, "a write to the standard output or error after a redirection the check cannot read"
 		}
@@ -2970,6 +3521,14 @@ func (c *netCtx) check(cmd string, depth int, inherited []string, inhUncertain b
 		}
 	}
 	return false, ""
+}
+
+// homesOr returns the homes, or one empty home when there is none.
+func homesOr(homes []string) []string {
+	if len(homes) == 0 {
+		return []string{""}
+	}
+	return homes
 }
 
 func (c *netCtx) anyLastPart(r netReading) bool {
