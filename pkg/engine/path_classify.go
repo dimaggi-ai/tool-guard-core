@@ -91,7 +91,7 @@ func evalPathClassify(p *domain.PathClassify, fields map[string]interface{}) boo
 	// off) form. Optionally add the symlink-resolved form on top.
 	variants := []string{cleaned}
 	if p.Require.ResolveSymlinks {
-		resolved, err := filepath.EvalSymlinks(cleaned)
+		resolved, err := fsEvalSymlinks(cleaned)
 		if err != nil {
 			// When the policy author opted into symlink resolution
 			// for write-tool paths, an ENOENT means we cannot

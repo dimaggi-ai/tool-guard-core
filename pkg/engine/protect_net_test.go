@@ -6,6 +6,7 @@ package engine
 // on random commands.
 
 import (
+	"fmt"
 	"math/rand"
 	"os"
 	"os/exec"
@@ -214,6 +215,12 @@ func TestNetBraceSoundnessLongSequences(t *testing.T) {
 		"d{1..3}{-9223372036854775808..0}",
 		"{9223372036854775807..9223372036854775808}",
 		"{1..10..9223372036854775807}", "{1..10..-9223372036854775807}",
+		// Round 8: increments and ends longer than 64 characters, zero-padded.
+		"d{1..5..000000000000000000000000000000000000000000000000000000000000001}x", "d{000000000000000000000000000000000000000000000000000000000000001..5}x", "e{e..e..000000000000000000000000000000000000000000000000000000000000001}/s",
+		"s{n..n..00000000000000000000000000000000000000000000000000000000000000000000001}", "s{q..o..000000000000000000000000000000000000000000000000000000000000002}n", "x{1..3..-000000000000000000000000000000000000000000000000000000000000001}",
+		"{00000000000000000000000000000000000000000000000000000000000000000000001..00000000000000000000000000000000000000000000000000000000000000000000003}", "set{u..s..0}in{g..g..000000000000000000000000000000000000000000000000000000000000001}",
+		"setting{s,{x}}.jso{n..n..1}", "setting{s,x{y}z}.jso{n..n..01}",
+		"{.,{x}}claude/setting{s,{y}}.jso{n..n..-01}",
 	}
 	for _, word := range words {
 		out, err := exec.Command(bash, "--norc", "--noprofile", "-c", "printf '%s\\n' "+word).Output()
@@ -232,6 +239,149 @@ func TestNetBraceSoundnessLongSequences(t *testing.T) {
 			}
 		}
 	}
+}
+
+// randomNestedBraceWord returns a word with the two shapes of round 8: a
+// group with no comma inside an item of a list (bash keeps the braces of
+// the inner group as text only when every group around it is kept too),
+// and sequences with a long, zero-padded or negative increment or end.
+func randomNestedBraceWord(rng *rand.Rand) string {
+	for {
+		if w, n := nestedBraceWord(rng); n <= 200 {
+			return w
+		}
+	}
+}
+
+// nestedBraceWord returns a word and an upper bound of the number of words
+// bash makes from it. Every sequence it writes makes at most 4 words.
+func nestedBraceWord(rng *rand.Rand) (string, int) {
+	zeros := func() string { return strings.Repeat("0", []int{0, 1, 3, 62, 70}[rng.Intn(5)]) }
+	seq := func() string {
+		ends := [][2]string{{"n", "n"}, {"a", "c"}, {"q", "o"}, {"1", "3"}, {"5", "2"}, {"e", "e"}, {"-2", "1"}}
+		e := ends[rng.Intn(len(ends))]
+		if rng.Intn(3) == 0 {
+			e[0] = zeros() + e[0]
+		}
+		inc := []string{"", "1", "0", "-1", "2", "-01"}[rng.Intn(6)]
+		if inc == "" {
+			return "{" + e[0] + ".." + e[1] + "}"
+		}
+		return "{" + e[0] + ".." + e[1] + ".." + zeros() + inc + "}"
+	}
+	var item func(depth int) (string, int)
+	group := func(depth int) (string, int) {
+		switch rng.Intn(5) {
+		case 0:
+			w, n := item(depth + 1)
+			return "{" + w + "}", n
+		case 1:
+			return seq(), 4
+		case 2:
+			return "{}", 1
+		default:
+			var parts []string
+			total := 0
+			for k := rng.Intn(3) + 2; k > 0; k-- {
+				w, n := item(depth + 1)
+				parts = append(parts, w)
+				total += n
+			}
+			return "{" + strings.Join(parts, ",") + "}", total
+		}
+	}
+	item = func(depth int) (string, int) {
+		var sb strings.Builder
+		total := 1
+		for k := rng.Intn(3); k >= 0; k-- {
+			if depth < 3 && rng.Intn(2) == 0 {
+				w, n := group(depth)
+				sb.WriteString(w)
+				total *= n
+			} else {
+				sb.WriteString([]string{"s", "x", "y", ".", "/", ""}[rng.Intn(6)])
+			}
+		}
+		return sb.String(), total
+	}
+	var sb strings.Builder
+	total := 1
+	for k := rng.Intn(3) + 1; k > 0; k-- {
+		w, n := item(0)
+		g, m := group(0)
+		sb.WriteString(w + g)
+		total *= n * m
+	}
+	return sb.String(), total
+}
+
+// Every word real bash makes from a random word with nested groups in list
+// items and long or zero-padded sequences is matched by the brace atoms and
+// by the patterns of the exact reading. A word that makes more than 200
+// words is not made, to keep the run short. TG_BRACE_SEED and TG_BRACE_N
+// choose another seed and count.
+func TestNetBraceSoundnessNestedAgainstBash(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash is not installed")
+	}
+	n := 2000
+	seed := int64(8)
+	if s := os.Getenv("TG_BRACE_SEED"); s != "" {
+		fmt.Sscan(s, &seed)
+	}
+	if s := os.Getenv("TG_BRACE_N"); s != "" {
+		fmt.Sscan(s, &n)
+	}
+	// bash 3.2, the bash of macOS, makes no sequence with an increment and
+	// keeps its text. The check reads braces as bash 4 and later do; a word
+	// that keeps a brace cannot be a path without one, so with bash 3.2 such
+	// a word is not checked.
+	ver, err := exec.Command(bash, "--norc", "--noprofile", "-c", "echo ${BASH_VERSINFO[0]}").Output()
+	if err != nil {
+		t.Fatalf("bash: %v", err)
+	}
+	major := strings.TrimSpace(string(ver))
+	oldBash := major == "2" || major == "3"
+	rng := rand.New(rand.NewSource(seed))
+	words := make([]string, n)
+	var script strings.Builder
+	for i := range words {
+		words[i] = randomNestedBraceWord(rng)
+		script.WriteString("printf '%s\\n' " + words[i] + "; echo '\x01'\n")
+	}
+	run := exec.Command(bash, "--norc", "--noprofile", "-s")
+	run.Stdin = strings.NewReader(script.String())
+	out, err := run.Output()
+	if err != nil {
+		t.Fatalf("bash: %v", err)
+	}
+	groups := strings.Split(strings.TrimSuffix(string(out), "\x01\n"), "\x01\n")
+	if len(groups) != n {
+		t.Fatalf("bash gave %d groups, want %d", len(groups), n)
+	}
+	checked, misses := 0, 0
+	for i, g := range groups {
+		ws := strings.Split(strings.TrimSuffix(g, "\n"), "\n")
+		checked++
+		ms, _ := levelOneChars(words[i], "")
+		atoms := []*netPattern{newNetPattern(braceAtoms(ms, false), false)}
+		exact, _ := buildPatterns(&netBudget{}, ms, true, false, false)
+		for _, w := range ws {
+			if oldBash && strings.Contains(w, "{") {
+				continue
+			}
+			if !netAccepts(atoms, w) {
+				misses++
+				t.Errorf("word %q: bash makes %q, the brace atoms do not match it", words[i], w)
+			}
+			if !netAccepts(exact, w) {
+				misses++
+				t.Errorf("word %q: bash makes %q, the exact patterns do not match it", words[i], w)
+			}
+		}
+	}
+	t.Logf("seed %d, bash %s: %d words checked, %d misses", seed, major, checked, misses)
 }
 
 // TestNetRemoteMountUnknown: the check does not look into a FUSE or network

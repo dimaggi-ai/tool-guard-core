@@ -55,6 +55,37 @@ func remoteMountPoints() []string {
 	return out
 }
 
+// netShortNames returns the short 8.3 names of the entries of the
+// directory dir, each with the name of its entry. An entry whose name is
+// already short has none.
+func netShortNames(dir string) map[string]string {
+	if fsTrace != nil {
+		fsTrace("findfirst", dir)
+	}
+	pat, err := syscall.UTF16PtrFromString(filepath.Join(dir, "*"))
+	if err != nil {
+		return nil
+	}
+	var data syscall.Win32finddata
+	h, err := syscall.FindFirstFile(pat, &data)
+	if err != nil {
+		return nil
+	}
+	defer syscall.FindClose(h)
+	var out map[string]string
+	for {
+		if short := syscall.UTF16ToString(data.AlternateFileName[:]); short != "" {
+			if out == nil {
+				out = map[string]string{}
+			}
+			out[short] = syscall.UTF16ToString(data.FileName[:])
+		}
+		if syscall.FindNextFile(h, &data) != nil {
+			return out
+		}
+	}
+}
+
 // netLongName returns the long name of the last part of the path, which can
 // be a short 8.3 name, or "".
 func netLongName(p string) string {

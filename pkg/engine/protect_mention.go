@@ -370,7 +370,7 @@ func linkIntoProc(p string) bool {
 		if strings.HasPrefix(p, "~") || filepath.IsAbs(p) || volumeNameOf(p) != "" {
 			return false
 		}
-		wd, err := os.Getwd()
+		wd, err := fsGetwd()
 		if err != nil {
 			return false
 		}
@@ -395,7 +395,7 @@ func linkIntoProc(p string) bool {
 			continue
 		}
 		next := cur + "/" + part
-		fi, err := os.Lstat(next)
+		fi, err := fsLstat(next)
 		if err != nil {
 			return false
 		}
@@ -403,7 +403,7 @@ func linkIntoProc(p string) bool {
 			if strings.HasPrefix(next, "/proc/") || strings.HasPrefix(next, "/dev/") {
 				return false // the magic links themselves are read by procPathUnknown
 			}
-			target, err := os.Readlink(next)
+			target, err := fsReadlink(next)
 			if err != nil {
 				return true
 			}
@@ -415,7 +415,7 @@ func linkIntoProc(p string) bool {
 			if c == "/proc" || c == "/dev" || strings.HasPrefix(c, "/proc/") || strings.HasPrefix(c, "/dev/") {
 				return true
 			}
-			r, err := filepath.EvalSymlinks(next)
+			r, err := fsEvalSymlinks(next)
 			if err != nil {
 				return false
 			}
@@ -613,7 +613,7 @@ func isProtectedBase(form string, prefixes []string) bool {
 			return false
 		}
 		for _, cand := range literalPathCandidates(form) {
-			if fi, err := os.Stat(cand); err == nil && fi.IsDir() {
+			if fi, err := fsStat(cand); err == nil && fi.IsDir() {
 				return true
 			}
 		}
@@ -632,12 +632,12 @@ func isProtectedBase(form string, prefixes []string) bool {
 		return true
 	}
 	for _, cand := range literalPathCandidates(form) {
-		matches, err := filepath.Glob(cand)
+		matches, err := fsGlob(cand)
 		if err != nil {
 			return true
 		}
 		for _, m := range matches {
-			if fi, err := os.Stat(m); err == nil && fi.IsDir() {
+			if fi, err := fsStat(m); err == nil && fi.IsDir() {
 				return true
 			}
 		}
@@ -738,7 +738,7 @@ func cdDirectories(form string) []string {
 		return out
 	}
 	for _, cand := range literalPathCandidates(form) {
-		matches, err := filepath.Glob(cand)
+		matches, err := fsGlob(cand)
 		if err != nil {
 			continue
 		}

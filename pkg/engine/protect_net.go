@@ -81,11 +81,26 @@ func (b *netBudget) lookup() bool {
 
 // Causes of an Unknown answer.
 const (
-	causeDyn   = 1 << iota // a variable or another expansion
-	causeMagic             // a link of /proc or /dev, ~user, ~+, ~-
-	causeBase              // a directory change the check cannot resolve
-	causeList              // a brace list of more than netMaxList words
+	causeDyn    = 1 << iota // a variable or another expansion
+	causeMagic              // a link of /proc or /dev, ~user, ~+, ~-
+	causeBase               // a directory change the check cannot resolve
+	causeList               // a brace list of more than netMaxList words
+	causeRemote             // a base on a FUSE or network mount
 )
+
+// netRemoteCwdReason is the reason for a command whose relative path is
+// read from a directory on a FUSE or network mount: the check does not
+// look into such a mount, so it cannot know where the path leads.
+const netRemoteCwdReason = "a command whose working directory is on a network or FUSE file system"
+
+// unknownReason returns the reason for a deny with the causes cause: the
+// text, or netRemoteCwdReason when a base is on a remote mount.
+func unknownReason(text string, cause int) string {
+	if cause&causeRemote != 0 {
+		return netRemoteCwdReason
+	}
+	return shortRaw(text)
+}
 
 // mchar is one character of a reading.
 type mchar struct {
@@ -454,8 +469,17 @@ func (c *netCtx) walkLiteral(lit, base string, collect, strict bool) (names, mag
 	} else if base == "" {
 		return
 	}
+	if remote(from) {
+		// Not looked into: every place under it is unknown.
+		return false, true, nil
+	}
 	place, kind, mg := c.fs.resolve(from, lit, 0)
 	if mg {
+		if collect && remote(place) {
+			// A directory change onto a remote mount: that place is a
+			// base, where every relative path is unknown.
+			return false, true, []string{place}
+		}
 		return false, true, nil
 	}
 	if collect {
@@ -687,19 +711,23 @@ var braceCharSeqRe = regexp.MustCompile(`^([A-Za-z])\.\.([A-Za-z])(\.\.([-+]?[0-
 // braceSeqItems returns the words of a sequence body, or ok false. A
 // sequence of more than netMaxList+1 words returns a nil list with ok.
 func braceSeqItems(body []bitem) ([]string, bool) {
-	if len(body) > 64 {
-		return nil, false
-	}
+	// The body has no length limit, as in bash. The read stops at the
+	// first character a sequence cannot hold, so a deep group of groups
+	// is read in time linear in its length.
 	var sb strings.Builder
 	for _, it := range body {
-		if it.group || it.ch.k != mLit && !(it.ch.k == mMeta && it.ch.c == ',') {
-			if it.group || it.ch.k == mDyn {
-				return nil, false
-			}
+		if it.group || it.ch.k == mDyn || !isSeqByte(it.ch.c) {
+			return nil, false
 		}
 		sb.WriteByte(it.ch.c)
 	}
 	return braceSequence2(sb.String())
+}
+
+// isSeqByte reports whether c can be in the body of a sequence:
+// {x..y..n}.
+func isSeqByte(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '.' || c == '+' || c == '-'
 }
 
 // versionDependentSeq reports whether the characters hold a sequence that
@@ -720,7 +748,7 @@ func versionDependentSeq(ms []mchar) bool {
 		for j < len(ms) && !isBrace(ms[j]) {
 			j++
 		}
-		if j >= len(ms) || ms[j].c != '}' || j-i-1 > 64 {
+		if j >= len(ms) || ms[j].c != '}' {
 			continue
 		}
 		body := make([]byte, 0, j-i-1)
@@ -1059,7 +1087,7 @@ func braceAtoms(ms []mchar, flags bool) []atom {
 				for j <= last && !(ms[j].k == mMeta && (ms[j].c == '{' || ms[j].c == '}' || ms[j].c == ',')) {
 					j++
 				}
-				if j <= last && ms[j].c == '}' && j-i-1 <= 64 {
+				if j <= last && ms[j].c == '}' {
 					var sb strings.Builder
 					dyn := false
 					for _, c := range ms[i+1 : j] {
@@ -1109,8 +1137,18 @@ func keptBraces(ms []mchar, off int) map[int]bool {
 	type open struct {
 		at          int
 		comma, dyns bool
+		parent      int // index in groups of the group around it, or -1
 	}
 	var stack []open
+	// A group in an item of a list is not in every word: the other items
+	// drop it. Its braces are kept only when every group around it is
+	// kept too, so groups are judged after the whole word is read.
+	type group struct {
+		open, close, parent int
+		self                bool
+	}
+	var groups []group
+	var openIdx []int // index in groups of each open group on the stack
 	for k, m := range ms {
 		if len(stack) > 0 {
 			top := &stack[len(stack)-1]
@@ -1133,17 +1171,33 @@ func keptBraces(ms []mchar, off int) map[int]bool {
 		}
 		switch m.c {
 		case '{':
-			stack = append(stack, open{at: k})
+			parent := -1
+			if len(openIdx) > 0 {
+				parent = openIdx[len(openIdx)-1]
+			}
+			stack = append(stack, open{at: k, parent: parent})
+			groups = append(groups, group{open: k, close: -1, parent: parent})
+			openIdx = append(openIdx, len(groups)-1)
 		case '}':
 			if len(stack) == 0 {
 				continue
 			}
 			top := stack[len(stack)-1]
 			stack = stack[:len(stack)-1]
-			if !top.comma && !top.dyns && !tail[k+1] {
-				keep[top.at+off] = true
-				keep[k+off] = true
-			}
+			g := openIdx[len(openIdx)-1]
+			openIdx = openIdx[:len(openIdx)-1]
+			groups[g].close = k
+			groups[g].self = !top.comma && !top.dyns && !tail[k+1]
+		}
+	}
+	// A parent comes before its children in groups.
+	kept := make([]bool, len(groups))
+	for g := range groups {
+		gr := groups[g]
+		kept[g] = gr.close >= 0 && gr.self && (gr.parent < 0 || kept[gr.parent])
+		if kept[g] {
+			keep[gr.open+off] = true
+			keep[gr.close+off] = true
 		}
 	}
 	return keep
@@ -1820,6 +1874,10 @@ type netDir struct {
 	names []string
 	set   map[string]bool
 	lower map[string][]string // names by their lower-case form, made on use
+	// short maps the upper-case short 8.3 name of an entry to its name, on
+	// Windows. The short names are in names too, so that a pattern can
+	// read them, but not in set.
+	short map[string]string
 	ok    bool
 }
 
@@ -1940,7 +1998,7 @@ func (f *netFS) lstat(p string) netEntry {
 			e.read = true
 			if f.b.lookup() {
 				walkLookups.Add(1)
-				e.target, _ = os.Readlink(osp)
+				e.target, _ = sysReadlink(osp)
 				e.target = netInternal(filepath.ToSlash(e.target))
 			}
 			f.ent[p] = e
@@ -1960,17 +2018,17 @@ func (f *netFS) lstat(p string) netEntry {
 	}
 	if f.b.lookup() {
 		walkLookups.Add(1)
-		if fi, err := os.Lstat(osp); err == nil {
+		if fi, err := sysLstat(osp); err == nil {
 			target := ""
 			if netWindows && fi.Mode()&os.ModeIrregular != 0 {
 				// A junction or another reparse point that names a
 				// place: read it as a link.
-				target, _ = os.Readlink(osp)
+				target, _ = sysReadlink(osp)
 			}
 			switch {
 			case fi.Mode()&os.ModeSymlink != 0:
 				e.kind = kLink
-				e.target, _ = os.Readlink(osp)
+				e.target, _ = sysReadlink(osp)
 				e.target = netInternal(filepath.ToSlash(e.target))
 			case target != "":
 				e.kind = kLink
@@ -2011,7 +2069,7 @@ func (f *netFS) readDir(p string) *netDir {
 		}
 		return d
 	}
-	fh, err := os.Open(osp)
+	fh, err := sysOpen(osp)
 	if err != nil {
 		return d
 	}
@@ -2023,6 +2081,18 @@ func (f *netFS) readDir(p string) *netDir {
 	f.b.charge(len(entries))
 	d.ok = true
 	d.set = make(map[string]bool, len(entries))
+	if netWindows {
+		// The short names are not in the listing of os.ReadDir. A
+		// glob does not match them either, so they are not names of
+		// the listing: only a name written in full opens one.
+		if short := netShortNames(osp); len(short) > 0 {
+			f.b.charge(len(short))
+			d.short = make(map[string]string, len(short))
+			for s, long := range short {
+				d.short[strings.ToUpper(s)] = long
+			}
+		}
+	}
 	for _, e := range entries {
 		n := e.Name()
 		d.names = append(d.names, n)
@@ -2099,7 +2169,9 @@ func (f *netFS) enter(dir, name string, hops int) (string, uint8, bool) {
 			// the short name of a long one: the place is the name the
 			// directory lists.
 			real := ""
-			if names := d.folded(name); len(names) > 0 {
+			if long, ok := d.short[strings.ToUpper(name)]; ok {
+				real = long
+			} else if names := d.folded(name); len(names) > 0 {
 				real = names[0]
 			} else if strings.Contains(name, "~") {
 				if osp, ok := netOSPath(p); ok && f.b.lookup() {
@@ -2168,9 +2240,11 @@ func (f *netFS) physical(p string) string {
 		return p
 	}
 	r, _, magic := f.resolve("/", p, 0)
-	if magic {
+	if magic && !remote(r) {
 		return filepath.Clean(p)
 	}
+	// A path that leads onto a remote mount is that place, so that the
+	// walk finds it remote and does not look into p again.
 	return r
 }
 
@@ -2217,7 +2291,7 @@ func newNetCtx(cmd string, prefixes []string) *netCtx {
 				// Not looked into; the path itself still counts.
 			} else if osp, ok := netOSPath(p); !ok {
 				// Not a file of the system.
-			} else if fi, err := os.Stat(osp); err == nil && fi.IsDir() {
+			} else if fi, err := fsStat(osp); err == nil && fi.IsDir() {
 				t.dir = true
 				if d := c.fs.readDir(p); d.ok {
 					t.names = d.names
@@ -2288,11 +2362,28 @@ func (c *netCtx) walk(p *netPattern, base string, collect, strict bool) (names, 
 	}
 	if abs := p.step(init, '/', false); len(abs) > 0 {
 		stack = append(stack, netWalkState{dir: "/", set: abs})
+		if netWindows {
+			starts, unc := p.netRootStarts(abs)
+			stack = append(stack, starts...)
+			if unc {
+				magic = true
+			}
+		}
 	}
 	if netWindows {
 		dirs, sets := p.netDriveStarts(init)
 		for i := range dirs {
 			stack = append(stack, netWalkState{dir: dirs[i], set: sets[i]})
+			// C:name names name in the current directory of drive C:
+			// the base when it is on that drive, else a directory the
+			// check does not know.
+			if p.readsBesides(sets[i], '/') {
+				if base != "" && netDriveOf(base) == dirs[i] {
+					stack = append(stack, netWalkState{dir: base, set: sets[i]})
+				} else {
+					magic = true
+				}
+			}
 		}
 	}
 	seen := map[string]bool{}
@@ -2300,6 +2391,10 @@ func (c *netCtx) walk(p *netPattern, base string, collect, strict bool) (names, 
 		path, kind, mg := c.fs.enter(dir, name, 0)
 		if mg {
 			magic = true
+			if collect && remote(path) {
+				// As in walkLiteral: a remote place is a base.
+				dirs = append(dirs, path)
+			}
 			return false
 		}
 		if p.accepts(set) {
@@ -2341,6 +2436,9 @@ func (c *netCtx) walk(p *netPattern, base string, collect, strict bool) (names, 
 		c.b.charge(len(st.set) + 1)
 		if remote(st.dir) {
 			magic = true
+			if collect && st.dir != base {
+				dirs = append(dirs, st.dir)
+			}
 			continue
 		}
 		if (st.dir == "/proc" || netProcTaskRe.MatchString(st.dir)) && p.procMagic(c.b, st.set, st.dir == "/proc") {
@@ -2384,10 +2482,16 @@ func (c *netCtx) walk(p *netPattern, base string, collect, strict bool) (names, 
 					if p.fold {
 						// Every name of the directory equal to it without
 						// letter case.
-						for _, real := range d.folded(name) {
+						folded := d.folded(name)
+						for _, real := range folded {
 							if child(st.dir, real, set) {
 								return
 							}
+						}
+						// A short 8.3 name the listing did not give:
+						// enter asks the system for its long name.
+						if len(folded) == 0 && netWindows && strings.Contains(name, "~") && child(st.dir, name, set) {
+							return
 						}
 						continue
 					}
@@ -2598,6 +2702,9 @@ func (c *netCtx) judge(r netReading, bases []string, uncertain, strict bool) (bo
 	for _, p := range r.pats {
 		if r.rel {
 			for _, base := range bases {
+				if remote(base) {
+					cause |= causeRemote
+				}
 				names, magic, _ := c.walk(p, base, false, strict)
 				if names {
 					return true, cause
@@ -3514,7 +3621,7 @@ func (c *netCtx) check(cmd string, depth int, inherited []string, inhUncertain b
 	for _, d := range inherited {
 		addBase(c.fs.physical(d))
 	}
-	if wd, err := os.Getwd(); err == nil {
+	if wd, err := fsGetwd(); err == nil {
 		addBase(c.fs.physical(wd))
 	}
 	if strings.ContainsAny(cmd, "~") || strings.Contains(cmd, "$HOME") || strings.Contains(cmd, "${HOME}") || bareCd {
@@ -3617,6 +3724,7 @@ func (c *netCtx) check(cmd string, depth int, inherited []string, inhUncertain b
 			hs = hs[:1]
 		}
 		deny := false
+		denyCause := 0
 		for _, h := range hs {
 			ms, magic := levelOneChars(w.raw, h)
 			r := c.newReading(w.raw, ms, magic, true, false)
@@ -3635,11 +3743,15 @@ func (c *netCtx) check(cmd string, depth int, inherited []string, inhUncertain b
 				deny = true
 			}
 			if deny {
+				denyCause = cause
+				if names {
+					denyCause = 0
+				}
 				break
 			}
 		}
 		if deny {
-			return true, shortRaw(w.tok.raw)
+			return true, unknownReason(w.tok.raw, denyCause)
 		}
 	}
 
@@ -3692,13 +3804,13 @@ func (c *netCtx) check(cmd string, depth int, inherited []string, inhUncertain b
 			return true, shortRaw(r.text)
 		}
 		if cause&(causeMagic|causeList) != 0 {
-			return true, shortRaw(r.text)
+			return true, unknownReason(r.text, cause)
 		}
 		if cause&causeBase != 0 && r.dots {
-			return true, shortRaw(r.text)
+			return true, unknownReason(r.text, cause)
 		}
 		if cause&(causeDyn|causeBase) != 0 && c.anyLastPart(r) {
-			return true, shortRaw(r.text)
+			return true, unknownReason(r.text, cause)
 		}
 	}
 	return false, ""

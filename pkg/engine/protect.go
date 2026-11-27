@@ -139,7 +139,7 @@ func paramWorkDirs(params map[string]interface{}) []string {
 		}
 	}
 	// The directory of this process is read in every case.
-	if wd, err := os.Getwd(); err == nil {
+	if wd, err := fsGetwd(); err == nil {
 		kept := out[:0]
 		for _, d := range out {
 			if stdpath.Clean(d) != filepath.ToSlash(wd) {
@@ -211,7 +211,7 @@ func violatesProtectedPaths(env *domain.ActionEnvelope, prefixes []string) (bool
 			// show, and the path as written stays in the list (unknown, deny).
 			// If the directory of this process is not known, the same holds.
 			if self && !strings.Contains(rest+"/", "/../") {
-				if wd, err := os.Getwd(); err == nil {
+				if wd, err := fsGetwd(); err == nil {
 					readings[0] = strings.TrimRight(filepath.ToSlash(wd), "/") + rest
 				}
 			}
@@ -328,7 +328,7 @@ func evalSymlinkCached(cache map[string]string, p string) (string, bool) {
 	if r, ok := cache[p]; ok {
 		return r, r != ""
 	}
-	r, err := filepath.EvalSymlinks(p)
+	r, err := fsEvalSymlinks(p)
 	if err != nil {
 		cache[p] = ""
 		return "", false
@@ -372,7 +372,7 @@ func physicalPathCached(p string, cache map[string]string) string {
 		if filepath.IsAbs(p) {
 			return ""
 		}
-		wd, err := os.Getwd()
+		wd, err := fsGetwd()
 		if err != nil {
 			return ""
 		}
@@ -445,7 +445,7 @@ func canonicalCandidatesLexical(p string) []string {
 		abs = stdpath.Clean(abs)
 	} else {
 		if !filepath.IsAbs(abs) {
-			if wd, err := os.Getwd(); err == nil {
+			if wd, err := fsGetwd(); err == nil {
 				abs = filepath.Join(wd, abs)
 			}
 		}
@@ -468,7 +468,7 @@ func resolveSymlinksBestEffort(p string) string {
 	if len(p) > maxResolvePathLen {
 		return "" // no system call takes a path this long
 	}
-	if r, err := filepath.EvalSymlinks(p); err == nil {
+	if r, err := fsEvalSymlinks(p); err == nil {
 		return filepath.Clean(r)
 	}
 	parent := p
@@ -484,7 +484,7 @@ func resolveSymlinksBestEffort(p string) string {
 			suffix = filepath.Join(filepath.Base(parent), suffix)
 		}
 		parent = np
-		if r, err := filepath.EvalSymlinks(parent); err == nil {
+		if r, err := fsEvalSymlinks(parent); err == nil {
 			return filepath.Clean(filepath.Join(r, suffix))
 		}
 	}
@@ -2307,7 +2307,7 @@ func globLinkExpansions(literal string) (out []string, over bool) {
 		if filepath.IsAbs(literal) || strings.HasPrefix(literal, "~") {
 			return nil, false
 		}
-		wd, err := os.Getwd()
+		wd, err := fsGetwd()
 		if err != nil {
 			return nil, false
 		}
@@ -2332,7 +2332,7 @@ func globLinkExpansions(literal string) (out []string, over bool) {
 			for k := range states {
 				states[k].path += "/" + part
 				if sawPattern && part != ".." && !states[k].link {
-					if fi, err := os.Lstat(states[k].path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+					if fi, err := fsLstat(states[k].path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
 						states[k].link = true
 					}
 				}
@@ -2347,7 +2347,7 @@ func globLinkExpansions(literal string) (out []string, over bool) {
 			if dir == "" {
 				dir = "/"
 			}
-			list, err := os.ReadDir(dir)
+			list, err := fsReadDir(dir)
 			if err != nil {
 				continue
 			}
@@ -2469,8 +2469,8 @@ func fsIgnoresCase(prefix string) bool {
 	for len(p) > 1 && p != "." {
 		dir, base := filepath.Split(p)
 		if swapped := swapLetterCase(base); swapped != base {
-			if fi, err := os.Stat(p); err == nil {
-				other, err := os.Stat(dir + swapped)
+			if fi, err := fsStat(p); err == nil {
+				other, err := fsStat(dir + swapped)
 				return err == nil && os.SameFile(fi, other)
 			}
 		}

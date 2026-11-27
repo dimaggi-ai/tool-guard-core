@@ -81,7 +81,7 @@ func (w *pathWalker) kind(p string) entryKind {
 		return k
 	}
 	walkLookups.Add(1)
-	fi, err := os.Lstat(p)
+	fi, err := fsLstat(p)
 	var k entryKind
 	switch {
 	case err == nil && fi.Mode()&os.ModeSymlink != 0:
@@ -198,7 +198,7 @@ func (w *pathWalker) follow(dir, p string, links int) walkState {
 		return unknownState()
 	}
 	walkLookups.Add(1)
-	target, err := os.Readlink(p)
+	target, err := fsReadlink(p)
 	if err != nil {
 		return unknownState()
 	}
@@ -247,7 +247,7 @@ func (w *pathWalker) anyEntryMatches(dir, part string) bool {
 	if !ok {
 		var err error
 		walkLookups.Add(1)
-		list, err = os.ReadDir(dir)
+		list, err = fsReadDir(dir)
 		if err != nil {
 			if os.IsNotExist(err) {
 				w.lists[dir] = nil
@@ -392,7 +392,7 @@ func protectedForms(prefixes []string) []protectedForm {
 	var out []protectedForm
 	for _, prefix := range prefixes {
 		file := false
-		if fi, err := os.Stat(prefix); err == nil && !fi.IsDir() {
+		if fi, err := fsStat(prefix); err == nil && !fi.IsDir() {
 			file = true
 		}
 		out = append(out, protectedForm{parts: pathParts(filepath.ToSlash(prefix)), file: file})
