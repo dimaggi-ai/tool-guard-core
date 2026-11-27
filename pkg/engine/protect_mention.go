@@ -858,7 +858,7 @@ func shellOnlyReads(cmd string, depth int) bool {
 	if strings.ContainsRune(cmd, '\r') {
 		return false
 	}
-	toks := tokenizeShell(cmd)
+	toks := tokenizeShellZsh(cmd)
 	// A redirection writes with any program. A target under the working
 	// directory of a process is a file this check cannot name.
 	for _, rt := range redirectTargets(toks) {
@@ -1284,45 +1284,4 @@ func holdsLiveBrace(raw string) bool {
 		}
 	}
 	return false
-}
-
-// pathParts returns the parts of a path between slashes, after `.` and
-// `..` parts are resolved.
-func pathParts(p string) []string {
-	return strings.FieldsFunc(stdpath.Clean("/"+p), func(r rune) bool { return r == '/' })
-}
-
-// partsCanMatch reports whether a word made by expandLongBraces can be the
-// protected path, a path under it, or a directory above it. The letter case
-// is not compared. A pattern character matches any text in one part.
-func partsCanMatch(word, prefix []string) bool {
-	for i := 0; i < len(word) && i < len(prefix); i++ {
-		if !strings.ContainsAny(word[i], "*?[]"+numberSeqMark+otherSeqMark) {
-			if !strings.EqualFold(word[i], prefix[i]) {
-				return false
-			}
-			continue
-		}
-		var b strings.Builder
-		b.WriteString("(?is)^")
-		for _, c := range word[i] {
-			switch string(c) {
-			case "?":
-				b.WriteString(`[^/]`)
-			case otherSeqMark:
-				b.WriteString(`[A-z]`) // the characters from A to z
-			case numberSeqMark:
-				b.WriteString(`-?[0-9]+`)
-			case "*", "[", "]":
-				b.WriteString(`[^/]*`)
-			default:
-				b.WriteString(regexp.QuoteMeta(string(c)))
-			}
-		}
-		b.WriteString("$")
-		if re, err := regexp.Compile(b.String()); err == nil && !re.MatchString(prefix[i]) {
-			return false
-		}
-	}
-	return true
 }
