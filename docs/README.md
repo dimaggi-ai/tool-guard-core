@@ -20,6 +20,9 @@ authoring policies for, and operating Tool Guard Core.
 
 ## Operating
 
+- [**Command-classifier review follow-up**](command-classifier-review.md) -
+  imported regression tests, historical mutation results and remaining replay scope.
+
 - [**Operating tg-proxy in production**](operating.md) - systemd unit, Kubernetes manifest, flag reference, metrics,
   policy lifecycle, backup, disaster recovery.
 - [**Exporting audit records**](audit-export.md) - integrity-checked JSONL,

@@ -142,6 +142,32 @@ API gateway or service mesh in front of it. The only built-in secret
 is the optional `-approver-token`, which gates the escalation
 approve/deny endpoints.
 
+## Command-classifier rollout and mixed reads
+
+Deploy a binary that supports `command_classify` **before** loading a policy
+that uses it. Older binaries cannot load that policy; without `-fail-closed`,
+the historical hook error path can allow after reporting a load error. Keep
+`-fail-closed` enabled for this rollout, validate the policy with the intended
+binary, and retain a rollback pair of compatible binary and policy. A package
+version or merged classifier alone does not establish installed-client support.
+Do not activate a new hook or policy merely because these source tests pass.
+
+A supported mixed command such as `ls /dir; gh pr view 1` is classified as a
+verified read **as a whole**. If all enforcing rules and protected-path checks
+allow, `tg hook -dispatch gh_read` can allow that entire call, including the
+`ls` segment; it does not preserve a separate client prompt for that segment.
+The `command_classify` condition is stricter than this dispatch classification:
+it matches these mixed `ls`/`pwd` forms, so an enforced escalation rule using
+that condition still prevents dispatch from allowing them.
+By contrast, a command containing only supported `ls`/`pwd` segments is proven
+unrelated: Claude receives no permission decision and other dialects ask.
+These are source-level contracts. Verify the actual client's prompt behavior,
+trusted executable resolution and failure handling before any activation.
+
+The [classifier review follow-up](command-classifier-review.md) records the
+imported regression tests, historical mutation evidence and remaining replay
+and native-client boundaries.
+
 ## Flag reference
 
 The full flag list, copied from `tg-proxy -help`:
