@@ -10,6 +10,10 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Review corrections
 
+- `tg hook` keeps the protected-path rules of 0.8.x, unchanged, as a floor.
+  When the new checks allow a call, the hook also runs those rules. A call
+  they deny is denied, with their reason. So the hook denies every call that
+  0.8.x denies.
 - The pre-release review of 2026-11-25 found calls that wrote to a path named
   with `-protect-path` and were allowed. `tg hook` now denies them:
   - a redirect target that holds a brace list, such as `> {P,}`. This
@@ -90,25 +94,28 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   `{-9223372036854775808..0}`, is read as its text, as bash keeps it.
 - The hook reads brace lists, escapes and nested texts within a work counter.
   A command over the counter is denied. The slowest call measured for this
-  release took 0.3 s: a command of 20,000 directory names. Deeply nested
-  brace lists, sequences at the int64 limits and a word of 200,000
-  characters each took under 0.1 s.
-- The hook does not look into a FUSE or network file system, such as sshfs,
-  rclone, NFS or SMB, because a lookup there can wait without end. A
+  release took 0.6 s on one machine: ten words of 4,000 nested brace
+  lists. The 0.8.x rules used 0.55 s of that time.
+- The new checks do not look into a FUSE or network file system, such as
+  sshfs, rclone, NFS or SMB, because a lookup there can wait without end. A
   command that can write is denied when a path or pattern in it reaches
   such a mount, as in `cp a /mnt/backup/x`: a link there can lead to the
-  protected path. A read-only command such as `cat` stays allowed.
-- One call that was denied before is now allowed: a read inside `bash -c`
-  after an option that does not change what runs, such as `-e`, `-x` or
-  `--norc`. Calls that write no protected path stay allowed, such as a write
-  to `/dev/stdout` or `/proc/sys/vm/drop_caches`, an empty word after the
-  text of `bash -c`, and a relative `apply_patch` target such as
-  `bin/run.sh`, which the hook places under the working directory. Braces
-  that are not a path stay allowed too, such as
-  `python3 -c 'print({"a":1,"b":{"c":2}})'`, `echo '{"a":1}' > out.json`,
-  `curl -d '{"k":"v"}' URL`, `touch file{1..100}.txt`, an `awk` program
-  such as `awk '{a[$1]++} END{for(k in a) print k}'` and a `kubectl`
-  `jsonpath` such as `'{.items[0].metadata.name}'`.
+  protected path. When the working directory is on such a mount, a command
+  that writes a relative path is denied with the reason "a command whose
+  working directory is on a network or FUSE file system". The 0.8.x rules
+  do look up paths on such a mount. A call whose check does not end in
+  10 s is denied.
+- Calls that write no protected path stay allowed, such as a write to
+  `/dev/stdout` or `/proc/sys/vm/drop_caches`, an empty word after the text
+  of `bash -c`, and a relative `apply_patch` target such as `bin/run.sh`,
+  which the hook places under the working directory. Braces that are not a
+  path stay allowed too, such as `python3 -c 'print({"a":1,"b":{"c":2}})'`,
+  an `awk` program such as `awk '{a[$1]++} END{for(k in a) print k}'` and a
+  `kubectl` `jsonpath` such as `'{.items[0].metadata.name}'`.
+- The 0.8.x rules still deny some calls that write no protected path, such
+  as `bash -e -c 'cat P'`, `echo '{"a":[1,2],"b":{"c":"d"}}' > out.json`,
+  `curl -d '{"items":[1,2],"meta":{"k":"v"}}' URL` and
+  `touch file{1..100}.txt`.
 - `-dispatch` now reads the shell tool of every dialect, such as
   `run_command`, not only `Bash`. A command it does not classify is no longer
   allowed. Another tool is read as a shell command only when it carries a
