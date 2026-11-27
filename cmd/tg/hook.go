@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -55,11 +56,57 @@ func cmdHook(args []string) int {
 	return runHook(args, os.Stdin, os.Stdout)
 }
 
+// hookCallBudget is the time one hook call may take, from reading the input
+// to the decision. A call that does not end in it is denied. It is less than
+// hookSuperviseTimeout, so with -dispatch the child gives this deny before
+// its parent stops waiting. A test replaces it.
+var hookCallBudget = 9 * time.Second
+
+// hookGate passes the decision of a hook call to stdout, unless the call ran
+// past hookCallBudget: then the deny of runHook was written, and the late
+// decision and its audit record are dropped.
+type hookGate struct {
+	mu        sync.Mutex
+	out       io.Writer
+	abandoned bool
+}
+
 // runHook is the testable inner implementation of cmdHook. It accepts an
 // explicit stdin reader and stdout writer so unit tests can drive it without
 // spawning a process. cmdHook is the thin public entry point that passes
 // os.Stdin / os.Stdout.
+//
+// The whole call has one deadline, hookCallBudget. Past it the call is
+// denied. The evaluation is left to end on its own; its decision is not
+// written.
 func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
+	g := &hookGate{out: stdout}
+	done := make(chan int, 1)
+	go func() { done <- runHookCall(args, stdin, g) }()
+	timer := time.NewTimer(hookCallBudget)
+	defer timer.Stop()
+	select {
+	case code := <-done:
+		return code
+	case <-timer.C:
+	}
+	// A decision being written now is written in full; then this one is
+	// not needed.
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	select {
+	case code := <-done:
+		return code
+	default:
+	}
+	g.abandoned = true
+	emitHookDecisionDialect(stdout, dialectBoth, "force_ask", "deny",
+		fmt.Sprintf("Tool Guard hook: the check did not end in %s, so the call is denied", hookCallBudget))
+	return 0
+}
+
+// runHookCall evaluates one hook call and writes its decision through g.
+func runHookCall(args []string, stdin io.Reader, g *hookGate) int {
 	fs := flag.NewFlagSet("hook", flag.ContinueOnError)
 	fs.SetOutput(io.Discard) // hooks stay quiet; we signal via JSON on stdout
 	policyDir := fs.String("policy-dir", "", "directory of *.yaml/*.yml policies (mutually exclusive with -policy)")
@@ -96,6 +143,12 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	// Dispatch records the decision before output and denies on audit failure.
 	// Other calls preserve the best-effort audit behavior.
 	emitAudited := func(dec, reason string, result *domain.EvaluationResult) {
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		if g.abandoned {
+			return
+		}
+		stdout := g.out
 		if dispatching && *auditLog != "" {
 			auditEnv := env
 			if auditEnv == nil {
