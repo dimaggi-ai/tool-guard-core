@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"path"
 	"sort"
 	"strings"
 
@@ -12,6 +13,11 @@ import (
 // maxApplyPatchTargets bounds the number of files one apply_patch call may
 // name. A call with more is denied.
 const maxApplyPatchTargets = 64
+
+// maxApplyPatchWorkDirs bounds the number of distinct work directories the
+// hook reads from one apply_patch call. Each one adds envelopes for every
+// file, so a call with more is denied.
+const maxApplyPatchWorkDirs = 8
 
 // applyPatchMarkers start the lines of a patch that name a file. The text
 // after the marker is the path.
@@ -298,25 +304,58 @@ func applyPatchEnvelopes(base *domain.ActionEnvelope, cwd string) (envs []*domai
 	if len(targets) > maxApplyPatchTargets {
 		return nil, fmt.Sprintf("apply_patch names %d files; the hook checks at most %d in one call", len(targets), maxApplyPatchTargets), true
 	}
+	workDirs = distinctStrings(workDirs)
+	if len(workDirs) > maxApplyPatchWorkDirs {
+		return nil, fmt.Sprintf("apply_patch names %d work directories; the hook checks at most %d in one call", len(workDirs), maxApplyPatchWorkDirs), true
+	}
 	content, _ := json.Marshal(added)
 	patch, _ := json.Marshal(text)
+	// The parameters other than file_path are the same in every envelope,
+	// so they are encoded once.
+	mm := make(map[string]json.RawMessage, len(params)+2)
+	for k, v := range params {
+		// The patch text is not a shell command. On the key command the
+		// engine would read it as one. Only command and input are dropped,
+		// as in 22ed838: a policy that reads the patch under another key
+		// (cmd, script, diff) keeps the verdict it had.
+		if k != "command" && k != "input" && k != "file_path" {
+			mm[k] = v
+		}
+	}
+	mm["patch"] = patch
+	mm["content"] = content
+	shared, err := json.Marshal(mm)
+	if err != nil {
+		return nil, "apply_patch parameters could not be encoded", true
+	}
+	envelope := func(full, id string) *domain.ActionEnvelope {
+		fp, _ := json.Marshal(full)
+		b := make([]byte, 0, len(shared)+len(fp)+16)
+		b = append(b, `{"file_path":`...)
+		b = append(b, fp...)
+		if len(shared) > 2 {
+			b = append(b, ',')
+		}
+		b = append(b, shared[1:]...)
+		e := *base
+		e.Parameters = b
+		e.EnvelopeID = id
+		return &e
+	}
 	for i, target := range targets {
 		if target == "" {
 			return nil, "apply_patch names a file with an empty path", true
 		}
 		absolute := strings.HasPrefix(target, "/")
-		mm := make(map[string]json.RawMessage, len(params)+2)
-		for k, v := range params {
-			// The patch text is not a shell command. On the key command
-			// the engine would read it as one. Only command and input are
-			// dropped, as in 22ed838: a policy that reads the patch under
-			// another key (cmd, script, diff) keeps the verdict it had.
-			if k != "command" && k != "input" {
-				mm[k] = v
-			}
+		// The envelope of 22ed838: a relative target joined to cwd with
+		// path.Join, which removes "DIR/.." lexically. A policy rule that
+		// matched that spelling still matches it.
+		mainPath := target
+		if !absolute && strings.HasPrefix(cwd, "/") {
+			mainPath = path.Join(cwd, target)
 		}
-		mm["patch"] = patch
-		mm["content"] = content
+		envs = append(envs, envelope(mainPath, fmt.Sprintf("%s-patch-%d", base.EnvelopeID, i+1)))
+		seen := map[string]bool{mainPath: true}
 		// "" stands for the target as the patch spells it: a relative
 		// target stays relative, and is not placed under the root.
 		dirs := []string{""}
@@ -342,19 +381,27 @@ func applyPatchEnvelopes(base *domain.ActionEnvelope, cwd string) (envs []*domai
 			if full == "" {
 				full = "."
 			}
-			fp, _ := json.Marshal(full)
-			mm["file_path"] = fp
-			b, err := json.Marshal(mm)
-			if err != nil {
-				return nil, "apply_patch parameters could not be encoded", true
+			if seen[full] {
+				continue
 			}
-			e := *base
-			e.Parameters = b
-			e.EnvelopeID = fmt.Sprintf("%s-patch-%d-%d", base.EnvelopeID, i+1, j+1)
-			envs = append(envs, &e)
+			seen[full] = true
+			envs = append(envs, envelope(full, fmt.Sprintf("%s-patch-%d-%d", base.EnvelopeID, i+1, j+1)))
 		}
 	}
 	return envs, "", true
+}
+
+// distinctStrings returns ss without repeats, in the order of first use.
+func distinctStrings(ss []string) []string {
+	seen := make(map[string]bool, len(ss))
+	out := ss[:0:0]
+	for _, s := range ss {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // trimDirSlash removes the slashes at the end of a directory and keeps the
