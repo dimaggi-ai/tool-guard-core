@@ -37,7 +37,9 @@ func patchVerdict(t *testing.T, input map[string]interface{}, cwd string, args .
 // TestReview090gApplyPatchDotDotKeepsTheContextFileRule: 22ed838 joined a
 // relative apply_patch target to cwd with path.Join, which removes DIR/..,
 // and the context-file rule matched the cleaned path. Each target keeps the
-// deny of 22ed838.
+// deny of 22ed838. 22ed838 joined only a cwd that starts with "/", so a
+// Windows temp dir (C:\...) is checked only where it has that form; the
+// cwd /srv/work is checked on every platform.
 func TestReview090gApplyPatchDotDotKeepsTheContextFileRule(t *testing.T) {
 	work := t.TempDir()
 	t.Setenv("HOME", t.TempDir())
@@ -55,11 +57,17 @@ func TestReview090gApplyPatchDotDotKeepsTheContextFileRule(t *testing.T) {
 		".github/nodir/../copilot-instructions.md",
 		".cursor/rules/../mcp.json",
 	}
-	for _, target := range targets {
-		for _, key := range []string{"command", "input", "patch"} {
-			patch := "*** Begin Patch\n*** Update File: " + target + "\n@@\n-a\n+b\n*** End Patch"
-			if got, out, _ := patchVerdict(t, map[string]interface{}{key: patch}, work, args...); got != "deny" {
-				t.Errorf("%s under %q: %s, want deny as in 22ed838\n%s", target, key, got, out)
+	cwds := []string{"/srv/work"}
+	if strings.HasPrefix(work, "/") {
+		cwds = append(cwds, work)
+	}
+	for _, cwd := range cwds {
+		for _, target := range targets {
+			for _, key := range []string{"command", "input", "patch"} {
+				patch := "*** Begin Patch\n*** Update File: " + target + "\n@@\n-a\n+b\n*** End Patch"
+				if got, out, _ := patchVerdict(t, map[string]interface{}{key: patch}, cwd, args...); got != "deny" {
+					t.Errorf("%s under %q, cwd %s: %s, want deny as in 22ed838\n%s", target, key, cwd, got, out)
+				}
 			}
 		}
 	}
@@ -105,24 +113,31 @@ func TestReview090gApplyPatchManyWorkDirsEndsInTime(t *testing.T) {
 		}
 		return map[string]interface{}{"command": ps, "dirs": l}
 	}
+	// slashCwd: the deny needs a cwd that starts with "/". With a Windows
+	// cwd (C:\...) the relative work directory is not placed under it, and
+	// 22ed838, which reads no work directory, allows the call too.
 	cases := []struct {
-		name  string
-		input map[string]interface{}
-		want  string
+		name     string
+		input    map[string]interface{}
+		want     string
+		slashCwd bool
 	}{
-		{"1 file, 2000 workdir keys", keyed(2000, patch("f0")), "deny"},
-		{"1 file, 3000 workdir keys", keyed(3000, patch("f0")), "deny"},
-		{"60 files, 300 workdir keys", keyed(300, patch(files(60)...)), "deny"},
-		{"60 files, a list of 1000 cwd keys", listed(1000, patch(files(60)...)), "deny"},
-		{"protected file last of 2, 2000 workdir keys", keyed(2000, patch("f0", ".claude/settings.json")), "deny"},
-		{"64 files, 8 workdir keys", keyed(8, patch(files(64)...)), "allow"},
+		{"1 file, 2000 workdir keys", keyed(2000, patch("f0")), "deny", false},
+		{"1 file, 3000 workdir keys", keyed(3000, patch("f0")), "deny", false},
+		{"60 files, 300 workdir keys", keyed(300, patch(files(60)...)), "deny", false},
+		{"60 files, a list of 1000 cwd keys", listed(1000, patch(files(60)...)), "deny", false},
+		{"protected file last of 2, 2000 workdir keys", keyed(2000, patch("f0", ".claude/settings.json")), "deny", false},
+		{"64 files, 8 workdir keys", keyed(8, patch(files(64)...)), "allow", false},
 		{"protected file through the 8th workdir key", func() map[string]interface{} {
 			in := keyed(7, patch("settings.json"))
 			in["zz"] = map[string]string{"workdir": ".claude"}
 			return in
-		}(), "deny"},
+		}(), "deny", true},
 	}
 	for _, c := range cases {
+		if c.slashCwd && !strings.HasPrefix(home, "/") {
+			continue
+		}
 		got, out, took := patchVerdict(t, c.input, home, args...)
 		if got != c.want {
 			t.Errorf("%s: %s, want %s\n%s", c.name, got, c.want, out)
