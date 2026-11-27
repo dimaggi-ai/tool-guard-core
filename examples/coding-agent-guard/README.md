@@ -245,8 +245,8 @@ lookup there can wait without end. A command that can write is denied when
 a path or pattern in it reaches such a mount, as in `cp a M/x` where `M` is
 such a mount, because a link there can lead to the protected path. When the
 working directory is on such a mount, a command that writes a relative path
-is denied. The floor does look up paths on such a mount. A call whose check
-does not end in 10 s is denied.
+is denied. The floor does look up paths on such a mount. A hook call that
+does not end in 9 s is denied, so the hook answers within 10 s.
 
 After a directory change that the hook cannot resolve, such as `cd "$D"`,
 `env -C "$D"` or `sudo -D "$D"`, the hook denies a relative word whose last
@@ -262,7 +262,8 @@ The hook reads a relative path under the working directory that the harness
 sends with the call (`cwd` or `workdir`). When the harness sends none, it
 uses the directory of the hook process.
 
-The check of one call has a limit of 10 seconds. A check that does not end
+One hook call has a limit of 9 seconds, from reading the input to the
+decision, so the hook answers within 10 seconds. A check that does not end
 in that time denies the call.
 
 When the text names a protected path, the hook also denies a command that

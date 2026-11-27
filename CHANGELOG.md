@@ -6,7 +6,7 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.9.0] — 2026-11-15
+## [0.9.0] — unreleased
 
 ### Review corrections
 
@@ -17,7 +17,10 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   `-protect-path`, the hook denies every call that 22ed838 denies. The floor
   covers only the protected-path check. The policy rules read a call as
   22ed838 read it: a shell command is split into words as bash splits it,
-  and a path is resolved through its symbolic links.
+  and a path is resolved through its symbolic links. An `apply_patch` target
+  is also read as 22ed838 read it: a relative target joined to cwd, with
+  `DIR/..` removed, so `.claude/commands/../settings.json` is denied as
+  `.claude/settings.json`.
 - The pre-release review found calls that wrote to a path named with
   `-protect-path` and were allowed. `tg hook` now denies them:
   - a redirect target that holds a brace list, such as `> {P,}`. This
@@ -36,6 +39,7 @@ the project adheres to [Semantic Versioning](https://semver.org/).
     other keys, such as `content` or `args`, in nested objects and in arrays.
     It places a relative target under a work directory key, such as `workdir`,
     `cwd` or `dir`, also when the key is nested, such as `input.workdir`. A
+    call with more than 8 distinct work directories is denied. A
     patch nested deeper than 16 levels is denied. When the keys `command`,
     `input` and `patch` name no file, the hook also checks the call as it
     is, as 22ed838 did, so a write policy that denied such a call still
@@ -104,13 +108,14 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   `{-9223372036854775808..0}`, is read as its text, as bash keeps it.
 - The hook reads brace lists, escapes and nested texts within a work counter.
   A command over the counter is denied. Some calls take seconds to check.
-  Measured on one Linux machine with the coding-agent shell policy and
-  `-protect-path`, median of 3 runs, with the time of 22ed838 in
-  parentheses: the 300 commands `cd a0*` to `cd a299*` in one call, 4.3 s
+  Measured on one Linux machine with no other load, with the coding-agent
+  shell policy and `-protect-path`, median of 3 runs, with the time of
+  22ed838 in parentheses: the 300 commands `cd a0*` to `cd a299*` in one call, 4.3 s
   (0.01 s); 2,000 words such as `lnk/../f`, where `lnk` is a symbolic link,
   1.2 s (0.66 s); ten words of 4,000 nested brace lists,
   0.60 s (0.55 s); `echo x > /;*`, 1.3 s (1.3 s); and
-  `ssh h{ost 'echo x >!{,/;}*'`, 7.9 s (7.9 s).
+  `ssh h{ost 'echo x >!{,/;}*'`, 7.9 s (7.9 s). With a load average of 20,
+  each time is about 1.6 times larger.
 - The new checks do not look into a network or FUSE file system, because a
   lookup there can wait without end. A command that can write is denied
   when a path or pattern in it reaches such a mount, as in `cp a M/x` where
@@ -118,8 +123,8 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   working directory is on such a mount, a command that writes a relative
   path is denied with the reason "a command whose working directory is on a
   network or FUSE file system". The floor, the check of 22ed838, does look
-  up paths on such a mount. A call whose check does not end in 10 s is
-  denied.
+  up paths on such a mount. A hook call that does not end in 9 s is
+  denied, so the hook answers within 10 s.
 - Calls that write no protected path stay allowed, such as a write to
   `/dev/stdout` or `/proc/sys/vm/drop_caches`, an empty word after the text
   of `bash -c`, and a relative `apply_patch` target such as `bin/run.sh`,
@@ -557,10 +562,12 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   names two calls. `tg hook` evaluated one of them. It now handles such a
   payload as one it cannot read
   (`TestHookDeniesAPayloadWithTwoToolCalls`).
-- The protected-path check of one call has a limit of 10 seconds, and a
-  check that does not end in that time denies the call. Before, a command
-  with some thousands of words could keep the hook busy for longer than the
-  hook timeout of the harness (`pkg/engine/protect_workdir_test.go`).
+- `tg hook` denies a call that it has not checked in 9 seconds, from
+  reading the input to the decision, so it answers within 10 seconds.
+  Before, a command with some thousands of words, or an `apply_patch` call
+  with thousands of work directory keys, could keep the hook busy for longer
+  than the hook timeout of the harness (`pkg/engine/protect_workdir_test.go`,
+  `cmd/tg/hook_review090g_test.go`).
 - A command with a carriage return does not count as read-only. bash reads
   the carriage return as a character of a word, and the check ended a
   command there (`pkg/engine/protect_case_test.go`).
