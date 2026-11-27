@@ -10,12 +10,16 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Review corrections
 
-- `tg hook` keeps the protected-path rules of 0.8.x, unchanged, as a floor.
-  When the new checks allow a call, the hook also runs those rules. A call
-  they deny is denied, with their reason. So the hook denies every call that
-  0.8.x denies.
-- The pre-release review of 2026-11-25 found calls that wrote to a path named
-  with `-protect-path` and were allowed. `tg hook` now denies them:
+- `tg hook` keeps the protected-path check of commit 22ed838, the state of
+  the 0.9.0 code before its pre-release review, unchanged, as a floor. When the
+  new protected-path checks allow a call, the hook also runs that check. A
+  call it denies is denied, with its reason. So for the paths named with
+  `-protect-path`, the hook denies every call that 22ed838 denies. The floor
+  covers only the protected-path check. The policy rules read a call as
+  22ed838 read it: a shell command is split into words as bash splits it,
+  and a path is resolved through its symbolic links.
+- The pre-release review found calls that wrote to a path named with
+  `-protect-path` and were allowed. `tg hook` now denies them:
   - a redirect target that holds a brace list, such as `> {P,}`. This
     includes a list mixed with quotes or inside another list, such as
     `> ''{settings.json,{a}}`;
@@ -32,7 +36,10 @@ the project adheres to [Semantic Versioning](https://semver.org/).
     other keys, such as `content` or `args`, in nested objects and in arrays.
     It places a relative target under a work directory key, such as `workdir`,
     `cwd` or `dir`, also when the key is nested, such as `input.workdir`. A
-    patch nested deeper than 16 levels is denied;
+    patch nested deeper than 16 levels is denied. When the keys `command`,
+    `input` and `patch` name no file, the hook also checks the call as it
+    is, as 22ed838 did, so a write policy that denied such a call still
+    denies it;
   - a command passed in a shell option, such as `fish --init-command=...`, or
     after `bash -c` and another option. The hook reads fish options in their
     short, glued and prefix forms, such as `-C`, `-iC"..."`, `--co` and
@@ -61,7 +68,10 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   - a brace list in a word with an extended glob pattern, such as
     `@(settings)`;
   - a redirect written as `>|`, `>!`, `>>!`, `&>!`, `&>>!` or `>?`, and a
-    redirect after a descriptor move such as `1>&0-`;
+    redirect after a descriptor move such as `1>&0-`. Only the
+    protected-path check reads `>!`, `>>!`, `&>!`, `&>>!` and `>?` as zsh
+    does. The policy rules read them as bash does: `rm >? -rf /` is
+    `rm -rf /` with its output in a file named `?`;
   - a name split by a backslash, quotes and a newline, which `eval` or
     `bash -c` joins into one word;
   - a name written with `$'...'` escapes, such as `$'.cl\x61ude'`, also in
@@ -93,18 +103,23 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   any number in every reader. A sequence that bash does not make, such as
   `{-9223372036854775808..0}`, is read as its text, as bash keeps it.
 - The hook reads brace lists, escapes and nested texts within a work counter.
-  A command over the counter is denied. The slowest call measured for this
-  release took 0.6 s on one machine: ten words of 4,000 nested brace
-  lists. The 0.8.x rules used 0.55 s of that time.
-- The new checks do not look into a FUSE or network file system, such as
-  sshfs, rclone, NFS or SMB, because a lookup there can wait without end. A
-  command that can write is denied when a path or pattern in it reaches
-  such a mount, as in `cp a /mnt/backup/x`: a link there can lead to the
-  protected path. When the working directory is on such a mount, a command
-  that writes a relative path is denied with the reason "a command whose
-  working directory is on a network or FUSE file system". The 0.8.x rules
-  do look up paths on such a mount. A call whose check does not end in
-  10 s is denied.
+  A command over the counter is denied. Some calls take seconds to check.
+  Measured on one Linux machine with the coding-agent shell policy and
+  `-protect-path`, median of 3 runs, with the time of 22ed838 in
+  parentheses: the 300 commands `cd a0*` to `cd a299*` in one call, 4.3 s
+  (0.01 s); 2,000 words such as `lnk/../f`, where `lnk` is a symbolic link,
+  1.2 s (0.66 s); ten words of 4,000 nested brace lists,
+  0.60 s (0.55 s); `echo x > /;*`, 1.3 s (1.3 s); and
+  `ssh h{ost 'echo x >!{,/;}*'`, 7.9 s (7.9 s).
+- The new checks do not look into a network or FUSE file system, because a
+  lookup there can wait without end. A command that can write is denied
+  when a path or pattern in it reaches such a mount, as in `cp a M/x` where
+  `M` is such a mount: a link there can lead to the protected path. When the
+  working directory is on such a mount, a command that writes a relative
+  path is denied with the reason "a command whose working directory is on a
+  network or FUSE file system". The floor, the check of 22ed838, does look
+  up paths on such a mount. A call whose check does not end in 10 s is
+  denied.
 - Calls that write no protected path stay allowed, such as a write to
   `/dev/stdout` or `/proc/sys/vm/drop_caches`, an empty word after the text
   of `bash -c`, and a relative `apply_patch` target such as `bin/run.sh`,
@@ -112,8 +127,9 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   path stay allowed too, such as `python3 -c 'print({"a":1,"b":{"c":2}})'`,
   an `awk` program such as `awk '{a[$1]++} END{for(k in a) print k}'` and a
   `kubectl` `jsonpath` such as `'{.items[0].metadata.name}'`.
-- The 0.8.x rules still deny some calls that write no protected path, such
-  as `bash -e -c 'cat P'`, `echo '{"a":[1,2],"b":{"c":"d"}}' > out.json`,
+- Some calls that write no protected path are now denied: 0.8.1 allows
+  them, and the floor, the check of 22ed838, denies them. Examples are
+  `bash -e -c 'cat P'`, `echo '{"a":[1,2],"b":{"c":"d"}}' > out.json`,
   `curl -d '{"items":[1,2],"meta":{"k":"v"}}' URL` and
   `touch file{1..100}.txt`.
 - `-dispatch` now reads the shell tool of every dialect, such as

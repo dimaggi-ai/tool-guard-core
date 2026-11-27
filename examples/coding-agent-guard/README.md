@@ -233,17 +233,20 @@ more, such as `d{1..5000}`, the hook reads the sequence as any number. A
 sequence that bash does not make, such as `{-9223372036854775808..0}`, is
 read as its text.
 
-The hook keeps the protected-path rules of 0.8.x, unchanged, as a floor.
-When the newer checks allow a call, the hook also runs those rules, and a
-call they deny is denied. So the hook denies every call that 0.8.x denies.
+The hook keeps the protected-path check of commit 22ed838, the state of
+the 0.9.0 code before its pre-release review, unchanged, as a floor. When the
+newer checks allow a call, the hook also runs that check, and a call it
+denies is denied. So for the paths named with `-protect-path`, the hook
+denies every call that 22ed838 denies. The floor covers only the
+protected-path check.
 
-The newer checks do not look into a FUSE or network file system, such as
-sshfs, rclone, NFS or SMB, because a lookup there can wait without end. A
-command that can write is denied when a path or pattern in it reaches such a
-mount, as in `cp a /mnt/backup/x`, because a link there can lead to the
-protected path. When the working directory is on such a mount, a command
-that writes a relative path is denied. The 0.8.x rules do look up paths on
-such a mount. A call whose check does not end in 10 s is denied.
+The newer checks do not look into a network or FUSE file system, because a
+lookup there can wait without end. A command that can write is denied when
+a path or pattern in it reaches such a mount, as in `cp a M/x` where `M` is
+such a mount, because a link there can lead to the protected path. When the
+working directory is on such a mount, a command that writes a relative path
+is denied. The floor does look up paths on such a mount. A call whose check
+does not end in 10 s is denied.
 
 After a directory change that the hook cannot resolve, such as `cd "$D"`,
 `env -C "$D"` or `sudo -D "$D"`, the hook denies a relative word whose last
