@@ -260,10 +260,17 @@ func TestReview090dPathologicalWords(t *testing.T) {
 	for _, c := range cases {
 		c := c
 		t.Run(c.name, func(t *testing.T) {
+			// The floor, the check of 22ed838, spends most of the time on
+			// "40000 open braces": 0.63 s of 1.03 s in a race build on 2
+			// cores. So that case has 5 s, and every other case 2 s.
+			limit := 2 * time.Second
+			if c.name == "40000 open braces" {
+				limit = 5 * time.Second
+			}
 			start := time.Now()
 			got, reason := review090dRun(t, bashEv(c.cmd, home), file)
-			if d := time.Since(start); d > 2*time.Second {
-				t.Errorf("took %s, want under 2s", d)
+			if d := time.Since(start); d > limit {
+				t.Errorf("took %s, want under %s", d, limit)
 			}
 			if strings.Contains(reason, "did not end in") {
 				t.Errorf("denied on the time limit: %s", reason)

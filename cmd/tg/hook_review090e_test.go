@@ -610,9 +610,25 @@ func TestReview090ePathologicalInputs(t *testing.T) {
 	for _, c := range cmds {
 		cases = append(cases, review090eCase{name: c.name, ev: bashEv(c.cmd, c.cwd)})
 	}
+	// The floor, the check of 22ed838, runs on every call the new check
+	// allows, and it spends most of the time on "10 args of 4000 nested":
+	// 1.43 s of 1.83 s in a race build on 2 cores, 0.54 s without -race. CI
+	// took 3.73 s and 3.99 s on that case. "5 args of 4000 nested" took
+	// 2.15 s and 3.10 s in a race build on 2 cores of a loaded machine. So
+	// these two cases have 5 s, and every other case 2 s.
+	limits := map[string]time.Duration{
+		"10_args_of_4000_nested": 5 * time.Second,
+		"5_args_of_4000_nested":  5 * time.Second,
+	}
 	review090eEach(t, home, file, cases, func(t *testing.T, got, reason string, took time.Duration) {
-		if took > 2*time.Second {
-			t.Errorf("took %s, want under 2s", took)
+		limit := 2 * time.Second
+		for name, l := range limits {
+			if strings.Contains(t.Name(), "/"+name+"/") {
+				limit = l
+			}
+		}
+		if took > limit {
+			t.Errorf("took %s, want under %s", took, limit)
 		}
 		if strings.Contains(reason, "did not end in") {
 			t.Errorf("denied on the time limit: %s", reason)

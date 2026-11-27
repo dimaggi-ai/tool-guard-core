@@ -86,3 +86,26 @@ func TestNetWindowsPathForms(t *testing.T) {
 		}
 	}
 }
+
+// TestNetDriveCwd: the directory a drive-relative C:name is read from is the
+// directory of drive C: that this process keeps, which is its working
+// directory on the drive of that directory. A malformed drive gives "".
+func TestNetDriveCwd(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strings.TrimRight(netInternal(filepath.ToSlash(wd)), "/")
+	drive := netDriveOf(want)
+	if drive == "" {
+		t.Skipf("working directory %s is not on a drive", wd)
+	}
+	if got := netDriveCwd(drive); got != want {
+		t.Errorf("netDriveCwd(%q) = %q, want %q", drive, got, want)
+	}
+	for _, bad := range []string{"", "/C", "C:", "/C:/x"} {
+		if got := netDriveCwd(bad); got != "" {
+			t.Errorf("netDriveCwd(%q) = %q, want \"\"", bad, got)
+		}
+	}
+}
