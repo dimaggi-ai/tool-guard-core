@@ -18,9 +18,9 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   covers only the protected-path check. The policy rules read a call as
   22ed838 read it: a shell command is split into words as bash splits it,
   and a path is resolved through its symbolic links. An `apply_patch` target
-  is also read as 22ed838 read it: a relative target joined to cwd, with
-  `DIR/..` removed, so `.claude/commands/../settings.json` is denied as
-  `.claude/settings.json`.
+  is also read as 22ed838 read it: a relative target joined to a cwd that
+  starts with `/`, with `DIR/..` removed, so
+  `.claude/commands/../settings.json` is denied as `.claude/settings.json`.
 - The pre-release review found calls that wrote to a path named with
   `-protect-path` and were allowed. `tg hook` now denies them:
   - a redirect target that holds a brace list, such as `> {P,}`. This
@@ -110,12 +110,13 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   A command over the counter is denied. Some calls take seconds to check.
   Measured on one Linux machine with no other load, with the coding-agent
   shell policy and `-protect-path`, median of 3 runs, with the time of
-  22ed838 in parentheses: the 300 commands `cd a0*` to `cd a299*` in one call, 4.3 s
-  (0.01 s); 2,000 words such as `lnk/../f`, where `lnk` is a symbolic link,
-  1.2 s (0.66 s); ten words of 4,000 nested brace lists,
+  22ed838 in parentheses: the 300 commands `cd a0*` to `cd a299*` in one
+  call, 4.3 s (0.01 s); 2,000 words such as `lnk/../f`, where `lnk` is a
+  symbolic link, 1.2 s (0.66 s); ten words of 4,000 nested brace lists,
   0.60 s (0.55 s); `echo x > /;*`, 1.3 s (1.3 s); and
   `ssh h{ost 'echo x >!{,/;}*'`, 7.9 s (7.9 s). With a load average of 20,
-  each time is about 1.6 times larger.
+  each time is about 1.6 times larger, and the last call is denied on the
+  9 s limit.
 - The new checks do not look into a network or FUSE file system, because a
   lookup there can wait without end. A command that can write is denied
   when a path or pattern in it reaches such a mount, as in `cp a M/x` where
