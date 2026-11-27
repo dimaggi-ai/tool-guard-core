@@ -17,6 +17,7 @@ import (
 	"unicode"
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
+	"github.com/dimaggi-ai/tool-guard-core/pkg/engine/internal/mainfloor"
 )
 
 // ViolatesProtectedPaths reports whether a write-capable tool call targets
@@ -79,6 +80,14 @@ func ViolatesProtectedPaths(env *domain.ActionEnvelope, prefixes []string) (bool
 			}
 		}()
 		hit, reason := violatesProtectedPaths(env, prefixes)
+		if !hit {
+			// The floor: the rules of v0.8.x, frozen. A call they deny is
+			// denied, with their reason, so this check never allows what
+			// v0.8.x denies. It runs only when the check above allows: a
+			// deny is final, and v0.8.x is slow on some inputs that the
+			// check above denies at once.
+			hit, reason = mainfloor.ViolatesProtectedPaths(env, prefixes)
+		}
 		done <- verdict{hit, reason}
 	}()
 	select {

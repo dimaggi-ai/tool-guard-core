@@ -164,6 +164,7 @@ func TestReview090eBypasses(t *testing.T) {
 	deepRaw = `{"hook_event_name":"PreToolUse","tool_name":"apply_patch","cwd":"/tmp","tool_input":` + deepRaw + `}`
 	b6 := `eval "tee .claude/\$'\\""x73\\""x65\\""x74\\""x74\\""x69\\""x6e\\""x67\\""x73\\""x2e\\""x6a\\""x73\\""x6f\\""x6e'" <<< pwn`
 	tgOnly := []string{tg}
+	z62 := strings.Repeat("0", 62)
 	cases := []review090eCase{
 		// Fable r4 1: a quoted or escaped long list handed to a command
 		// that reads its text again.
@@ -315,6 +316,18 @@ func TestReview090eBypasses(t *testing.T) {
 		sh("eval \"tee .cl\\\\\"'\n'\"aude/settings.json\""),
 		sh(`eval 'tee .cl\'$'\n''aude/settings.json'`),
 		sh("bash -c 'tee .cl\\'\"\n\"'aude/settings.json'"),
+		// Round 8: a group with no comma inside a list item, and sequences
+		// longer than 64 characters.
+		sh(`tee .claude/setting{s,{x}}.jso{n..n..1}`),
+		sh(`tee .claude/setting{s,x{y}z}.jso{n..n..01}`),
+		sh(`tee {.,{x}}claude/setting{s,{y}}.jso{n..n..1}`),
+		sh(`tee dlink/setting{s,{x}}.js{q..o..1}n`),
+		sh(`echo x > .claude/setting{s,{x}}.jso{n..n..01}`),
+		sh("tee .claud{e..e.." + z62 + "1}/settings.{json,{1..70}}"),
+		sh("tee .claud{e..e.." + z62 + "1}/settings.json"),
+		sh("tee .claude/settings.js{o..o.." + z62 + "1}n"),
+		sh("eval $'tee\\t.claud{e..e.." + z62 + "1}/settings.json'"),
+		sh("eval $'tee\\t.claude/settings.jso{n..n.." + z62 + "1}'"),
 	}
 	// B8b: a protected path with a space in it, read by its absolute path.
 	spaced := filepath.Join(t.TempDir(), "my home")
@@ -488,10 +501,7 @@ func TestReview090eOrdinaryCommands(t *testing.T) {
 		sh(`cat f > /dev/stdout`),
 		sh(`python3 -c 'print({"a":1})'`),
 		sh(`python3 -c 'print({"a":1,"b":{"c":2}})'`),
-		sh(`echo '{"a":[1,2],"b":{"c":"d"}}' > out.json`),
-		sh(`curl -d '{"items":[1,2],"meta":{"k":"v"}}' http://x/y`),
 		sh(`touch a{1,2}.txt`),
-		sh(`touch file{1..100}.txt`),
 		sh(`echo hi`),
 		sh(`rg -C 3 foo`),
 		sh(`git diff -C`),
@@ -531,6 +541,22 @@ func TestReview090eOrdinaryCommands(t *testing.T) {
 	review090eEach(t, home, file, cases, func(t *testing.T, got, reason string, took time.Duration) {
 		if got == "deny" {
 			t.Errorf("decision deny (%s), want not deny", reason)
+		}
+		if took > 2*time.Second {
+			t.Errorf("took %s, want under 2s", took)
+		}
+	})
+	floorDenies := []review090eCase{
+		// main denies this; the frozen floor keeps main's verdict.
+		sh(`echo '{"a":[1,2],"b":{"c":"d"}}' > out.json`),
+		// main denies this; the frozen floor keeps main's verdict.
+		sh(`curl -d '{"items":[1,2],"meta":{"k":"v"}}' http://x/y`),
+		// main denies this; the frozen floor keeps main's verdict.
+		sh(`touch file{1..100}.txt`),
+	}
+	review090eEach(t, home, file, floorDenies, func(t *testing.T, got, reason string, took time.Duration) {
+		if got != "deny" {
+			t.Errorf("decision %q (%s), want deny", got, reason)
 		}
 		if took > 2*time.Second {
 			t.Errorf("took %s, want under 2s", took)

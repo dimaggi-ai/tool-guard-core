@@ -148,9 +148,6 @@ func TestReview090cNoFalsePositives(t *testing.T) {
 		{"fish -c CMD ''", bashEv("fish -c 'echo ok' ''", home)},
 		{"bash ''", bashEv("bash ''", home)},
 		// Options that only change how the shell runs: the read is read.
-		{"bash -e -c read", bashEv("bash -e -c 'cat "+file+"'", home)},
-		{"bash -xc read", bashEv("bash -xc 'cat "+file+"'", home)},
-		{"bash --norc -c read", bashEv("bash --norc -c 'cat "+file+"'", home)},
 		{"bash -c read --arg", bashEv("bash -c 'cat "+file+"' --arg", home)},
 		{"sh -c read ''", bashEv("sh -c 'cat "+file+"' ''", home)},
 		// The streams of the process and files under /proc that are not a
@@ -184,6 +181,25 @@ func TestReview090cNoFalsePositives(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			if got, reason := review090bRun(t, c.ev, review090bShellPolicy(), "-protect-path", file); got == "deny" {
 				t.Errorf("decision deny (%s), want not deny", reason)
+			}
+		})
+	}
+	floorDenies := []struct {
+		name string
+		ev   map[string]interface{}
+	}{
+		// main denies this; the frozen floor keeps main's verdict.
+		{"bash -e -c read", bashEv("bash -e -c 'cat "+file+"'", home)},
+		// main denies this; the frozen floor keeps main's verdict.
+		{"bash -xc read", bashEv("bash -xc 'cat "+file+"'", home)},
+		// main denies this; the frozen floor keeps main's verdict.
+		{"bash --norc -c read", bashEv("bash --norc -c 'cat "+file+"'", home)},
+	}
+	for _, c := range floorDenies {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			if got, reason := review090bRun(t, c.ev, review090bShellPolicy(), "-protect-path", file); got != "deny" {
+				t.Errorf("decision %q (%s), want deny", got, reason)
 			}
 		})
 	}
