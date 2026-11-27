@@ -81,11 +81,12 @@ func ViolatesProtectedPaths(env *domain.ActionEnvelope, prefixes []string) (bool
 		}()
 		hit, reason := violatesProtectedPaths(env, prefixes)
 		if !hit {
-			// The floor: the rules of v0.8.x, frozen. A call they deny is
-			// denied, with their reason, so this check never allows what
-			// v0.8.x denies. It runs only when the check above allows: a
-			// deny is final, and v0.8.x is slow on some inputs that the
-			// check above denies at once.
+			// The floor: the protected-path check of commit 22ed838,
+			// frozen. A call it denies is denied, with its reason, so this
+			// check never allows a call that 22ed838 denies for a protected
+			// path. It runs only when the check above allows: a deny is
+			// final, and 22ed838 is slow on some inputs that the check
+			// above denies at once.
 			hit, reason = mainfloor.ViolatesProtectedPaths(env, prefixes)
 		}
 		done <- verdict{hit, reason}
@@ -678,7 +679,7 @@ func shellTouchesProtectedRec(cmd string, prefixes []string, depth int, inherite
 }
 
 func shellTouchesProtectedPOSIX(cmd string, prefixes []string, depth int, inherited, work []string) (bool, string) {
-	toks := tokenizeShell(cmd)
+	toks := tokenizeShellZsh(cmd)
 	frags, homeAlts, over := shellFragments(cmd)
 	if over {
 		return true, "a command with more words than the check reads"
@@ -787,7 +788,7 @@ func shellTouchesProtectedPOSIX(cmd string, prefixes []string, depth int, inheri
 // (bash -c 'cat F' -i). A call whose options cannot be read is treated the
 // same way.
 func shellCommandRunOptionNamesProtected(cmd string, prefixes, work []string) bool {
-	for _, seg := range splitShellSegments(tokenizeShell(cmd)) {
+	for _, seg := range splitShellSegments(tokenizeShellZsh(cmd)) {
 		words := stripCommandPrefix(commandWords(seg))
 		if len(words) < 2 || words[0].unresolved || words[0].raw != words[0].value {
 			continue
@@ -818,7 +819,7 @@ func commandTextNamesProtected(cmd string, prefixes, work []string) bool {
 			}
 		}
 	}
-	toks := tokenizeShell(cmd)
+	toks := tokenizeShellZsh(cmd)
 	frags, homeAlts, over := shellFragments(cmd)
 	if over {
 		return true
@@ -1021,7 +1022,7 @@ func linkIsUsed(cmd string, toks []shellToken, segs map[int]bool) bool {
 func nestedTexts(cmd string) (texts []string, ok bool) {
 	ok = true
 	texts = append(texts, extractCommandSubsts(cmd)...)
-	for _, seg := range splitShellSegments(tokenizeShell(cmd)) {
+	for _, seg := range splitShellSegments(tokenizeShellZsh(cmd)) {
 		words := stripCommandPrefix(commandWords(seg))
 		if len(words) < 2 || words[0].unresolved {
 			continue
@@ -1059,7 +1060,7 @@ func possibleTexts(cmd string, skipData bool) []string {
 	if strings.Contains(cmd, "$'") {
 		texts = append(texts, decodeAnsiEscapes(strings.ReplaceAll(cmd, "$'", "'")))
 	}
-	toks := tokenizeShell(cmd)
+	toks := tokenizeShellZsh(cmd)
 	for _, seg := range splitShellSegments(toks) {
 		if skipData && dataSegment(seg) {
 			continue
@@ -1125,7 +1126,7 @@ func textCannotRun(cmd string) bool {
 	if strings.ContainsAny(cmd, "|<$`") {
 		return false
 	}
-	for _, seg := range splitShellSegments(tokenizeShell(cmd)) {
+	for _, seg := range splitShellSegments(tokenizeShellZsh(cmd)) {
 		for _, w := range commandWords(seg) {
 			if w.unresolved {
 				return false
@@ -1263,7 +1264,7 @@ func linkNamesAndWords(cmd string, depth int, skipData bool, names map[string]bo
 		return true // the caller denies a text this deep
 	}
 	all = true
-	for _, seg := range splitShellSegments(tokenizeShell(cmd)) {
+	for _, seg := range splitShellSegments(tokenizeShellZsh(cmd)) {
 		cw := expandBraceWords(stripCommandPrefix(commandWords(seg)))
 		at := -1
 		for i, w := range cw {
@@ -1395,7 +1396,7 @@ func nestedLinkToProtected(cmd string, depth int, bases, homeAlts, prefixes []st
 	texts, _ := nestedTexts(cmd)
 	texts = append(texts, possibleTexts(cmd, depth == 0 && textCannotRun(cmd))...)
 	for _, text := range texts {
-		links, over := linkToProtected(tokenizeShell(text), bases, homeAlts, prefixes)
+		links, over := linkToProtected(tokenizeShellZsh(text), bases, homeAlts, prefixes)
 		if over {
 			return false, true
 		}
@@ -1422,7 +1423,7 @@ func onlyReadsOrLinks(cmd string, depth int) bool {
 	if shellAnomalyRe.MatchString(homeVarRe.ReplaceAllString(cmd, "~")) || strings.ContainsRune(cmd, '\r') {
 		return false
 	}
-	for _, seg := range splitShellSegments(tokenizeShell(cmd)) {
+	for _, seg := range splitShellSegments(tokenizeShellZsh(cmd)) {
 		words := stripCommandPrefix(commandWords(seg))
 		if len(words) == 0 {
 			continue // an assignment alone; its substitutions are read below
@@ -2028,7 +2029,7 @@ var shellInterpreters = map[string]bool{
 // unknown and the check fails closed.
 func shellCommandArgTouchesProtected(arg shellToken, prefixes []string, depth int, bases []string) (bool, string) {
 	inner := arg.marked
-	for _, seg := range splitShellSegments(tokenizeShell(inner)) {
+	for _, seg := range splitShellSegments(tokenizeShellZsh(inner)) {
 		words := stripCommandPrefix(commandWords(seg))
 		if len(words) > 0 && words[0].unresolved {
 			return true, shortRaw(arg.raw)

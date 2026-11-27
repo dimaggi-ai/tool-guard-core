@@ -72,6 +72,25 @@ func netDriveOf(p string) string {
 	return ""
 }
 
+// netDriveCwd returns the net path of the current directory of the drive
+// /C: that this process has: the system keeps it in the environment, and
+// it is the drive root when none is kept. It looks nothing up. "" when it
+// is not known.
+func netDriveCwd(drive string) string {
+	if len(drive) != 3 {
+		return ""
+	}
+	abs, err := filepath.Abs(drive[1:])
+	if err != nil {
+		return ""
+	}
+	d := strings.TrimRight(netInternal(filepath.ToSlash(abs)), "/")
+	if netDriveOf(d) != drive {
+		return ""
+	}
+	return d
+}
+
 // readsBesides reports whether the set can read a byte other than c, or
 // end.
 func (p *netPattern) readsBesides(set []int32, c byte) bool {

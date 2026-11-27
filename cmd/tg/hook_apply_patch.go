@@ -66,6 +66,34 @@ func applyPatchText(params map[string]json.RawMessage) (text string, deep bool) 
 	return strings.Join(parts, "\n"), deep
 }
 
+// applyPatchMainKeysNameFiles reports whether the patch text under the keys
+// command, input and patch, the only keys commit 22ed838 read, names a
+// file. When none does, that version checked the call unchanged.
+func applyPatchMainKeysNameFiles(base *domain.ActionEnvelope) bool {
+	var params map[string]json.RawMessage
+	if base == nil || json.Unmarshal(base.Parameters, &params) != nil {
+		return false
+	}
+	var parts []string
+	for _, k := range []string{"command", "input", "patch"} {
+		raw, ok := params[k]
+		if !ok {
+			continue
+		}
+		var s string
+		if json.Unmarshal(raw, &s) == nil {
+			parts = append(parts, s)
+			continue
+		}
+		var list []string
+		if json.Unmarshal(raw, &list) == nil {
+			parts = append(parts, list...)
+		}
+	}
+	targets, _ := applyPatchTargets(strings.Join(parts, "\n"))
+	return len(targets) > 0
+}
+
 // maxPatchValueDepth bounds how deep patchStrings reads nested values.
 const maxPatchValueDepth = 16
 
@@ -280,8 +308,10 @@ func applyPatchEnvelopes(base *domain.ActionEnvelope, cwd string) (envs []*domai
 		mm := make(map[string]json.RawMessage, len(params)+2)
 		for k, v := range params {
 			// The patch text is not a shell command. On the key command
-			// the engine would read it as one.
-			if !applyPatchTextKey(k) {
+			// the engine would read it as one. Only command and input are
+			// dropped, as in 22ed838: a policy that reads the patch under
+			// another key (cmd, script, diff) keeps the verdict it had.
+			if k != "command" && k != "input" {
 				mm[k] = v
 			}
 		}

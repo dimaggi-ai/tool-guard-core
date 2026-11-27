@@ -255,8 +255,16 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	// without one.
 	patchEnvs, patchDeny, isPatch := applyPatchEnvelopes(env, in.Cwd)
 	if isPatch && patchDeny == "" {
+		// When the keys 22ed838 read (command, input, patch) name no file,
+		// that version checked the call unchanged. That check stays, next
+		// to the envelope of each file, and the strictest decision wins.
+		kept := envs
 		envs = nil
-		truncatedVariants = false
+		if !applyPatchMainKeysNameFiles(env) {
+			envs = append(envs, kept...)
+		} else {
+			truncatedVariants = false
+		}
 		for _, pe := range patchEnvs {
 			v, trunc := hookParamVariants(pe.Parameters)
 			truncatedVariants = truncatedVariants || trunc
@@ -266,8 +274,10 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 
 	// A tool input that is not an object, or a command that is not a
 	// string (or a string array for apply_patch), cannot be evaluated. Before,
-	// such a call got an empty parameter object and was allowed.
-	if why := hookInputMalformed(in); why != "" && !(dispatching && dispatchShellTool(env) && dispatchCommandMalformed(in, tool)) {
+	// such a call got an empty parameter object and was allowed. Only Bash
+	// goes on to the dispatch with such a command, as in 22ed838: another
+	// shell tool is denied here, as that version denied it.
+	if why := hookInputMalformed(in); why != "" && !(dispatching && tool == "bash" && dispatchCommandMalformed(in, tool)) {
 		if d, reason := failDecide(tool); d == "deny" {
 			emitAudited(d, reason+": "+why, nil)
 			return 0

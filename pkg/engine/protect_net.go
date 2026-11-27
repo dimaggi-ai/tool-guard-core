@@ -2267,6 +2267,10 @@ type netCtx struct {
 	// noReads: a command made of reads only is judged like any other
 	// (netNames).
 	noReads bool
+	// bases are the bases of netNames found so far: on Windows, C:name
+	// read from a base on another drive is read from each of them that is
+	// on drive C: too.
+	bases []string
 }
 
 func newNetCtx(cmd string, prefixes []string) *netCtx {
@@ -2375,13 +2379,30 @@ func (c *netCtx) walk(p *netPattern, base string, collect, strict bool) (names, 
 		for i := range dirs {
 			stack = append(stack, netWalkState{dir: dirs[i], set: sets[i]})
 			// C:name names name in the current directory of drive C:
-			// the base when it is on that drive, else a directory the
-			// check does not know.
+			// the base when it is on that drive. From a base on another
+			// drive it is the directory of drive C: that the shell kept:
+			// any base on drive C:, or the one this process has, which
+			// it got from the same environment (netDriveCwd).
 			if p.readsBesides(sets[i], '/') {
 				if base != "" && netDriveOf(base) == dirs[i] {
 					stack = append(stack, netWalkState{dir: base, set: sets[i]})
 				} else {
-					magic = true
+					cwds := []string{""}
+					if d := netDriveCwd(dirs[i]); d != "" {
+						cwds[0] = c.fs.physical(d)
+					}
+					for _, b := range c.bases {
+						if netDriveOf(b) == dirs[i] {
+							cwds = append(cwds, b)
+						}
+					}
+					for _, d := range cwds {
+						if d == "" {
+							magic = true
+							continue
+						}
+						stack = append(stack, netWalkState{dir: d, set: sets[i]})
+					}
 				}
 			}
 		}
@@ -3269,7 +3290,7 @@ func netWriteTargets(toks []shellToken) []netWriteTarget {
 func netShellTexts(toks []shellToken) (texts []string, unknownProg bool) {
 	addText := func(text string) {
 		texts = append(texts, text)
-		for _, s := range splitShellSegments(tokenizeShell(text)) {
+		for _, s := range splitShellSegments(tokenizeShellZsh(text)) {
 			if w := stripCommandPrefix(commandWords(s)); len(w) > 0 && w[0].unresolved {
 				unknownProg = true
 			}
@@ -3459,15 +3480,15 @@ func (c *netCtx) check(cmd string, depth int, inherited []string, inhUncertain b
 	if depth > maxShellSubstDepth {
 		return true, shortRaw(cmd)
 	}
-	toks := tokenizeShell(cmd)
-	sigToks := tokenizeShell(sigmaText(cmd))
+	toks := tokenizeShellZsh(cmd)
+	sigToks := tokenizeShellZsh(sigmaText(cmd))
 	// joined: the text with each backslash that quotes and a newline
 	// follow joined to the next line, as a later reading of the text does
 	// ('a\'"<newline>"'b' read again is ab).
 	joined := netJoinRe.ReplaceAllString(cmd, "")
 	var joinToks []shellToken
 	if joined != cmd {
-		joinToks = tokenizeShell(sigmaText(joined))
+		joinToks = tokenizeShellZsh(sigmaText(joined))
 	}
 
 	// The decoded texts of the command ($'...' escapes and the quote
@@ -3485,7 +3506,7 @@ func (c *netCtx) check(cmd string, depth int, inherited []string, inhUncertain b
 				return true, netOverReason
 			}
 			decTexts = append(decTexts, d)
-			decToks = append(decToks, tokenizeShell(d))
+			decToks = append(decToks, tokenizeShellZsh(d))
 		}
 	}
 
@@ -3616,6 +3637,7 @@ func (c *netCtx) check(cmd string, depth int, inherited []string, inhUncertain b
 		}
 		baseSet[d] = true
 		bases = append(bases, d)
+		c.bases = bases
 		return true
 	}
 	for _, d := range inherited {

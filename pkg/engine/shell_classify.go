@@ -96,7 +96,7 @@ func evalShellClassify(s *domain.ShellClassify, fields map[string]interface{}) b
 			// resolved form. Either match denies.
 			variants := []string{cleaned}
 			if s.Require.ResolveSymlinks {
-				if resolved, err := fsEvalSymlinks(cleaned); err == nil && resolved != cleaned {
+				if resolved, err := filepath.EvalSymlinks(cleaned); err == nil && resolved != cleaned {
 					variants = append(variants, resolved)
 				}
 			}
