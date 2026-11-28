@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"path"
@@ -271,71 +272,180 @@ func applyPatchTargets(text string) (targets []string, added string) {
 // applyPatchPlan holds the files of one apply_patch call. Each file gets an
 // envelope with the file on file_path and the added lines on content, so the
 // protected-path check and the write policies read the call like a call of a
-// write tool with a path parameter. The plan holds the parameters other than
-// file_path once; envelope builds the envelope of one file when the hook
-// checks it, so a large patch is not held in many envelopes at the same time.
+// write tool with a path parameter. The parameters other than file_path are
+// the same in every envelope: the plan encodes them once, and keeps for each
+// file only its path and envelope ID. An envelope, and each alias copy of it,
+// is spliced from these encodings when the hook checks it, so the memory of a
+// plan does not grow with the number of parameters times the number of
+// envelopes.
 type applyPatchPlan struct {
 	base *domain.ActionEnvelope
-	// shared is the encoded parameters other than file_path, the same in
-	// every envelope.
+	// shared is the encoded parameters other than file_path.
 	shared []byte
-	// light is shared without the key patch and the keys of the content
-	// and command alias families, which hold the patch text, its added
-	// lines and their copies. The protected-path check does not read these
-	// keys for apply_patch (see protectEnvelope).
-	light       []byte
-	lightParams map[string]json.RawMessage
-	files       []applyPatchFile
+	// light holds only the keys the protected-path check reads for a tool
+	// that is not a shell tool (applyPatchProtectKey), without file_path.
+	light []byte
+	// pathCands are the distinct values of the file_path alias keys in the
+	// shared parameters, in key order, with valueKeys their
+	// hookAliasValueKey. A file uses those that differ from its path.
+	pathCands []hookAliasCandidate
+	valueKeys []string
+	// rest are the candidates of the content and command families, the
+	// same for every file. restShared[j] is shared with rest[j] on its
+	// canonical key, encoded when an envelope first needs it.
+	rest       []hookAliasCandidate
+	restShared [][]byte
+	sharedMap  map[string]json.RawMessage
+	files      []applyPatchFile
 }
 
-// applyPatchFile is one envelope of an apply_patch call: the path on
-// file_path, the envelope ID, and the parameters as a map, with the alias
-// values the hook also checks. The map values are shared between files.
+// applyPatchFile is one envelope of an apply_patch call: the encoded path on
+// file_path, its hookAliasValueKey, and the envelope ID.
 type applyPatchFile struct {
-	path   []byte
-	id     string
-	params map[string]json.RawMessage
-	cands  []hookAliasCandidate
-	// pathCands is the number of candidates of the file_path family, the
-	// first ones in cands.
-	pathCands int
+	path     []byte
+	valueKey string
+	id       string
+}
+
+// applyPatchProtectNames are the keys the protected-path check reads from a
+// tool that is not a shell tool, in pkg/engine and in its floor: the path
+// keys of collectFilePaths and the arrays of nested edit objects. The check
+// also reads the keys whose normParamName is in applyPatchWorkDirNames.
+// TestReview090hProtectViewVerdict fails when the check reads another key.
+var applyPatchProtectNames = map[string]bool{
+	"file_path": true, "path": true, "paths": true, "file": true, "files": true, "filename": true,
+	"dest": true, "destination": true, "target": true, "output": true, "out_path": true, "notebook_path": true,
+	"edits": true, "changes": true, "operations": true,
+}
+
+var applyPatchWorkDirNames = map[string]bool{
+	"cwd": true, "workdir": true, "workingdir": true, "workingdirectory": true,
+}
+
+// applyPatchProtectKey reports whether the protected-path check reads the key
+// k for a tool that is not a shell tool.
+func applyPatchProtectKey(k string) bool {
+	return applyPatchProtectNames[k] || applyPatchWorkDirNames[normParamName(k)]
+}
+
+// cands returns the alias candidates of file i: the file_path candidates
+// that differ from its path, then the others. With rest false it returns
+// only the file_path ones.
+func (p *applyPatchPlan) cands(i int, rest bool) []hookAliasCandidate {
+	var out []hookAliasCandidate
+	for j, c := range p.pathCands {
+		if p.valueKeys[j] != p.files[i].valueKey {
+			out = append(out, c)
+		}
+	}
+	if rest {
+		out = append(out, p.rest...)
+	}
+	return out
 }
 
 // envelope builds the envelope of file i.
 func (p *applyPatchPlan) envelope(i int) *domain.ActionEnvelope {
-	return p.splice(i, p.shared)
+	return p.splice(i, p.files[i].path, p.shared)
 }
 
 // protectEnvelope builds the envelope of file i for the protected-path
-// check, without the keys left out of light, and the parameters it was
-// built from. For a tool that is not a shell tool and not in the group
-// "shell", the check reads only path and work directory keys (file_path,
-// path, edits, cwd, workdir, ...), so the verdict is the verdict of the
-// full envelope (TestReview090hProtectViewVerdict). Without these keys an
-// envelope is small, and the check of many of them does not decode the
-// patch text each time.
-func (p *applyPatchPlan) protectEnvelope(i int) (*domain.ActionEnvelope, map[string]json.RawMessage) {
-	m := make(map[string]json.RawMessage, len(p.lightParams)+1)
-	for k, v := range p.lightParams {
-		m[k] = v
-	}
-	m["file_path"] = p.files[i].path
-	return p.splice(i, p.light), m
+// check: file_path and the keys of light only. For a tool that is not a shell
+// tool and not in the group "shell", the check reads no other key, so the
+// verdict is the verdict of the full envelope
+// (TestReview090hProtectViewVerdict).
+func (p *applyPatchPlan) protectEnvelope(i int) *domain.ActionEnvelope {
+	return p.splice(i, p.files[i].path, p.light)
 }
 
-func (p *applyPatchPlan) splice(i int, shared []byte) *domain.ActionEnvelope {
-	f := p.files[i]
-	b := make([]byte, 0, len(shared)+len(f.path)+16)
+// splice returns the envelope of file i with the encoded path on file_path
+// and the other parameters from the encoded object obj, without file_path.
+func (p *applyPatchPlan) splice(i int, path, obj []byte) *domain.ActionEnvelope {
+	b := make([]byte, 0, len(obj)+len(path)+16)
 	b = append(b, `{"file_path":`...)
-	b = append(b, f.path...)
-	if len(shared) > 2 {
+	b = append(b, path...)
+	if len(obj) > 2 {
 		b = append(b, ',')
 	}
-	b = append(b, shared[1:]...)
+	b = append(b, obj[1:]...)
 	e := *p.base
 	e.Parameters = b
-	e.EnvelopeID = f.id
+	e.EnvelopeID = p.files[i].id
 	return &e
+}
+
+// restEncoding returns shared with rest[j] on its canonical key. It writes
+// to sharedMap and restShared, so a plan is used by one goroutine at a time:
+// runHookCall reads the envelope set in order.
+func (p *applyPatchPlan) restEncoding(j int) []byte {
+	for len(p.restShared) <= j {
+		p.restShared = append(p.restShared, nil)
+	}
+	if p.restShared[j] == nil {
+		c := p.rest[j]
+		old, had := p.sharedMap[c.canonical]
+		p.sharedMap[c.canonical] = c.value
+		b, err := json.Marshal(p.sharedMap)
+		if had {
+			p.sharedMap[c.canonical] = old
+		} else {
+			delete(p.sharedMap, c.canonical)
+		}
+		if err != nil {
+			b = []byte{}
+		}
+		p.restShared[j] = b
+	}
+	return p.restShared[j]
+}
+
+// eachVariant yields the alias copies of file i, as yieldWithVariants does
+// for a parameters object: one per candidate, with the candidate on its
+// canonical key, at most maxHookParamVariants distinct ones. With full false
+// it yields the copies of protectEnvelope with the file_path candidates only.
+func (p *applyPatchPlan) eachVariant(i int, full bool, yield func(json.RawMessage) bool) bool {
+	seen := map[[sha256.Size]byte]bool{}
+	n := 0
+	obj := p.light
+	if full {
+		obj = p.shared
+	}
+	emit := func(b []byte) bool {
+		h := sha256.Sum256(b)
+		if seen[h] {
+			return true
+		}
+		seen[h] = true
+		n++
+		return yield(b)
+	}
+	for j, c := range p.pathCands {
+		if n >= maxHookParamVariants {
+			return true
+		}
+		if p.valueKeys[j] == p.files[i].valueKey {
+			continue
+		}
+		if !emit(p.splice(i, c.value, obj).Parameters) {
+			return false
+		}
+	}
+	if !full {
+		return true
+	}
+	for j := range p.rest {
+		if n >= maxHookParamVariants {
+			return true
+		}
+		enc := p.restEncoding(j)
+		if len(enc) == 0 {
+			continue
+		}
+		if !emit(p.splice(i, p.files[i].path, enc).Parameters) {
+			return false
+		}
+	}
+	return true
 }
 
 // applyPatchPlanFor returns the plan of an apply_patch call. A relative path
@@ -395,39 +505,34 @@ func applyPatchPlanFor(base *domain.ActionEnvelope, cwd string) (plan *applyPatc
 	if err != nil {
 		return nil, "apply_patch parameters could not be encoded", true
 	}
-	// The map the alias values of each envelope are read from: the same
-	// map an envelope decodes to, with the file on file_path.
+	// The map the alias values are read from: the map an envelope decodes
+	// to, without file_path.
 	var sharedParams map[string]json.RawMessage
 	if json.Unmarshal(shared, &sharedParams) != nil {
 		return nil, "apply_patch parameters could not be encoded", true
 	}
-	for k := range mm {
-		if n := normParamName(k); k == "patch" || contentAliasNames[n] || commandAliasNames[n] {
-			delete(mm, k)
+	lm := map[string]json.RawMessage{}
+	for k, v := range sharedParams {
+		if applyPatchProtectKey(k) {
+			lm[k] = v
 		}
 	}
-	light, err := json.Marshal(mm)
+	light, err := json.Marshal(lm)
 	if err != nil {
 		return nil, "apply_patch parameters could not be encoded", true
 	}
-	plan = &applyPatchPlan{base: base, shared: shared, light: light}
-	if json.Unmarshal(light, &plan.lightParams) != nil {
-		return nil, "apply_patch parameters could not be encoded", true
+	plan = &applyPatchPlan{base: base, shared: shared, light: light, sharedMap: sharedParams}
+	// The candidates are found once. Of the file_path family, a file uses
+	// those whose value differs from its path: the candidates of the map
+	// with the path on file_path.
+	plan.pathCands = hookAliasCandidatesIn(sharedParams, hookAliasFamilies[:1])
+	for _, c := range plan.pathCands {
+		plan.valueKeys = append(plan.valueKeys, hookAliasValueKey(c.value))
 	}
-	// Only the file_path family differs between files: the candidates of
-	// the other families are found once.
-	rest := hookAliasCandidatesIn(sharedParams, hookAliasFamilies[1:])
+	plan.rest = hookAliasCandidatesIn(sharedParams, hookAliasFamilies[1:])
 	add := func(full, id string) {
 		fp, _ := json.Marshal(full)
-		m := make(map[string]json.RawMessage, len(sharedParams)+1)
-		for k, v := range sharedParams {
-			m[k] = v
-		}
-		m["file_path"] = fp
-		cands := hookAliasCandidatesIn(m, hookAliasFamilies[:1])
-		n := len(cands)
-		cands = append(cands, rest...)
-		plan.files = append(plan.files, applyPatchFile{path: fp, id: id, params: m, cands: cands, pathCands: n})
+		plan.files = append(plan.files, applyPatchFile{path: fp, valueKey: hookAliasValueKey(fp), id: id})
 	}
 	for i, target := range targets {
 		if target == "" {

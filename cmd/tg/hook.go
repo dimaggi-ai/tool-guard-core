@@ -1399,8 +1399,8 @@ func newHookEnvelopeSet(env *domain.ActionEnvelope, raw json.RawMessage, cwd str
 			s.truncated = false
 		}
 		s.patch = plan
-		for _, f := range plan.files {
-			s.truncated = s.truncated || len(f.cands) > maxHookParamVariants
+		for i := range plan.files {
+			s.truncated = s.truncated || len(plan.cands(i, true)) > maxHookParamVariants
 		}
 	}
 	return s, deny
@@ -1417,8 +1417,7 @@ func (s *hookEnvelopeSet) all() iter.Seq[*domain.ActionEnvelope] {
 			return
 		}
 		for i := range s.patch.files {
-			f := s.patch.files[i]
-			if !yieldWithVariants(s.patch.envelope(i), f.params, f.cands, yield) {
+			if !s.patch.yieldFile(i, true, yield) {
 				return
 			}
 		}
@@ -1440,19 +1439,33 @@ func (s *hookEnvelopeSet) protectViews() iter.Seq[*domain.ActionEnvelope] {
 		}
 		light := !shelltool.Is(s.base.ToolName) && s.base.ToolGroup != "shell"
 		for i := range s.patch.files {
-			f := s.patch.files[i]
-			if !light {
-				if !yieldWithVariants(s.patch.envelope(i), f.params, f.cands, yield) {
-					return
-				}
-				continue
-			}
-			e, m := s.patch.protectEnvelope(i)
-			if !yieldWithVariants(e, m, f.cands[:f.pathCands], yield) {
+			if !s.patch.yieldFile(i, !light, yield) {
 				return
 			}
 		}
 	}
+}
+
+// yieldFile yields the envelope of file i of a patch and its alias copies,
+// as yieldWithVariants does. With full false it yields protectEnvelope and
+// the copies of the file_path family only: a copy of the content or command
+// family differs only in a key the check does not read for apply_patch.
+func (p *applyPatchPlan) yieldFile(i int, full bool, yield func(*domain.ActionEnvelope) bool) bool {
+	e := p.protectEnvelope(i)
+	if full {
+		e = p.envelope(i)
+	}
+	if !yield(e) {
+		return false
+	}
+	k := 0
+	return p.eachVariant(i, full, func(b json.RawMessage) bool {
+		k++
+		v := *e
+		v.Parameters = b
+		v.EnvelopeID = fmt.Sprintf("%s-alias-%d", e.EnvelopeID, k)
+		return yield(&v)
+	})
 }
 
 // yieldWithVariants yields e and then one copy of e per alias candidate,

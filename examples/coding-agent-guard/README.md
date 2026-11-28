@@ -262,8 +262,9 @@ sends with the call (`cwd` or `workdir`). When the harness sends none, it
 uses the directory of the hook process.
 
 One hook call has a limit of 9 seconds, from reading the input to the
-decision, so the hook answers within 10 seconds. A check that does not end
-in that time denies the call.
+decision. A check that does not end in that time denies the call, so the
+hook prints a decision within 10 seconds unless the system stops the
+process first, for example on a memory limit.
 
 When the text names a protected path, the hook also denies a command that
 holds a comment (`#`), a here-document, `${...}`, `$((...))`, `case` or a

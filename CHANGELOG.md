@@ -126,7 +126,10 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   path is denied with the reason "a command whose working directory is on a
   network or FUSE file system". The floor, the check of 22ed838, does look
   up paths on such a mount. A hook call that does not end in 9 s is
-  denied, so the hook answers within 10 s.
+  denied, so the hook prints a decision within 10 s unless the system stops
+  the process first, for example on a memory limit. On one Linux machine,
+  an `apply_patch` call with 64 files, 8 work directories and 40,000 other
+  keys used at most 49 MB.
 - Calls that write no protected path stay allowed, such as a write to
   `/dev/stdout` or `/proc/sys/vm/drop_caches`, an empty word after the text
   of `bash -c`, and a relative `apply_patch` target such as `bin/run.sh`,
@@ -565,7 +568,8 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   payload as one it cannot read
   (`TestHookDeniesAPayloadWithTwoToolCalls`).
 - `tg hook` denies a call that it has not checked in 9 seconds, from
-  reading the input to the decision, so it answers within 10 seconds.
+  reading the input to the decision, so it prints a decision within 10
+  seconds unless the system stops the process first.
   Before, a command with some thousands of words, or an `apply_patch` call
   with thousands of work directory keys, could keep the hook busy for longer
   than the hook timeout of the harness (`pkg/engine/protect_workdir_test.go`,
