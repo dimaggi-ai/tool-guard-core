@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/dimaggi-ai/tool-guard-core/internal/shelltool"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/engine"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/policyload"
@@ -406,7 +407,7 @@ func runHookCall(args []string, stdin io.Reader, g *hookGate) int {
 
 // dispatchShellTool reports whether -dispatch reads the tool as a shell
 // command. It shares one predicate with the protected-path check in the
-// engine (engine.IsShellTool) and adds the group test: a shell tool name the
+// engine (internal/shelltool) and adds the group test: a shell tool name the
 // hook does not know (run_terminal_cmd, execute_command, ...) lands in the
 // "shell" group via hookToolGroup, and it is dispatched when its input has a
 // command parameter (command, cmd, CommandLine, ...). Every unknown tool name
@@ -414,7 +415,7 @@ func runHookCall(args []string, stdin io.Reader, g *hookGate) int {
 // TodoWrite, WebSearch, an MCP tool) is not dispatched and keeps the
 // decision of the policy.
 func dispatchShellTool(env *domain.ActionEnvelope) bool {
-	if engine.IsShellTool(env.ToolName) {
+	if shelltool.Is(env.ToolName) {
 		return true
 	}
 	if env.ToolGroup != "shell" {
