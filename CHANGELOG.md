@@ -20,7 +20,7 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   and a path is resolved through its symbolic links. An `apply_patch` target
   is also read as 22ed838 read it: a relative target joined to a cwd that
   starts with `/`, with `DIR/..` removed, so
-  `.claude/commands/../settings.json` is denied as `.claude/settings.json`.
+  `.claude/commands/../settings.json` is read as `.claude/settings.json`.
 - The pre-release review found calls that wrote to a path named with
   `-protect-path` and were allowed. `tg hook` now denies them:
   - a redirect target that holds a brace list, such as `> {P,}`. This
