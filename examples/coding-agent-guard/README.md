@@ -217,7 +217,7 @@ another name, such as an alias or a copy of the program. It also does not see an
 name pattern with the files that exist, so a pattern that matches a link to a
 protected directory counts.
 
-The hook reads a brace list that makes up to 64 words word by word.
+The hook expands a brace list that makes up to 64 words and reads each word.
 The hook does not expand a brace list that makes more than 64 words. Such a
 list counts as the name of a protected path when one of its words, in any
 letter case, can be the path. In such a list a sequence, such as
@@ -227,8 +227,8 @@ groups nested more than 128 deep are not expanded: the hook reads the word as
 any mix of its parts. A command that holds the word `nocaseglob` counts in the same way, because that shell option makes a pattern match without letter case.
 
 The check of one command has a work counter: 2,000,000 steps and 10,000 file
-system lookups, for the command and the texts it runs. A command over the
-counter is denied as too large to check. In a sequence of 4096 words or
+system lookups, for the command and the texts it runs. A command that goes
+over either limit is denied as too large to check. In a sequence of 4096 words or
 more, such as `d{1..5000}`, the hook reads the sequence as any number. A
 sequence that bash does not make, such as `{-9223372036854775808..0}`, is
 read as its text.
@@ -245,8 +245,7 @@ lookup there can wait without end. A command that can write is denied when
 a path or pattern in it reaches such a mount, as in `cp a M/x` where `M` is
 such a mount, because a link there can lead to the protected path. When the
 working directory is on such a mount, a command that writes a relative path
-is denied. The floor does look up paths on such a mount. A hook call that
-does not end in 9 s is denied, so the hook answers within 10 s.
+is denied. The floor does look up paths on such a mount.
 
 After a directory change that the hook cannot resolve, such as `cd "$D"`,
 `env -C "$D"` or `sudo -D "$D"`, the hook denies a relative word whose last

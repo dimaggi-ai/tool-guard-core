@@ -12,8 +12,9 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 - `tg hook` keeps the protected-path check of commit 22ed838, the state of
   the 0.9.0 code before its pre-release review, unchanged, as a floor. When the
-  new protected-path checks allow a call, the hook also runs that check. A
-  call it denies is denied, with its reason. So for the paths named with
+  new protected-path checks allow a call, the hook also runs that check. When
+  that check denies a call, the hook denies it and gives that check's
+  reason. So for the paths named with
   `-protect-path`, the hook denies every call that 22ed838 denies. The floor
   covers only the protected-path check. The policy rules read a call as
   22ed838 read it: a shell command is split into words as bash splits it,
@@ -107,7 +108,7 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   any number in every reader. A sequence that bash does not make, such as
   `{-9223372036854775808..0}`, is read as its text, as bash keeps it.
 - The hook reads brace lists, escapes and nested texts within a work counter.
-  A command over the counter is denied. Some calls take seconds to check.
+  A command that goes over the counter is denied. Some calls take seconds to check.
   Measured on one Linux machine with no other load, with the coding-agent
   shell policy and `-protect-path`, median of 3 runs, with the time of
   22ed838 in parentheses: the 300 commands `cd a0*` to `cd a299*` in one
