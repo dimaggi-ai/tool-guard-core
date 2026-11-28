@@ -2,17 +2,21 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"iter"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
+	"github.com/dimaggi-ai/tool-guard-core/internal/shelltool"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/engine"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/policyload"
@@ -55,11 +59,65 @@ func cmdHook(args []string) int {
 	return runHook(args, os.Stdin, os.Stdout)
 }
 
+// hookCallBudget is the time one hook call may take, from reading the input
+// to the decision. A call that does not end in it is denied. It is less than
+// hookSuperviseTimeout, so with -dispatch the child gives this deny before
+// its parent stops waiting. A test replaces it.
+var hookCallBudget = 9 * time.Second
+
+// hookGate passes the decision of a hook call to stdout, unless the call ran
+// past hookCallBudget: then the deny of runHook was written, and the late
+// decision and its audit record are dropped. written is set when the
+// decision of the call is written, so that runHook does not write a second
+// one when its timer fires before the call has returned.
+type hookGate struct {
+	mu        sync.Mutex
+	out       io.Writer
+	abandoned bool
+	written   bool
+}
+
 // runHook is the testable inner implementation of cmdHook. It accepts an
 // explicit stdin reader and stdout writer so unit tests can drive it without
 // spawning a process. cmdHook is the thin public entry point that passes
 // os.Stdin / os.Stdout.
+//
+// The whole call has one deadline, hookCallBudget. Past it the call is
+// denied. The evaluation is left to end on its own; its decision is not
+// written.
 func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
+	g := &hookGate{out: stdout}
+	done := make(chan int, 1)
+	go func() { done <- runHookCall(args, stdin, g) }()
+	timer := time.NewTimer(hookCallBudget)
+	defer timer.Stop()
+	select {
+	case code := <-done:
+		return code
+	case <-timer.C:
+	}
+	// A decision being written now is written in full; then this one is
+	// not needed.
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	select {
+	case code := <-done:
+		return code
+	default:
+	}
+	if g.written {
+		// The decision is written and the call is returning. runHookCall
+		// returns 0 after it writes a decision.
+		return 0
+	}
+	g.abandoned = true
+	emitHookDecisionDialect(stdout, dialectBoth, "force_ask", "deny",
+		fmt.Sprintf("Tool Guard hook: the check did not end in %s, so the call is denied", hookCallBudget))
+	return 0
+}
+
+// runHookCall evaluates one hook call and writes its decision through g.
+func runHookCall(args []string, stdin io.Reader, g *hookGate) int {
 	fs := flag.NewFlagSet("hook", flag.ContinueOnError)
 	fs.SetOutput(io.Discard) // hooks stay quiet; we signal via JSON on stdout
 	policyDir := fs.String("policy-dir", "", "directory of *.yaml/*.yml policies (mutually exclusive with -policy)")
@@ -78,7 +136,7 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	protectSelf := fs.Bool("protect-self", false, "shorthand: also protect the policy dir/file and $HOME/.claude from writes")
 	auditLog := fs.String("audit-log", "", "append each hook decision to this SHA-256 hash-chained JSONL log (tamper-evident, verify with `tg verify`); empty disables")
 	unknownToolsDeny := fs.Bool("unknown-tools-deny", false, "deny any tool_name not declared in scope.tool_names of some loaded ENFORCEMENT policy (closes the tool-name-spoofing/new-tool-goes-ungoverned class); mirrors tg-proxy's -unknown-tools-deny")
-	dispatch := fs.String("dispatch", "", "gh_read: after policy evaluation allows a Bash call, allow verified gh reads; validated literal pwd/ls return no decision in the claude dialect and ask in other dialects; everything else asks and every internal error denies")
+	dispatch := fs.String("dispatch", "", "gh_read: after policy evaluation allows a shell tool call (a known shell tool name, or a tool in group shell with a command parameter), allow verified gh reads; validated literal pwd/ls return no decision in the claude dialect and ask in other dialects; everything else asks and every internal error denies")
 
 	parseErr := fs.Parse(args)
 	// Until input is decoded, auto has no known harness. Include both
@@ -96,6 +154,12 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	// Dispatch records the decision before output and denies on audit failure.
 	// Other calls preserve the best-effort audit behavior.
 	emitAudited := func(dec, reason string, result *domain.EvaluationResult) {
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		if g.abandoned {
+			return
+		}
+		stdout := g.out
 		if dispatching && *auditLog != "" {
 			auditEnv := env
 			if auditEnv == nil {
@@ -107,6 +171,7 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 			}
 		}
 		emitHookDecisionDialect(stdout, dialect, *agyEscalation, dec, reason)
+		g.written = true
 		if !dispatching && env != nil && *auditLog != "" {
 			appendHookAuditBestEffort(os.Stderr, *auditLog, env, result, dec, reason, auditPolicyHash)
 		}
@@ -248,26 +313,20 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	// measured 2026-11-09. So every candidate is evaluated, and the strictest
 	// decision wins: the guard does not have to know which spelling the harness
 	// honours, because all of them are checked.
-	variants, truncatedVariants := hookParamVariants(hookParams(in))
-	envs := hookVariantEnvelopes(env, variants)
+	//
 	// An apply_patch call holds its files in the patch text. Each file gets
-	// an envelope with a path parameter, and these replace the envelope
-	// without one.
-	patchEnvs, patchDeny, isPatch := applyPatchEnvelopes(env, in.Cwd)
-	if isPatch && patchDeny == "" {
-		envs = nil
-		truncatedVariants = false
-		for _, pe := range patchEnvs {
-			v, trunc := hookParamVariants(pe.Parameters)
-			truncatedVariants = truncatedVariants || trunc
-			envs = append(envs, hookVariantEnvelopes(pe, v)...)
-		}
-	}
+	// an envelope with a path parameter (newHookEnvelopeSet). The envelopes
+	// are built one at a time as they are checked, and each check stops at
+	// the first deny.
+	envs, patchDeny := newHookEnvelopeSet(env, hookParams(in), in.Cwd)
+	truncatedVariants := envs.truncated
 
 	// A tool input that is not an object, or a command that is not a
 	// string (or a string array for apply_patch), cannot be evaluated. Before,
-	// such a call got an empty parameter object and was allowed.
-	if why := hookInputMalformed(in); why != "" && !(dispatching && tool == "bash" && dispatchCommandMalformed(in)) {
+	// such a call got an empty parameter object and was allowed. Only Bash
+	// goes on to the dispatch with such a command, as in 22ed838: another
+	// shell tool is denied here, as that version denied it.
+	if why := hookInputMalformed(in); why != "" && !(dispatching && tool == "bash" && dispatchCommandMalformed(in, tool)) {
 		if d, reason := failDecide(tool); d == "deny" {
 			emitAudited(d, reason+": "+why, nil)
 			return 0
@@ -283,7 +342,7 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 		emitAudited("deny", "Tool Guard: "+patchDeny, nil)
 		return 0
 	}
-	for _, e := range envs {
+	for e := range envs.protectViews() {
 		if violated, reason := engine.ViolatesProtectedPaths(withHarnessCwd(e, in.Cwd), protectList); violated {
 			emitAudited("deny", reason, nil)
 			return 0
@@ -304,9 +363,9 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 		mode = domain.PolicyModeShadow
 	}
 
-	dec, reason, result, auditPolicyHash := evalHook(*policyDir, *policyFile, envs, truncatedVariants, mode, failDecide, *unknownToolsDeny)
-	if dispatching && tool == "bash" && dec == "allow" {
-		dec, reason = dispatchBashEnvelopes(envs, truncatedVariants)
+	dec, reason, result, auditPolicyHash := evalHook(*policyDir, *policyFile, env, envs.all(), truncatedVariants, mode, failDecide, *unknownToolsDeny)
+	if dispatching && dispatchShellTool(env) && dec == "allow" {
+		dec, reason = dispatchBashEnvelopes(envs.all(), truncatedVariants)
 		if dec == hookNoDecision && dialect != dialectClaude {
 			dec, reason = "ask", "Tool Guard dispatch: this dialect requires an explicit decision for an unrelated command"
 		}
@@ -322,9 +381,51 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	if *escalateAs != "ask" && *escalateAs != "deny" {
 		fmt.Fprintf(os.Stderr, "tg hook: -escalate-as %q is not ask or deny; treating it as deny\n", *escalateAs)
 	}
+	before := dec
 	dec, reason = applyEscalateAs(*escalateAs, dec, reason)
+	if before == "ask" && dec == "deny" && result != nil {
+		// The reason names the rule that escalated, as the engine's
+		// reason does ("Escalated by: [escalate-git]").
+		if er := strings.TrimSpace(result.DecisionReason); er != "" && !strings.Contains(reason, er) {
+			reason = strings.TrimRight(reason, "\n. ") + ". " + er
+		}
+		// The harness got a deny, so the audit record says the call was
+		// denied. Decision keeps the engine's escalation.
+		r := *result
+		r.ActionTaken = domain.ActionDenied
+		r.DecisionReason = reason
+		result = &r
+	}
 	emitAudited(dec, reason, result)
 	return 0
+}
+
+// dispatchShellTool reports whether -dispatch reads the tool as a shell
+// command. It shares one predicate with the protected-path check in the
+// engine (internal/shelltool) and adds the group test: a shell tool name the
+// hook does not know (run_terminal_cmd, execute_command, ...) lands in the
+// "shell" group via hookToolGroup, and it is dispatched when its input has a
+// command parameter (command, cmd, CommandLine, ...). Every unknown tool name
+// lands in that group, so a tool without such a parameter (Glob, Grep, Task,
+// TodoWrite, WebSearch, an MCP tool) is not dispatched and keeps the
+// decision of the policy.
+func dispatchShellTool(env *domain.ActionEnvelope) bool {
+	if shelltool.Is(env.ToolName) {
+		return true
+	}
+	if env.ToolGroup != "shell" {
+		return false
+	}
+	var params map[string]json.RawMessage
+	if json.Unmarshal(env.Parameters, &params) != nil {
+		return false
+	}
+	for k := range params {
+		if commandAliasNames[normParamName(k)] {
+			return true
+		}
+	}
+	return false
 }
 
 // hookNoDecision is the decision value for a proven unrelated command. The
@@ -334,14 +435,21 @@ const hookNoDecision = ""
 
 // dispatchCommandMalformed permits the dispatcher to ask about an invalid
 // command value. Malformed values in other parameter families still deny.
-func dispatchCommandMalformed(in hookInput) bool {
+// A command given as a JSON ARRAY is not such a value: apply_patch is the one
+// tool whose command may be a string array, so for any other tool an array
+// command stays malformed and keeps its deny under -dispatch.
+func dispatchCommandMalformed(in hookInput, tool string) bool {
 	var params map[string]json.RawMessage
 	if json.Unmarshal(in.ToolInput, &params) != nil || params == nil {
 		return false
 	}
+	isPatch := strings.EqualFold(strings.TrimSpace(tool), "apply_patch")
 	invalid := false
 	for key, value := range params {
 		if commandAliasNames[normParamName(key)] {
+			if !isPatch && bytes.HasPrefix(bytes.TrimSpace(value), []byte("[")) {
+				return false
+			}
 			var command string
 			if bytes.Equal(bytes.TrimSpace(value), []byte("null")) || json.Unmarshal(value, &command) != nil {
 				invalid = true
@@ -355,12 +463,13 @@ func dispatchCommandMalformed(in hookInput) bool {
 
 // dispatchBashEnvelopes checks every alias candidate. An ask outranks no
 // decision, which outranks allow. An incomplete candidate set always asks.
-func dispatchBashEnvelopes(envs []*domain.ActionEnvelope, truncated bool) (string, string) {
-	if truncated || len(envs) == 0 {
+func dispatchBashEnvelopes(envs iter.Seq[*domain.ActionEnvelope], truncated bool) (string, string) {
+	if truncated {
 		return "ask", "Tool Guard dispatch: command alias candidates are incomplete"
 	}
-	decision, reason := "allow", ""
-	for _, env := range envs {
+	decision, reason, n := "allow", "", 0
+	for env := range envs {
+		n++
 		d, why := dispatchBash(env)
 		if d == "ask" {
 			return d, why
@@ -368,6 +477,9 @@ func dispatchBashEnvelopes(envs []*domain.ActionEnvelope, truncated bool) (strin
 		if d == hookNoDecision || decision == "allow" {
 			decision, reason = d, why
 		}
+	}
+	if n == 0 {
+		return "ask", "Tool Guard dispatch: command alias candidates are incomplete"
 	}
 	return decision, reason
 }
@@ -412,12 +524,12 @@ func dispatchBash(env *domain.ActionEnvelope) (string, string) {
 // evalHook loads the policy set and evaluates env, recovering from any panic
 // so the hook can never crash the agent. On load failure or panic it returns
 // the fail-open/closed decision for env.ToolName.
-// evalHook decides one tool call. envs carries the base envelope first and one
-// copy per alias candidate; the strictest decision across all of them wins, and
-// aliasLimitTruncated says the candidate list was cut off by the reviewable
-// limit, which must escalate rather than allow.
-func evalHook(policyDir, policyFile string, envs []*domain.ActionEnvelope, aliasLimitTruncated bool, mode domain.PolicyMode, failDecide func(string) (string, string), unknownToolsDeny bool) (dec string, reason string, result *domain.EvaluationResult, policySetHash string) {
-	env := envs[0]
+// evalHook decides one tool call. env is the call; envs yields the envelopes
+// to evaluate (the call, one copy per alias candidate, the files of a patch);
+// the strictest decision across all of them wins, and aliasLimitTruncated says
+// the candidate list was cut off by the reviewable limit, which must escalate
+// rather than allow.
+func evalHook(policyDir, policyFile string, env *domain.ActionEnvelope, envs iter.Seq[*domain.ActionEnvelope], aliasLimitTruncated bool, mode domain.PolicyMode, failDecide func(string) (string, string), unknownToolsDeny bool) (dec string, reason string, result *domain.EvaluationResult, policySetHash string) {
 	policySetHash, _ = policyload.PolicySetHash(nil)
 	defer func() {
 		if r := recover(); r != nil {
@@ -462,7 +574,7 @@ func evalHook(policyDir, policyFile string, envs []*domain.ActionEnvelope, alias
 		return "deny", fmt.Sprintf("tool_name %q is not declared in scope.tool_names of any loaded ENFORCEMENT policy (-unknown-tools-deny)", env.ToolName), nil, policySetHash
 	}
 
-	result = evaluateHookEnvelopes(envs, policies, mode)
+	result = evaluateHookEnvelopes(env, envs, policies, mode)
 	if aliasLimitTruncated {
 		// More distinct parameter spellings than the reviewable limit: the
 		// strictest decision found so far is permissive, and an unexamined
@@ -507,7 +619,10 @@ func applyEscalateAs(flagVal, dec, reason string) (string, string) {
 	if dec != "ask" || flagVal == "ask" {
 		return dec, reason
 	}
-	return "deny", "Escalation returned as a denial (-escalate-as deny): " + reason
+	if flagVal == "deny" {
+		return "deny", "Escalation returned as a denial (-escalate-as deny): " + reason
+	}
+	return "deny", fmt.Sprintf("Escalation returned as a denial (-escalate-as %s treated as deny): %s", flagVal, reason)
 }
 
 // hookReason explains the applied action, not a stricter shadow-only raw
@@ -1089,9 +1204,12 @@ tooling glitch never wedges the agent, but that also means the error is
 never denied either. That default suits local dev; it is not what you want
 once this hook is actually enforcing policy.
 
--dispatch gh_read (enforcement mode only) changes what an allowed Bash call
-returns: a verified gh read allows; a validated literal pwd or ls returns no
-decision in the claude dialect so the client's permission rules apply.
+-dispatch gh_read (enforcement mode only) changes what an allowed call to a
+shell tool returns (a known shell tool name such as Bash, run_command or
+powershell, or a tool in the shell tool group that has a command parameter;
+other tools keep the policy decision): a verified gh read
+allows; a validated literal pwd or ls returns no decision in the claude
+dialect so the client's permission rules apply.
 Other dialects ask for pwd or ls, and every other command asks in all
 dialects. Load it without a broad rule that escalates gh commands, because
 escalate outranks allow. Every internal error then denies for every tool,
@@ -1105,14 +1223,40 @@ timeout, non-zero exit or malformed child output denies.
 // claiming the sampled subset was complete.
 const maxHookParamVariants = 16
 
-// hookParamVariants returns one parameters object per distinct value in each
-// alias family, with that value placed on the canonical key the policies read.
-// The base object is NOT included (the caller already evaluates it). The second
-// return is true when candidates exceeded the limit and were truncated.
-func hookParamVariants(raw json.RawMessage) ([]json.RawMessage, bool) {
-	var m map[string]json.RawMessage
-	if len(raw) == 0 || json.Unmarshal(raw, &m) != nil || len(m) == 0 {
-		return nil, false
+// hookAliasCandidate is one distinct value of an alias family that differs
+// from the value on the canonical key: the hook also checks the call with
+// that value on the canonical key.
+type hookAliasCandidate struct {
+	canonical string
+	value     json.RawMessage
+}
+
+// hookAliasFamily is a canonical parameter key and the normalized key names
+// that alias it.
+type hookAliasFamily struct {
+	canonical string
+	aliases   map[string]bool
+}
+
+// hookAliasFamilies are the alias families in the order the hook checks
+// them. file_path is first.
+var hookAliasFamilies = []hookAliasFamily{
+	{"file_path", pathAliasNames},
+	{"content", contentAliasNames},
+	{"command", commandAliasNames},
+}
+
+// hookAliasCandidates returns the alias candidates of a parameters object,
+// in a fixed order. More than maxHookParamVariants of them means the hook
+// cannot check every spelling.
+func hookAliasCandidates(m map[string]json.RawMessage) []hookAliasCandidate {
+	return hookAliasCandidatesIn(m, hookAliasFamilies)
+}
+
+// hookAliasCandidatesIn returns the candidates of the given families only.
+func hookAliasCandidatesIn(m map[string]json.RawMessage, families []hookAliasFamily) []hookAliasCandidate {
+	if len(m) == 0 {
+		return nil
 	}
 	norm := func(k string) string {
 		var b strings.Builder
@@ -1125,23 +1269,13 @@ func hookParamVariants(raw json.RawMessage) ([]json.RawMessage, bool) {
 		}
 		return b.String()
 	}
-	families := []struct {
-		canonical string
-		aliases   map[string]bool
-	}{
-		{"file_path", pathAliasNames},
-		{"content", contentAliasNames},
-		{"command", commandAliasNames},
-	}
 	var keys []string
 	for k := range m {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 
-	var out []json.RawMessage
-	seen := map[string]bool{}
-	total := 0
+	var out []hookAliasCandidate
 	for _, fam := range families {
 		base := hookAliasValueKey(m[fam.canonical])
 		seenValues := map[string]bool{}
@@ -1158,24 +1292,61 @@ func hookParamVariants(raw json.RawMessage) ([]json.RawMessage, bool) {
 				continue
 			}
 			seenValues[value] = true
-			total++
-			if len(out) >= maxHookParamVariants {
-				continue
-			}
-			mm := make(map[string]json.RawMessage, len(m)+1)
-			for kk, vv := range m {
-				mm[kk] = vv
-			}
-			mm[fam.canonical] = v
-			b, err := json.Marshal(mm)
-			if err != nil || seen[string(b)] {
-				continue
-			}
-			seen[string(b)] = true
-			out = append(out, b)
+			out = append(out, hookAliasCandidate{fam.canonical, v})
 		}
 	}
-	return out, total > maxHookParamVariants
+	return out
+}
+
+// eachHookParamVariant encodes one parameters object per candidate, with the
+// candidate value on the canonical key, and passes each to yield before it
+// encodes the next. It stops after maxHookParamVariants distinct objects, or
+// when yield returns false; it then returns false.
+func eachHookParamVariant(m map[string]json.RawMessage, cands []hookAliasCandidate, yield func(json.RawMessage) bool) bool {
+	seen := map[[sha256.Size]byte]bool{}
+	n := 0
+	for _, c := range cands {
+		if n >= maxHookParamVariants {
+			break
+		}
+		mm := make(map[string]json.RawMessage, len(m)+1)
+		for k, v := range m {
+			mm[k] = v
+		}
+		mm[c.canonical] = c.value
+		b, err := json.Marshal(mm)
+		if err != nil {
+			continue
+		}
+		h := sha256.Sum256(b)
+		if seen[h] {
+			continue
+		}
+		seen[h] = true
+		n++
+		if !yield(b) {
+			return false
+		}
+	}
+	return true
+}
+
+// hookParamVariants returns one parameters object per distinct value in each
+// alias family, with that value placed on the canonical key the policies read.
+// The base object is NOT included (the caller already evaluates it). The second
+// return is true when candidates exceeded the limit and were truncated.
+func hookParamVariants(raw json.RawMessage) ([]json.RawMessage, bool) {
+	var m map[string]json.RawMessage
+	if len(raw) == 0 || json.Unmarshal(raw, &m) != nil || len(m) == 0 {
+		return nil, false
+	}
+	cands := hookAliasCandidates(m)
+	var out []json.RawMessage
+	eachHookParamVariant(m, cands, func(b json.RawMessage) bool {
+		out = append(out, b)
+		return true
+	})
+	return out, len(cands) > maxHookParamVariants
 }
 
 // hookAliasValueKey compares decoded strings, so JSON escape spellings do not
@@ -1190,18 +1361,127 @@ func hookAliasValueKey(raw json.RawMessage) string {
 	return "json:" + string(trimmed)
 }
 
-// hookVariantEnvelopes copies the base envelope once per candidate parameter
-// set. Tool name, group, agent and session stay identical: only the parameters
-// differ, which is exactly the ambiguity being resolved.
-func hookVariantEnvelopes(base *domain.ActionEnvelope, variants []json.RawMessage) []*domain.ActionEnvelope {
-	out := []*domain.ActionEnvelope{base}
-	for i, v := range variants {
-		e := *base
-		e.Parameters = v
-		e.EnvelopeID = fmt.Sprintf("%s-alias-%d", base.EnvelopeID, i+1)
-		out = append(out, &e)
+// hookEnvelopeSet is the list of envelopes `tg hook` checks for one call:
+// the call and one copy per alias candidate, and for an apply_patch call that
+// names files, one envelope per file with its own alias candidates. Tool
+// name, group, agent and session stay identical: only the parameters differ.
+// all builds each envelope when it is read, so a large call is not held in
+// many envelopes at the same time, and a reader can stop at the first deny.
+type hookEnvelopeSet struct {
+	base       *domain.ActionEnvelope
+	baseParams map[string]json.RawMessage
+	baseCands  []hookAliasCandidate
+	// withBase is false when the files of a patch replace the call.
+	withBase bool
+	patch    *applyPatchPlan
+	// truncated is true when an envelope has more alias candidates than
+	// maxHookParamVariants.
+	truncated bool
+}
+
+// newHookEnvelopeSet returns the envelopes of the call env with the
+// parameters raw. deny is set when an apply_patch call is denied before any
+// check (an empty path, too many files or work directories).
+func newHookEnvelopeSet(env *domain.ActionEnvelope, raw json.RawMessage, cwd string) (*hookEnvelopeSet, string) {
+	s := &hookEnvelopeSet{base: env, withBase: true}
+	if len(raw) == 0 || json.Unmarshal(raw, &s.baseParams) != nil {
+		s.baseParams = nil
 	}
-	return out
+	s.baseCands = hookAliasCandidates(s.baseParams)
+	s.truncated = len(s.baseCands) > maxHookParamVariants
+	plan, deny, isPatch := applyPatchPlanFor(env, cwd)
+	if isPatch && deny == "" {
+		// When the keys 22ed838 read (command, input, patch) name no file,
+		// that version checked the call unchanged. That check stays, next
+		// to the envelope of each file, and the strictest decision wins.
+		if applyPatchMainKeysNameFiles(env) {
+			s.withBase = false
+			s.truncated = false
+		}
+		s.patch = plan
+		for i := range plan.files {
+			s.truncated = s.truncated || len(plan.cands(i, true)) > maxHookParamVariants
+		}
+	}
+	return s, deny
+}
+
+// all yields the envelopes in a fixed order: the call and its alias
+// copies, then each file of a patch followed by its alias copies.
+func (s *hookEnvelopeSet) all() iter.Seq[*domain.ActionEnvelope] {
+	return func(yield func(*domain.ActionEnvelope) bool) {
+		if s.withBase && !yieldWithVariants(s.base, s.baseParams, s.baseCands, yield) {
+			return
+		}
+		if s.patch == nil {
+			return
+		}
+		for i := range s.patch.files {
+			if !s.patch.yieldFile(i, true, yield) {
+				return
+			}
+		}
+	}
+}
+
+// protectViews yields the envelopes for the protected-path check, in the
+// order of all. For the files of a patch it yields the envelopes of
+// protectEnvelope, with the alias copies of the file_path family only: a
+// copy of the content or command family differs only in a key the check does
+// not read for apply_patch, so its verdict is the verdict of the file.
+func (s *hookEnvelopeSet) protectViews() iter.Seq[*domain.ActionEnvelope] {
+	return func(yield func(*domain.ActionEnvelope) bool) {
+		if s.withBase && !yieldWithVariants(s.base, s.baseParams, s.baseCands, yield) {
+			return
+		}
+		if s.patch == nil {
+			return
+		}
+		light := !shelltool.Is(s.base.ToolName) && s.base.ToolGroup != "shell"
+		for i := range s.patch.files {
+			if !s.patch.yieldFile(i, !light, yield) {
+				return
+			}
+		}
+	}
+}
+
+// yieldFile yields the envelope of file i of a patch and its alias copies,
+// as yieldWithVariants does. With full false it yields protectEnvelope and
+// the copies of the file_path family only: a copy of the content or command
+// family differs only in a key the check does not read for apply_patch.
+func (p *applyPatchPlan) yieldFile(i int, full bool, yield func(*domain.ActionEnvelope) bool) bool {
+	e := p.protectEnvelope(i)
+	if full {
+		e = p.envelope(i)
+	}
+	if !yield(e) {
+		return false
+	}
+	k := 0
+	return p.eachVariant(i, full, func(b json.RawMessage) bool {
+		k++
+		v := *e
+		v.Parameters = b
+		v.EnvelopeID = fmt.Sprintf("%s-alias-%d", e.EnvelopeID, k)
+		return yield(&v)
+	})
+}
+
+// yieldWithVariants yields e and then one copy of e per alias candidate,
+// with the parameters of that candidate.
+func yieldWithVariants(e *domain.ActionEnvelope, params map[string]json.RawMessage, cands []hookAliasCandidate, yield func(*domain.ActionEnvelope) bool) bool {
+	if !yield(e) {
+		return false
+	}
+	i := 0
+	return eachHookParamVariant(params, cands, func(b json.RawMessage) bool {
+		i++
+		v := *e
+		v.Parameters = b
+		v.EnvelopeID = fmt.Sprintf("%s-alias-%d", e.EnvelopeID, i)
+		return yield(&v)
+	})
 }
 
 // rankHookAction orders engine outcomes by how protective they are, so the
@@ -1220,15 +1500,22 @@ func rankHookAction(a domain.ActionTaken) int {
 
 // evaluateHookEnvelopes evaluates every alias variant and returns the strictest
 // result. One candidate denied is enough: the guard cannot know which spelling
-// the harness will act on.
-func evaluateHookEnvelopes(envs []*domain.ActionEnvelope, policies []domain.Policy, mode domain.PolicyMode) *domain.EvaluationResult {
+// the harness will act on. The first deny is the result, so the evaluation
+// stops there. env is evaluated when envs yields nothing.
+func evaluateHookEnvelopes(env *domain.ActionEnvelope, envs iter.Seq[*domain.ActionEnvelope], policies []domain.Policy, mode domain.PolicyMode) *domain.EvaluationResult {
 	ev := engine.NewEvaluator()
-	best := ev.Evaluate(envs[0], policies, mode)
-	for _, e := range envs[1:] {
+	var best *domain.EvaluationResult
+	for e := range envs {
 		r := ev.Evaluate(e, policies, mode)
-		if rankHookAction(r.ActionTaken) > rankHookAction(best.ActionTaken) {
+		if best == nil || rankHookAction(r.ActionTaken) > rankHookAction(best.ActionTaken) {
 			best = r
 		}
+		if best.ActionTaken == domain.ActionDenied {
+			break
+		}
+	}
+	if best == nil {
+		best = ev.Evaluate(env, policies, mode)
 	}
 	return best
 }

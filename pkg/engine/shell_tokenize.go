@@ -126,6 +126,9 @@ type shellToken struct {
 	unresolved bool
 	// marked is value with shellUnresolvedMark at each unresolved expansion.
 	marked string
+	// fd is the file descriptor number written before a redirection
+	// operator (the "2" of 2<FILE), or "".
+	fd string
 }
 
 // tokenizeShell lexes a raw shell command string into a flat token stream.
@@ -141,7 +144,17 @@ type shellToken struct {
 // command argument.
 const shellUnresolvedMark = 0
 
-func tokenizeShell(cmd string) []shellToken {
+func tokenizeShell(cmd string) []shellToken { return tokenizeShellMode(cmd, false) }
+
+// tokenizeShellZsh is tokenizeShell that also reads the write operators of
+// zsh and fish (>!, >>!, &>!, &>>! and >?) as writes, and a
+// backslash-newline as nothing. The protected-path checks use it: there
+// the word after such an operator may be a file the call writes. The
+// policy classifiers use tokenizeShell, the bash reading, where the word
+// after >? stays an argument of the command.
+func tokenizeShellZsh(cmd string) []shellToken { return tokenizeShellMode(cmd, true) }
+
+func tokenizeShellMode(cmd string, zsh bool) []shellToken {
 	var toks []shellToken
 
 	var wb strings.Builder // resolved literal of the in-progress word
@@ -191,13 +204,15 @@ func tokenizeShell(cmd string) []shellToken {
 		// Control / redirection operators. Recognized before quotes because
 		// outside a quote these characters are always operators, never word
 		// content.
-		if kind, text, opLen := matchShellOperator(cmd, i); opLen > 0 {
+		if kind, text, opLen := matchShellOperator(cmd, i, zsh); opLen > 0 {
 			// An unquoted, unexpanded, all-digits word immediately preceding a
 			// redirection is a file-descriptor number (2>, 1>>) that binds to
 			// the operator, not a standalone argument. `raw == value` proves no
 			// quoting/escaping/expansion happened.
+			fd := ""
 			if isRedirKind(kind) && started && wb.Len() > 0 &&
 				cmd[wordStart:i] == wb.String() && isAllDigits(wb.String()) {
+				fd = wb.String()
 				wb.Reset()
 				wordStart = -1
 				unresolved = false
@@ -205,7 +220,7 @@ func tokenizeShell(cmd string) []shellToken {
 			} else {
 				flush(i)
 			}
-			toks = append(toks, shellToken{kind: kind, value: text})
+			toks = append(toks, shellToken{kind: kind, value: text, fd: fd})
 			i += opLen
 			continue
 		}
@@ -300,7 +315,13 @@ func tokenizeShell(cmd string) []shellToken {
 
 		case '\\':
 			// Backslash escape outside quotes: next character is literal;
-			// backslash-newline is a line continuation (both dropped).
+			// backslash-newline is a line continuation (both dropped), and
+			// it does not start a word: bash removes it before it splits
+			// the text into words.
+			if zsh && i+1 < n && cmd[i+1] == '\n' {
+				i += 2
+				continue
+			}
 			begin(i)
 			if i+1 < n {
 				if cmd[i+1] == '\n' {
@@ -330,7 +351,9 @@ func tokenizeShell(cmd string) []shellToken {
 // shapes that matter for segmentation and redirect-target extraction are
 // distinguished; anything else that starts with one of these characters (there
 // is nothing else in POSIX) is covered by the single-character fallbacks.
-func matchShellOperator(s string, i int) (kind shellTokenKind, text string, opLen int) {
+//
+// zsh adds the write operators of zsh and fish (tokenizeShellZsh).
+func matchShellOperator(s string, i int, zsh bool) (kind shellTokenKind, text string, opLen int) {
 	c := s[i]
 	next := func(off int) byte {
 		if i+off < len(s) {
@@ -352,7 +375,13 @@ func matchShellOperator(s string, i int) (kind shellTokenKind, text string, opLe
 		}
 		if next(1) == '>' {
 			if next(2) == '>' {
+				if zsh && next(3) == '!' {
+					return tokRedirWrite, "&>>!", 4 // zsh
+				}
 				return tokRedirWrite, "&>>", 3
+			}
+			if zsh && next(2) == '!' {
+				return tokRedirWrite, "&>!", 3 // zsh
 			}
 			return tokRedirWrite, "&>", 2
 		}
@@ -372,11 +401,20 @@ func matchShellOperator(s string, i int) (kind shellTokenKind, text string, opLe
 	case '>':
 		switch next(1) {
 		case '>':
+			if zsh && next(2) == '!' {
+				return tokRedirWrite, ">>!", 3 // zsh
+			}
 			return tokRedirWrite, ">>", 2
 		case '|':
 			return tokRedirWrite, ">|", 2
 		case '&':
 			return tokRedirDup, ">&", 2
+		case '!', '?':
+			// zsh >! writes over a file like >|; fish >? writes a file
+			// that does not exist yet. Read both as a write.
+			if zsh {
+				return tokRedirWrite, s[i : i+2], 2
+			}
 		}
 		return tokRedirWrite, ">", 1
 	case '<':

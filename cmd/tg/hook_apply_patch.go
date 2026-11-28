@@ -1,9 +1,11 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"path"
+	"sort"
 	"strings"
 
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
@@ -12,6 +14,11 @@ import (
 // maxApplyPatchTargets bounds the number of files one apply_patch call may
 // name. A call with more is denied.
 const maxApplyPatchTargets = 64
+
+// maxApplyPatchWorkDirs bounds the number of distinct work directories the
+// hook reads from one apply_patch call. Each one adds envelopes for every
+// file, so a call with more is denied.
+const maxApplyPatchWorkDirs = 8
 
 // applyPatchMarkers start the lines of a patch that name a file. The text
 // after the marker is the path.
@@ -22,10 +29,58 @@ var applyPatchMarkers = []string{
 	"*** Move to:",
 }
 
+// applyPatchTextKeys are the normalised parameter names that can carry the
+// patch text: command and its aliases (cmd, CommandLine, ...), input, patch
+// and the other names a harness has been seen to put a patch under (diff,
+// text, body). normaliseHookKey folds case and drops _ - . and space, so
+// patch_text and patchText match here too. A harness may act on any of them,
+// so all are read.
+var applyPatchTextKeys = map[string]bool{
+	"input": true, "patch": true, "patchtext": true, "diff": true, "text": true, "body": true,
+}
+
+// applyPatchTextKey reports whether a parameter can carry the patch text.
+func applyPatchTextKey(k string) bool {
+	n := normParamName(k)
+	return applyPatchTextKeys[n] || commandAliasNames[n]
+}
+
 // applyPatchText returns the patch text of an apply_patch call. Codex CLI
-// 0.166.0 sends it in the parameter command. input and patch are read too.
-// A list of strings is joined, one string per line.
-func applyPatchText(params map[string]json.RawMessage) string {
+// 0.166.0 sends it in the parameter command. Every key applyPatchTextKey
+// accepts is read, in sorted order. So is every other string in the tool
+// input, at any depth in objects and lists, that holds a file marker: a
+// harness may put the patch under a key this list does not know (changes,
+// args, input.patch). A list of strings is joined, one string per line.
+// deep is true when a value nested deeper than maxPatchValueDepth holds a
+// file marker: the caller denies the call, as its files are not read.
+func applyPatchText(params map[string]json.RawMessage) (text string, deep bool) {
+	var parts []string
+	for _, k := range sortedKeys(params) {
+		if applyPatchTextKey(k) {
+			var s string
+			if json.Unmarshal(params[k], &s) == nil {
+				parts = append(parts, s)
+				continue
+			}
+			var list []string
+			if json.Unmarshal(params[k], &list) == nil {
+				parts = append(parts, list...)
+				continue
+			}
+		}
+		parts = append(parts, patchStrings(params[k], 0, &deep)...)
+	}
+	return strings.Join(parts, "\n"), deep
+}
+
+// applyPatchMainKeysNameFiles reports whether the patch text under the keys
+// command, input and patch, the only keys commit 22ed838 read, names a
+// file. When none does, that version checked the call unchanged.
+func applyPatchMainKeysNameFiles(base *domain.ActionEnvelope) bool {
+	var params map[string]json.RawMessage
+	if base == nil || json.Unmarshal(base.Parameters, &params) != nil {
+		return false
+	}
 	var parts []string
 	for _, k := range []string{"command", "input", "patch"} {
 		raw, ok := params[k]
@@ -42,7 +97,147 @@ func applyPatchText(params map[string]json.RawMessage) string {
 			parts = append(parts, list...)
 		}
 	}
-	return strings.Join(parts, "\n")
+	targets, _ := applyPatchTargets(strings.Join(parts, "\n"))
+	return len(targets) > 0
+}
+
+// maxPatchValueDepth bounds how deep patchStrings reads nested values.
+const maxPatchValueDepth = 16
+
+// patchStrings returns the strings in a JSON value that hold a file marker.
+// A list of strings that holds one is returned whole, one string per line.
+// A value nested deeper than maxPatchValueDepth is not read and sets deep,
+// whatever it holds: its decoded text can hold a marker that the raw JSON
+// text spells with escapes.
+func patchStrings(raw json.RawMessage, depth int, deep *bool) []string {
+	if depth > maxPatchValueDepth {
+		*deep = true
+		return nil
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		if holdsPatchMarker(s) {
+			return []string{s}
+		}
+		return nil
+	}
+	var strs []string
+	if json.Unmarshal(raw, &strs) == nil {
+		if holdsPatchMarker(strings.Join(strs, "\n")) {
+			return strs
+		}
+		return nil
+	}
+	var out []string
+	var list []json.RawMessage
+	if json.Unmarshal(raw, &list) == nil {
+		for _, v := range list {
+			out = append(out, patchStrings(v, depth+1, deep)...)
+		}
+		return out
+	}
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(raw, &obj) == nil {
+		for _, k := range sortedKeys(obj) {
+			out = append(out, patchStrings(obj[k], depth+1, deep)...)
+		}
+	}
+	return out
+}
+
+// holdsPatchMarker reports whether a text holds a file marker of a patch.
+func holdsPatchMarker(s string) bool {
+	for _, m := range applyPatchMarkers {
+		if strings.Contains(s, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// applyPatchWorkDirKeys are the normalised parameter names that can name the
+// directory a relative patch path stands in. dir, directory, root and path
+// are read too: a harness may use one of them, and a directory read in
+// excess can only add a deny.
+var applyPatchWorkDirKeys = map[string]bool{
+	"workdir": true, "workdirectory": true, "workingdir": true, "workingdirectory": true, "cwd": true,
+	"dir": true, "directory": true, "root": true, "path": true,
+}
+
+// patchWorkDirs returns the string values of the work directory keys in a
+// JSON object, at any depth up to maxPatchValueDepth in objects and lists
+// (input.workdir, args.cwd). deep is set when a value is nested deeper.
+func patchWorkDirs(params map[string]json.RawMessage, depth int, deep *bool) []string {
+	var out []string
+	for _, k := range sortedKeys(params) {
+		raw := params[k]
+		if applyPatchWorkDirKey(k) {
+			var d string
+			if json.Unmarshal(raw, &d) == nil {
+				if d = strings.TrimSpace(d); d != "" {
+					if t := strings.TrimRight(d, "/"); t != "" {
+						d = t
+					}
+					out = append(out, d)
+				}
+				continue
+			}
+		}
+		out = append(out, patchWorkDirsIn(raw, depth+1, deep)...)
+	}
+	return out
+}
+
+func patchWorkDirsIn(raw json.RawMessage, depth int, deep *bool) []string {
+	if len(raw) == 0 || (raw[0] != '{' && raw[0] != '[') {
+		return nil
+	}
+	if depth > maxPatchValueDepth {
+		*deep = true
+		return nil
+	}
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(raw, &obj) == nil {
+		return patchWorkDirs(obj, depth, deep)
+	}
+	var list []json.RawMessage
+	var out []string
+	if json.Unmarshal(raw, &list) == nil {
+		for _, v := range list {
+			out = append(out, patchWorkDirsIn(v, depth+1, deep)...)
+		}
+	}
+	return out
+}
+
+// applyPatchWorkDirKey reports whether a parameter names the directory a
+// relative patch path stands in: workdir, working_dir, working_directory,
+// cwd, workingDir, work_dir and the other spellings normParamName folds.
+func applyPatchWorkDirKey(k string) bool {
+	return applyPatchWorkDirKeys[normParamName(k)]
+}
+
+// collapseDotParts removes the empty and "." components of a path, which the
+// kernel skips, so .claude/./settings.json and .claude//settings.json match a
+// policy the way path.Join used to make them match. It keeps "..": the check
+// resolves links physically, and popping ".." lexically would hide a link.
+func collapseDotParts(p string) string {
+	if !strings.Contains(p, "//") && !strings.Contains(p, "/.") && !strings.Contains(p, "./") {
+		return p
+	}
+	parts := strings.Split(p, "/")
+	kept := parts[:0:0]
+	for i, c := range parts {
+		if (c == "" || c == ".") && i > 0 {
+			continue
+		}
+		kept = append(kept, c)
+	}
+	out := strings.Join(kept, "/")
+	if out == "" && strings.HasPrefix(p, "/") {
+		out = "/"
+	}
+	return out
 }
 
 // applyPatchTargets returns every path the patch text names and the lines the
@@ -74,16 +269,192 @@ func applyPatchTargets(text string) (targets []string, added string) {
 	return targets, strings.Join(add, "\n")
 }
 
-// applyPatchEnvelopes returns one envelope per file an apply_patch call
-// names, with the file on file_path and the added lines on content, so the
+// applyPatchPlan holds the files of one apply_patch call. Each file gets an
+// envelope with the file on file_path and the added lines on content, so the
 // protected-path check and the write policies read the call like a call of a
-// write tool with a path parameter. A relative path is placed under cwd, the
-// working directory the harness reports.
+// write tool with a path parameter. The parameters other than file_path are
+// the same in every envelope: the plan encodes them once, and keeps for each
+// file only its path and envelope ID. An envelope, and each alias copy of it,
+// is spliced from these encodings when the hook checks it, so the memory of a
+// plan does not grow with the number of parameters times the number of
+// envelopes.
+type applyPatchPlan struct {
+	base *domain.ActionEnvelope
+	// shared is the encoded parameters other than file_path.
+	shared []byte
+	// light holds only the keys the protected-path check reads for a tool
+	// that is not a shell tool (applyPatchProtectKey), without file_path.
+	light []byte
+	// pathCands are the distinct values of the file_path alias keys in the
+	// shared parameters, in key order, with valueKeys their
+	// hookAliasValueKey. A file uses those that differ from its path.
+	pathCands []hookAliasCandidate
+	valueKeys []string
+	// rest are the candidates of the content and command families, the
+	// same for every file. restShared[j] is shared with rest[j] on its
+	// canonical key, encoded when an envelope first needs it.
+	rest       []hookAliasCandidate
+	restShared [][]byte
+	sharedMap  map[string]json.RawMessage
+	files      []applyPatchFile
+}
+
+// applyPatchFile is one envelope of an apply_patch call: the encoded path on
+// file_path, its hookAliasValueKey, and the envelope ID.
+type applyPatchFile struct {
+	path     []byte
+	valueKey string
+	id       string
+}
+
+// applyPatchProtectNames are the keys the protected-path check reads from a
+// tool that is not a shell tool, in pkg/engine and in its floor: the path
+// keys of collectFilePaths and the arrays of nested edit objects. The check
+// also reads the keys whose normParamName is in applyPatchWorkDirNames.
+// TestReview090hProtectViewVerdict fails when the check reads another key.
+var applyPatchProtectNames = map[string]bool{
+	"file_path": true, "path": true, "paths": true, "file": true, "files": true, "filename": true,
+	"dest": true, "destination": true, "target": true, "output": true, "out_path": true, "notebook_path": true,
+	"edits": true, "changes": true, "operations": true,
+}
+
+var applyPatchWorkDirNames = map[string]bool{
+	"cwd": true, "workdir": true, "workingdir": true, "workingdirectory": true,
+}
+
+// applyPatchProtectKey reports whether the protected-path check reads the key
+// k for a tool that is not a shell tool.
+func applyPatchProtectKey(k string) bool {
+	return applyPatchProtectNames[k] || applyPatchWorkDirNames[normParamName(k)]
+}
+
+// cands returns the alias candidates of file i: the file_path candidates
+// that differ from its path, then the others. With rest false it returns
+// only the file_path ones.
+func (p *applyPatchPlan) cands(i int, rest bool) []hookAliasCandidate {
+	var out []hookAliasCandidate
+	for j, c := range p.pathCands {
+		if p.valueKeys[j] != p.files[i].valueKey {
+			out = append(out, c)
+		}
+	}
+	if rest {
+		out = append(out, p.rest...)
+	}
+	return out
+}
+
+// envelope builds the envelope of file i.
+func (p *applyPatchPlan) envelope(i int) *domain.ActionEnvelope {
+	return p.splice(i, p.files[i].path, p.shared)
+}
+
+// protectEnvelope builds the envelope of file i for the protected-path
+// check: file_path and the keys of light only. For a tool that is not a shell
+// tool and not in the group "shell", the check reads no other key, so the
+// verdict is the verdict of the full envelope
+// (TestReview090hProtectViewVerdict).
+func (p *applyPatchPlan) protectEnvelope(i int) *domain.ActionEnvelope {
+	return p.splice(i, p.files[i].path, p.light)
+}
+
+// splice returns the envelope of file i with the encoded path on file_path
+// and the other parameters from the encoded object obj, without file_path.
+func (p *applyPatchPlan) splice(i int, path, obj []byte) *domain.ActionEnvelope {
+	b := make([]byte, 0, len(obj)+len(path)+16)
+	b = append(b, `{"file_path":`...)
+	b = append(b, path...)
+	if len(obj) > 2 {
+		b = append(b, ',')
+	}
+	b = append(b, obj[1:]...)
+	e := *p.base
+	e.Parameters = b
+	e.EnvelopeID = p.files[i].id
+	return &e
+}
+
+// restEncoding returns shared with rest[j] on its canonical key. It writes
+// to sharedMap and restShared, so a plan is used by one goroutine at a time:
+// runHookCall reads the envelope set in order.
+func (p *applyPatchPlan) restEncoding(j int) []byte {
+	for len(p.restShared) <= j {
+		p.restShared = append(p.restShared, nil)
+	}
+	if p.restShared[j] == nil {
+		c := p.rest[j]
+		old, had := p.sharedMap[c.canonical]
+		p.sharedMap[c.canonical] = c.value
+		b, err := json.Marshal(p.sharedMap)
+		if had {
+			p.sharedMap[c.canonical] = old
+		} else {
+			delete(p.sharedMap, c.canonical)
+		}
+		if err != nil {
+			b = []byte{}
+		}
+		p.restShared[j] = b
+	}
+	return p.restShared[j]
+}
+
+// eachVariant yields the alias copies of file i, as yieldWithVariants does
+// for a parameters object: one per candidate, with the candidate on its
+// canonical key, at most maxHookParamVariants distinct ones. With full false
+// it yields the copies of protectEnvelope with the file_path candidates only.
+func (p *applyPatchPlan) eachVariant(i int, full bool, yield func(json.RawMessage) bool) bool {
+	seen := map[[sha256.Size]byte]bool{}
+	n := 0
+	obj := p.light
+	if full {
+		obj = p.shared
+	}
+	emit := func(b []byte) bool {
+		h := sha256.Sum256(b)
+		if seen[h] {
+			return true
+		}
+		seen[h] = true
+		n++
+		return yield(b)
+	}
+	for j, c := range p.pathCands {
+		if n >= maxHookParamVariants {
+			return true
+		}
+		if p.valueKeys[j] == p.files[i].valueKey {
+			continue
+		}
+		if !emit(p.splice(i, c.value, obj).Parameters) {
+			return false
+		}
+	}
+	if !full {
+		return true
+	}
+	for j := range p.rest {
+		if n >= maxHookParamVariants {
+			return true
+		}
+		enc := p.restEncoding(j)
+		if len(enc) == 0 {
+			continue
+		}
+		if !emit(p.splice(i, p.files[i].path, enc).Parameters) {
+			return false
+		}
+	}
+	return true
+}
+
+// applyPatchPlanFor returns the plan of an apply_patch call. A relative path
+// is placed under cwd, the working directory the harness reports.
 //
 // ok is false when the tool is not apply_patch or the text names no file: the
 // caller then evaluates the call unchanged. deny is set when the call names
 // an empty path or more files than maxApplyPatchTargets.
-func applyPatchEnvelopes(base *domain.ActionEnvelope, cwd string) (envs []*domain.ActionEnvelope, deny string, ok bool) {
+func applyPatchPlanFor(base *domain.ActionEnvelope, cwd string) (plan *applyPatchPlan, deny string, ok bool) {
 	if base == nil || base.ToolName != "apply_patch" {
 		return nil, "", false
 	}
@@ -91,43 +462,156 @@ func applyPatchEnvelopes(base *domain.ActionEnvelope, cwd string) (envs []*domai
 	if json.Unmarshal(base.Parameters, &params) != nil {
 		return nil, "", false
 	}
-	text := applyPatchText(params)
+	// A work directory in the tool input places a relative patch path, as
+	// cwd does for the harness call. An absolute one is used as it is. A
+	// relative one is placed under cwd and is also kept as it is. It can
+	// stand next to a nested patch (input.workdir with input.patch).
+	text, deep := applyPatchText(params)
+	if deep {
+		return nil, fmt.Sprintf("apply_patch holds a patch nested deeper than %d levels; the hook does not read it", maxPatchValueDepth), true
+	}
 	targets, added := applyPatchTargets(text)
 	if len(targets) == 0 {
 		return nil, "", false
 	}
+	workDirs := patchWorkDirs(params, 0, &deep)
+	if deep {
+		return nil, fmt.Sprintf("apply_patch holds a value nested deeper than %d levels; the hook does not read it", maxPatchValueDepth), true
+	}
 	if len(targets) > maxApplyPatchTargets {
 		return nil, fmt.Sprintf("apply_patch names %d files; the hook checks at most %d in one call", len(targets), maxApplyPatchTargets), true
 	}
+	workDirs = distinctStrings(workDirs)
+	if len(workDirs) > maxApplyPatchWorkDirs {
+		return nil, fmt.Sprintf("apply_patch names %d work directories; the hook checks at most %d in one call", len(workDirs), maxApplyPatchWorkDirs), true
+	}
 	content, _ := json.Marshal(added)
 	patch, _ := json.Marshal(text)
+	// The parameters other than file_path are the same in every envelope,
+	// so they are encoded once.
+	mm := make(map[string]json.RawMessage, len(params)+2)
+	for k, v := range params {
+		// The patch text is not a shell command. On the key command the
+		// engine would read it as one. Only command and input are dropped,
+		// as in 22ed838: a policy that reads the patch under another key
+		// (cmd, script, diff) keeps the verdict it had.
+		if k != "command" && k != "input" && k != "file_path" {
+			mm[k] = v
+		}
+	}
+	mm["patch"] = patch
+	mm["content"] = content
+	shared, err := json.Marshal(mm)
+	if err != nil {
+		return nil, "apply_patch parameters could not be encoded", true
+	}
+	// The map the alias values are read from: the map an envelope decodes
+	// to, without file_path.
+	var sharedParams map[string]json.RawMessage
+	if json.Unmarshal(shared, &sharedParams) != nil {
+		return nil, "apply_patch parameters could not be encoded", true
+	}
+	lm := map[string]json.RawMessage{}
+	for k, v := range sharedParams {
+		if applyPatchProtectKey(k) {
+			lm[k] = v
+		}
+	}
+	light, err := json.Marshal(lm)
+	if err != nil {
+		return nil, "apply_patch parameters could not be encoded", true
+	}
+	plan = &applyPatchPlan{base: base, shared: shared, light: light, sharedMap: sharedParams}
+	// The candidates are found once. Of the file_path family, a file uses
+	// those whose value differs from its path: the candidates of the map
+	// with the path on file_path.
+	plan.pathCands = hookAliasCandidatesIn(sharedParams, hookAliasFamilies[:1])
+	for _, c := range plan.pathCands {
+		plan.valueKeys = append(plan.valueKeys, hookAliasValueKey(c.value))
+	}
+	plan.rest = hookAliasCandidatesIn(sharedParams, hookAliasFamilies[1:])
+	add := func(full, id string) {
+		fp, _ := json.Marshal(full)
+		plan.files = append(plan.files, applyPatchFile{path: fp, valueKey: hookAliasValueKey(fp), id: id})
+	}
 	for i, target := range targets {
 		if target == "" {
 			return nil, "apply_patch names a file with an empty path", true
 		}
-		if !strings.HasPrefix(target, "/") && strings.HasPrefix(cwd, "/") {
-			target = path.Join(cwd, target)
+		absolute := strings.HasPrefix(target, "/")
+		// The envelope of 22ed838: a relative target joined to cwd with
+		// path.Join, which removes "DIR/.." lexically. A policy rule that
+		// matched that spelling still matches it.
+		mainPath := target
+		if !absolute && strings.HasPrefix(cwd, "/") {
+			mainPath = path.Join(cwd, target)
 		}
-		mm := make(map[string]json.RawMessage, len(params)+2)
-		for k, v := range params {
-			// The patch text is not a shell command. On the key command
-			// the engine would read it as one.
-			if k != "command" && k != "input" {
-				mm[k] = v
+		add(mainPath, fmt.Sprintf("%s-patch-%d", base.EnvelopeID, i+1))
+		seen := map[string]bool{mainPath: true}
+		// "" stands for the target as the patch spells it: a relative
+		// target stays relative, and is not placed under the root.
+		dirs := []string{""}
+		if !absolute {
+			if strings.HasPrefix(cwd, "/") {
+				dirs = append(dirs, trimDirSlash(cwd))
+			}
+			for _, wd := range workDirs {
+				if !strings.HasPrefix(wd, "/") && strings.HasPrefix(cwd, "/") {
+					dirs = append(dirs, strings.TrimSuffix(trimDirSlash(cwd), "/")+"/"+wd)
+				}
+				dirs = append(dirs, wd)
 			}
 		}
-		mm["patch"] = patch
-		fp, _ := json.Marshal(target)
-		mm["file_path"] = fp
-		mm["content"] = content
-		b, err := json.Marshal(mm)
-		if err != nil {
-			return nil, "apply_patch parameters could not be encoded", true
+		for j, d := range dirs {
+			// Not path.Join: it removes "link/.." lexically, and the kernel
+			// follows the link first. The check resolves links itself.
+			full := target
+			if d != "" {
+				full = strings.TrimSuffix(d, "/") + "/" + target
+			}
+			full = collapseDotParts(full)
+			if full == "" {
+				full = "."
+			}
+			if seen[full] {
+				continue
+			}
+			seen[full] = true
+			add(full, fmt.Sprintf("%s-patch-%d-%d", base.EnvelopeID, i+1, j+1))
 		}
-		e := *base
-		e.Parameters = b
-		e.EnvelopeID = fmt.Sprintf("%s-patch-%d", base.EnvelopeID, i+1)
-		envs = append(envs, &e)
 	}
-	return envs, "", true
+	return plan, "", true
+}
+
+// distinctStrings returns ss without repeats, in the order of first use.
+func distinctStrings(ss []string) []string {
+	seen := make(map[string]bool, len(ss))
+	out := ss[:0:0]
+	for _, s := range ss {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// trimDirSlash removes the slashes at the end of a directory and keeps the
+// root "/" as "/": "" stands for "no directory".
+func trimDirSlash(d string) string {
+	if t := strings.TrimRight(d, "/"); t != "" {
+		return t
+	}
+	return "/"
+}
+
+// sortedKeys returns the keys of params in order, so the envelopes built from
+// them do not depend on map iteration order.
+func sortedKeys(m map[string]json.RawMessage) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	sort.Strings(ks)
+	return ks
 }

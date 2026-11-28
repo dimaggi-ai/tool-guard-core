@@ -31,6 +31,11 @@ import (
 var tgBinary string
 
 func TestMain(m *testing.M) {
+	// The child process of TestReview090hApplyPatchMemory runs one hook
+	// call in its own directory and needs no tg binary.
+	if os.Getenv("TG_REVIEW090H_CHILD_ARGS") != "" {
+		os.Exit(m.Run())
+	}
 	dir, err := os.MkdirTemp("", "tg-integration-*")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "mkdir tmp:", err)

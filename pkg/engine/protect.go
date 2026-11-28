@@ -16,7 +16,9 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/dimaggi-ai/tool-guard-core/internal/shelltool"
 	"github.com/dimaggi-ai/tool-guard-core/pkg/domain"
+	"github.com/dimaggi-ai/tool-guard-core/pkg/engine/internal/mainfloor"
 )
 
 // ViolatesProtectedPaths reports whether a write-capable tool call targets
@@ -79,6 +81,15 @@ func ViolatesProtectedPaths(env *domain.ActionEnvelope, prefixes []string) (bool
 			}
 		}()
 		hit, reason := violatesProtectedPaths(env, prefixes)
+		if !hit {
+			// The floor: the protected-path check of commit 22ed838,
+			// frozen. A call it denies is denied, with its reason, so this
+			// check never allows a call that 22ed838 denies for a protected
+			// path. It runs only when the check above allows: a deny is
+			// final, and 22ed838 is slow on some inputs that the check
+			// above denies at once.
+			hit, reason = mainfloor.ViolatesProtectedPaths(env, prefixes)
+		}
 		done <- verdict{hit, reason}
 	}()
 	select {
@@ -139,7 +150,7 @@ func paramWorkDirs(params map[string]interface{}) []string {
 		}
 	}
 	// The directory of this process is read in every case.
-	if wd, err := os.Getwd(); err == nil {
+	if wd, err := fsGetwd(); err == nil {
 		kept := out[:0]
 		for _, d := range out {
 			if stdpath.Clean(d) != filepath.ToSlash(wd) {
@@ -154,6 +165,7 @@ func paramWorkDirs(params map[string]interface{}) []string {
 // selfCwdRest returns what follows "/proc/self/cwd" or
 // "/proc/thread-self/cwd" at the start of a path.
 func selfCwdRest(p string) (string, bool) {
+	p = collapseSlashDots(p)
 	for _, head := range []string{"/proc/self/cwd", "/proc/thread-self/cwd"} {
 		if p == head || strings.HasPrefix(p, head+"/") {
 			return p[len(head):], true
@@ -195,7 +207,37 @@ func violatesProtectedPaths(env *domain.ActionEnvelope, prefixes []string) (bool
 	// legitimate read of the policy dir.
 	if isFileWriteTool(tool) {
 		for _, fp := range collectFilePaths(params) {
-			for _, reading := range pathReadings(fp, dirs) {
+			// A path through another process's working directory or an
+			// open descriptor names a directory not known here.
+			rest, self := selfCwdRest(fp)
+			if !self && (procPathUnknown(fp) || procDirUnknown(fp)) {
+				return true, fmt.Sprintf("protected path: write through %s denied by -protect-paths (directory not known)", shortRaw(fp))
+			}
+			readings := pathReadings(fp, dirs)
+			// A path through /proc/self/cwd is the path under the directory
+			// of the process that opens it. That process can be this one
+			// (the hook runs in the agent's directory) or one in a directory
+			// the call names, so each of them is read. A ".." after it gives
+			// the physical parent of that directory, which the text does not
+			// show, and the path as written stays in the list (unknown, deny).
+			// If the directory of this process is not known, the same holds.
+			if self && !strings.Contains(rest+"/", "/../") {
+				if wd, err := fsGetwd(); err == nil {
+					readings[0] = strings.TrimRight(filepath.ToSlash(wd), "/") + rest
+				}
+			}
+			for _, reading := range readings {
+				if linkIntoProc(reading) {
+					return true, fmt.Sprintf("protected path: write through %s denied by -protect-paths (directory not known)", shortRaw(reading))
+				}
+				// The same path under the directory the call says it runs
+				// in can go through /proc or /dev/fd (cwd "/proc/self"
+				// with file "cwd/P", cwd "/dev/fd/3" with file "P"), so
+				// the unknown directory is checked on every reading, not
+				// only on the path as written.
+				if procPathUnknown(reading) || procDirUnknown(reading) {
+					return true, fmt.Sprintf("protected path: write through %s denied by -protect-paths (directory not known)", shortRaw(reading))
+				}
 				for _, cand := range canonicalCandidates(reading) {
 					for _, prefix := range clean {
 						if matchProtected(cand, prefix) {
@@ -288,11 +330,36 @@ func containsString(list []string, s string) bool {
 	return false
 }
 
+// evalSymlinkCached is filepath.EvalSymlinks with the results of one check
+// kept: a long brace list asks the same prefix thousands of times, and one
+// system call per word costs seconds against protectBudget. The cache is the
+// map handed in and lives only for one check; a negative result is kept as
+// "" so a failed lookup is not tried again.
+func evalSymlinkCached(cache map[string]string, p string) (string, bool) {
+	if r, ok := cache[p]; ok {
+		return r, r != ""
+	}
+	r, err := fsEvalSymlinks(p)
+	if err != nil {
+		cache[p] = ""
+		return "", false
+	}
+	cache[p] = filepath.ToSlash(r)
+	return cache[p], true
+}
+
 // physicalPath walks a path that has a ".." part one part at a time and
 // follows symbolic links before each "..". It returns "" for a path with no
 // ".." part, because resolveSymlinksBestEffort covers that case. A part that
 // does not exist is kept as text.
 func physicalPath(p string) string {
+	return physicalPathCached(p, map[string]string{})
+}
+
+// physicalPathCached is physicalPath with a cache of the EvalSymlinks calls,
+// so a caller that walks many words over the same prefix pays for each
+// directory once.
+func physicalPathCached(p string, cache map[string]string) string {
 	hasDotDot := false
 	for _, part := range strings.Split(p, "/") {
 		if part == ".." {
@@ -303,10 +370,20 @@ func physicalPath(p string) string {
 		return ""
 	}
 	if !strings.HasPrefix(p, "/") {
-		if filepath.IsAbs(p) {
-			return "" // a Windows drive path: Clean is right there
+		// A Windows drive path (C:\dir\..\x, C:dir\..\x) carries its own
+		// place in its text, and the check reads such paths with POSIX
+		// separators (decodeWindowsShellEscapes turns the backslashes of the
+		// command into "/"), so path.Clean resolves their ".." parts. The
+		// volume test is made on the raw text, because filepath.VolumeName
+		// is built for the separators of the host and reads nothing in
+		// "C:/dir" on a POSIX host.
+		if v := volumeNameOf(p); v != "" && len(v) == 2 && v[1] == ':' {
+			return path.Clean(p)
 		}
-		wd, err := os.Getwd()
+		if filepath.IsAbs(p) {
+			return ""
+		}
+		wd, err := fsGetwd()
 		if err != nil {
 			return ""
 		}
@@ -325,11 +402,17 @@ func physicalPath(p string) string {
 		case "", ".":
 		case "..":
 			cur := root + strings.Join(parts, "/")
-			if r, err := filepath.EvalSymlinks(cur); err == nil {
-				cur = filepath.ToSlash(r)
-				cur = cur[len(filepath.VolumeName(cur)):]
+			if r, ok := evalSymlinkCached(cache, cur); ok {
+				// The resolved text carries a volume only when the host has
+				// one. Cutting the volume of the resolved text off it, and
+				// then the volume of the path read when the resolved text
+				// repeats it, keeps every real directory name of the path.
+				res := r[len(filepath.VolumeName(r)):]
+				if vol := volumeNameOf(p); vol != "" && strings.HasPrefix(res, vol) {
+					res = res[len(vol):]
+				}
 				parts = parts[:0]
-				for _, rp := range strings.Split(cur, "/") {
+				for _, rp := range strings.Split(res, "/") {
 					if rp != "" {
 						parts = append(parts, rp)
 					}
@@ -373,7 +456,7 @@ func canonicalCandidatesLexical(p string) []string {
 		abs = stdpath.Clean(abs)
 	} else {
 		if !filepath.IsAbs(abs) {
-			if wd, err := os.Getwd(); err == nil {
+			if wd, err := fsGetwd(); err == nil {
 				abs = filepath.Join(wd, abs)
 			}
 		}
@@ -396,7 +479,7 @@ func resolveSymlinksBestEffort(p string) string {
 	if len(p) > maxResolvePathLen {
 		return "" // no system call takes a path this long
 	}
-	if r, err := filepath.EvalSymlinks(p); err == nil {
+	if r, err := fsEvalSymlinks(p); err == nil {
 		return filepath.Clean(r)
 	}
 	parent := p
@@ -412,7 +495,7 @@ func resolveSymlinksBestEffort(p string) string {
 			suffix = filepath.Join(filepath.Base(parent), suffix)
 		}
 		parent = np
-		if r, err := filepath.EvalSymlinks(parent); err == nil {
+		if r, err := fsEvalSymlinks(parent); err == nil {
 			return filepath.Clean(filepath.Join(r, suffix))
 		}
 	}
@@ -502,27 +585,12 @@ func isFileWriteTool(tool string) bool {
 	return true
 }
 
-// isShellTool reports whether the tool executes a shell command string.
-// `powershell` and `pwsh` are here because a PowerShell tool call still
-// carries shell redirection: without them, `echo x > <protected path>` sent
-// as a PowerShell tool call was allowed while the same string as a Bash tool
-// call was denied. Measured 2026-11-09. This does NOT mean PowerShell
-// cmdlets are understood — Set-Content, Out-File and Remove-Item are still
-// not parsed as writes, and such commands escalate rather than deny.
-// `run_shell_command` is the Gemini CLI shell tool name.
-// ViolatesProtectedPaths also runs the shell check for a tool whose group is
-// "shell", which is the group `tg hook` gives a tool name it does not know.
-func isShellTool(tool string) bool {
-	switch tool {
-	case "bash", "shell", "sh", "run_command", "run_shell_command", "run", "exec", "command", "terminal":
-		return true
-	case "exec_command", "shell_command", "local_shell", "unified_exec", "container.exec":
-		return true
-	case "powershell", "pwsh":
-		return true
-	}
-	return false
-}
+// isShellTool reports whether the tool name is a known shell tool, one that
+// executes a shell command string. The list is in internal/shelltool, so
+// that cmd/tg reads the same names. ViolatesProtectedPaths also runs the
+// shell check for a tool whose group is "shell", which is the group
+// `tg hook` gives a tool name it does not know.
+func isShellTool(tool string) bool { return shelltool.Is(tool) }
 
 // shellTouchesProtected reports whether a raw bash command string writes to a
 // path under any protected prefix, using the real quote-aware tokenizer in
@@ -577,6 +645,11 @@ func shellTouchesProtectedRec(cmd string, prefixes []string, depth int, inherite
 	if hit, reason := shellTouchesProtectedPOSIX(cmd, prefixes, depth, inherited, work); hit {
 		return true, reason
 	}
+	if depth == 0 && inherited == nil {
+		if hit, reason := netCheck(cmd, prefixes, work); hit {
+			return true, reason
+		}
+	}
 	// Native Windows shells retain backslashes as path separators. Check
 	// that reading as well; replacing the POSIX reading would lose escaped
 	// command names and paths used by POSIX shells running on Windows.
@@ -591,18 +664,16 @@ func shellTouchesProtectedRec(cmd string, prefixes []string, depth int, inherite
 }
 
 func shellTouchesProtectedPOSIX(cmd string, prefixes []string, depth int, inherited, work []string) (bool, string) {
-	toks := tokenizeShell(cmd)
+	toks := tokenizeShellZsh(cmd)
 	frags, homeAlts, over := shellFragments(cmd)
 	if over {
 		return true, "a command with more words than the check reads"
 	}
 	// Directories a relative path is also read under (protectedBases). The
 	// order of the commands is not followed, so this can add a deny and
-	// cannot remove one.
-	bases, over := protectedBases(toks, frags, homeAlts, append(append([]string{}, inherited...), work...), prefixes)
-	if over {
-		return true, "a command with more directories than the check reads"
-	}
+	// cannot remove one. A command that names more directories than this
+	// list holds is judged by the net (netCheck).
+	bases := protectedBases(toks, frags, homeAlts, append(append([]string{}, inherited...), work...), prefixes)
 	if hit, target := shellTokensTouchProtected(toks, prefixes, depth, "", bases); hit {
 		return true, target
 	}
@@ -633,10 +704,25 @@ func shellTouchesProtectedPOSIX(cmd string, prefixes []string, depth int, inheri
 			return true, "a link to a protected path that the same command can use"
 		}
 		// A link to another directory, and `..` after its name: the word
-		// names the directory above the target of the link.
+		// names the directory above the target of the link. The command is
+		// denied when it names a protected path, whether or not it is made
+		// of read-only programs: bash reads the word that names the link,
+		// and the file the kernel reaches from it is not the file the word
+		// spells.
 		if found, lnWrites := linkBeforeDotDot(cmd); lnWrites || (found && !onlyReadsOrLinks(cmd, 0)) {
 			return true, "a link that the same command makes, with .. after it"
 		}
+	}
+
+	// A shell call that holds an option of its own which makes the shell run
+	// commands (bash -c -i CMD, bash -s, fish -C CM). The text of such a call
+	// is a program for the shell and not only an argument: an interactive
+	// shell runs the commands it reads, so a call that names a protected path
+	// is denied whatever the rest of the call does. The check is made last
+	// because every rule above reads the text of the -c through and can give
+	// the name of the path itself.
+	if shellCommandRunOptionNamesProtected(cmd, prefixes, work) {
+		return true, "a shell option that makes the shell run a command naming a protected path"
 	}
 
 	// A shell named anywhere in a command that has a pipe or an input
@@ -666,27 +752,46 @@ func shellTouchesProtectedPOSIX(cmd string, prefixes []string, depth int, inheri
 	}
 
 	// The name rule (protect_mention.go): the text names a protected path
-	// and the command is not made of read-only programs alone.
+	// and the command is not made of read-only programs alone. Words the
+	// name rule cannot read are judged by the net (netCheck).
 	name := commandNamesProtected(toks, frags, bases, work, homeAlts, prefixes)
-	unknownDir := false
-	if name == "" {
-		name = shortRaw(unknownDirWord(cmd, bases))
-		unknownDir = name != ""
-	}
-	if name == "" {
-		name = shortRaw(unreadWord(cmd, toks, bases, prefixes))
-	}
 	if name != "" && !shellOnlyReads(cmd, 0) {
-		return true, name
-	}
-	// A word under a directory the check does not know, in a command that
-	// writes with a redirection: the target can be that word under another
-	// spelling.
-	if unknownDir && strings.ContainsRune(harmlessRedirRe.ReplaceAllString(cmd, ""), '>') {
 		return true, name
 	}
 
 	return false, ""
+}
+
+// shellCommandRunOptionNamesProtected reports whether a call of a shell holds
+// an option that makes the shell read commands of its own beyond the text it
+// runs (-i, -s, --rcfile, --init-file, fish -i), and whether a text the shell
+// runs names a protected path. An interactive shell reads startup files whose
+// aliases can change what a program name in the text runs, so such a call is
+// denied whatever the text does: bash -c -i 'cat F' is denied, while
+// bash -c 'cat F' only reads it. The options are read by parseShellCall, so a
+// word after the text of -c is a positional parameter and changes nothing
+// (bash -c 'cat F' -i). A call whose options cannot be read is treated the
+// same way.
+func shellCommandRunOptionNamesProtected(cmd string, prefixes, work []string) bool {
+	for _, seg := range splitShellSegments(tokenizeShellZsh(cmd)) {
+		words := stripCommandPrefix(commandWords(seg))
+		if len(words) < 2 || words[0].unresolved || words[0].raw != words[0].value {
+			continue
+		}
+		if !shellInterpreters[filepath.Base(words[0].value)] {
+			continue
+		}
+		call := parseShellCall(words[0].value, words[1:])
+		if call.known && !call.runsInput {
+			continue
+		}
+		for _, arg := range call.commands {
+			if commandTextNamesProtected(arg.marked, prefixes, work) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // commandTextNamesProtected reports whether the command text names a
@@ -699,16 +804,13 @@ func commandTextNamesProtected(cmd string, prefixes, work []string) bool {
 			}
 		}
 	}
-	toks := tokenizeShell(cmd)
+	toks := tokenizeShellZsh(cmd)
 	frags, homeAlts, over := shellFragments(cmd)
 	if over {
 		return true
 	}
-	bases, over := protectedBases(toks, frags, homeAlts, work, prefixes)
-	if over {
-		return true
-	}
-	if commandNamesProtected(toks, frags, bases, work, homeAlts, prefixes) != "" || unknownDirWord(cmd, bases) != "" || unreadWord(cmd, toks, bases, prefixes) != "" {
+	bases := protectedBases(toks, frags, homeAlts, work, prefixes)
+	if commandNamesProtected(toks, frags, bases, work, homeAlts, prefixes) != "" || netNames(cmd, prefixes, bases) != "" {
 		return true
 	}
 	links, over := linkToProtected(toks, bases, homeAlts, prefixes)
@@ -905,14 +1007,14 @@ func linkIsUsed(cmd string, toks []shellToken, segs map[int]bool) bool {
 func nestedTexts(cmd string) (texts []string, ok bool) {
 	ok = true
 	texts = append(texts, extractCommandSubsts(cmd)...)
-	for _, seg := range splitShellSegments(tokenizeShell(cmd)) {
+	for _, seg := range splitShellSegments(tokenizeShellZsh(cmd)) {
 		words := stripCommandPrefix(commandWords(seg))
 		if len(words) < 2 || words[0].unresolved {
 			continue
 		}
 		switch prog := filepath.Base(words[0].value); {
 		case shellInterpreters[prog]:
-			for _, arg := range shellDashCArgs(words[1:]) {
+			for _, arg := range parseShellCall(prog, words[1:]).writeCheckTexts() {
 				texts = append(texts, arg.marked)
 			}
 		case prog == "eval":
@@ -943,7 +1045,7 @@ func possibleTexts(cmd string, skipData bool) []string {
 	if strings.Contains(cmd, "$'") {
 		texts = append(texts, decodeAnsiEscapes(strings.ReplaceAll(cmd, "$'", "'")))
 	}
-	toks := tokenizeShell(cmd)
+	toks := tokenizeShellZsh(cmd)
 	for _, seg := range splitShellSegments(toks) {
 		if skipData && dataSegment(seg) {
 			continue
@@ -1009,7 +1111,7 @@ func textCannotRun(cmd string) bool {
 	if strings.ContainsAny(cmd, "|<$`") {
 		return false
 	}
-	for _, seg := range splitShellSegments(tokenizeShell(cmd)) {
+	for _, seg := range splitShellSegments(tokenizeShellZsh(cmd)) {
 		for _, w := range commandWords(seg) {
 			if w.unresolved {
 				return false
@@ -1147,7 +1249,7 @@ func linkNamesAndWords(cmd string, depth int, skipData bool, names map[string]bo
 		return true // the caller denies a text this deep
 	}
 	all = true
-	for _, seg := range splitShellSegments(tokenizeShell(cmd)) {
+	for _, seg := range splitShellSegments(tokenizeShellZsh(cmd)) {
 		cw := expandBraceWords(stripCommandPrefix(commandWords(seg)))
 		at := -1
 		for i, w := range cw {
@@ -1279,7 +1381,7 @@ func nestedLinkToProtected(cmd string, depth int, bases, homeAlts, prefixes []st
 	texts, _ := nestedTexts(cmd)
 	texts = append(texts, possibleTexts(cmd, depth == 0 && textCannotRun(cmd))...)
 	for _, text := range texts {
-		links, over := linkToProtected(tokenizeShell(text), bases, homeAlts, prefixes)
+		links, over := linkToProtected(tokenizeShellZsh(text), bases, homeAlts, prefixes)
 		if over {
 			return false, true
 		}
@@ -1306,7 +1408,7 @@ func onlyReadsOrLinks(cmd string, depth int) bool {
 	if shellAnomalyRe.MatchString(homeVarRe.ReplaceAllString(cmd, "~")) || strings.ContainsRune(cmd, '\r') {
 		return false
 	}
-	for _, seg := range splitShellSegments(tokenizeShell(cmd)) {
+	for _, seg := range splitShellSegments(tokenizeShellZsh(cmd)) {
 		words := stripCommandPrefix(commandWords(seg))
 		if len(words) == 0 {
 			continue // an assignment alone; its substitutions are read below
@@ -1318,7 +1420,8 @@ func onlyReadsOrLinks(cmd string, depth int) bool {
 		if multiCallPrograms[prog] && len(words) > 1 && !words[1].unresolved && filepath.Base(words[1].value) == "ln" {
 			continue
 		}
-		if prog == "ln" || prog == "eval" || (shellInterpreters[prog] && len(shellDashCArgs(words[1:])) > 0) {
+		if prog == "ln" || prog == "eval" ||
+			(shellInterpreters[prog] && len(parseShellCall(prog, words[1:]).commands) > 0) {
 			continue // ln, or a text that is read below
 		}
 		if !segmentOnlyReads(seg, 0) {
@@ -1370,17 +1473,72 @@ func rebaseWord(w shellToken, base string) shellToken {
 	return shellToken{kind: w.kind, value: joined, raw: w.raw, marked: joined}
 }
 
+// writeTargetTouchesProtected checks one word the command writes to as a
+// file: a redirection target, or the value of a shell option that names a
+// file (fish -o FILE). With base set, a relative word is read under it.
+func writeTargetTouchesProtected(t redirTarget, toks []shellToken, prefixes []string, base string, bases []string) (bool, string) {
+	if t.unresolved {
+		return true, shortRaw(t.raw)
+	}
+	// bash brace-expands a redirection word too: `> {P,}` and
+	// `> settings.{json,}` write P. Every expansion is checked, and a
+	// word whose braces cannot be read fails closed.
+	for _, w := range expandBraceWords([]shellToken{{kind: tokWord, value: t.value, raw: t.raw, marked: t.value}}) {
+		if w.unresolved {
+			return true, shortRaw(t.raw)
+		}
+		value := rebaseWord(w, base).value
+		// A target under a directory this check does not know
+		// (/proc/self/cwd, /dev/fd/3, /dev/stdin, a ".." under
+		// /dev/pts, a link into /proc) can be the protected file.
+		if unknownTarget(value, toks) {
+			return true, shortRaw(value)
+		}
+		if hit, target := namesProtected(value, prefixes); hit {
+			return true, target
+		}
+		// The word may hold a list made of parts of the target: with the
+		// quotes dropped (`> ''{P,{a}}`) or with a group the comma
+		// reader leaves unexpanded (`> {P,{a}}`), the text reaches the
+		// shell as one word that can still be the protected path. Each
+		// word bash would make from it is read here, quotes kept.
+		// Quoting that asks bash for no expansion at all (`> '{P,}'`
+		// makes the literal file "{P,}") is left as it is.
+		if w.value == t.value {
+			for _, alt := range literalBraceAlternatives(t.raw) {
+				altT := shellToken{kind: tokWord, value: alt, raw: alt, marked: alt}
+				if unknownTarget(alt, toks) {
+					return true, shortRaw(alt)
+				}
+				if hit, target := namesProtected(rebaseWord(altT, base).value, prefixes); hit {
+					return true, target
+				}
+			}
+		}
+	}
+	// A target under a directory this check does not know fails closed on
+	// every reading of the word. A quoted brace is not expanded by bash, so
+	// its raw text is checked only when quoting makes no brace list.
+	for _, w := range []shellToken{{kind: tokWord, value: t.value, raw: t.raw, marked: t.value}, rebaseWord(shellToken{kind: tokWord, value: t.value, raw: t.raw, marked: t.value}, base)} {
+		if unknownTarget(w.value, toks) || (t.raw != t.value && !allBracesQuoted(t.raw) && unknownTarget(w.raw, toks)) {
+			return true, shortRaw(w.raw)
+		}
+	}
+	return false, ""
+}
+
 // shellTokensTouchProtected is the check of one token stream. With base set,
 // every relative path is read under that directory, and the commands a shell
 // runs (-c, standard input) are left to the pass without a base.
 func shellTokensTouchProtected(toks []shellToken, prefixes []string, depth int, base string, bases []string) (bool, string) {
 	// (1) Output-redirection targets.
+	seen := map[string]bool{}
 	for _, t := range redirectTargets(toks) {
-		if t.unresolved {
-			return true, shortRaw(t.raw)
+		if seen[t.raw] {
+			continue
 		}
-		value := rebaseWord(shellToken{kind: tokWord, value: t.value, raw: t.raw, marked: t.value}, base).value
-		if hit, target := namesProtected(value, prefixes); hit {
+		seen[t.raw] = true
+		if hit, target := writeTargetTouchesProtected(t, toks, prefixes, base, bases); hit {
 			return true, target
 		}
 	}
@@ -1393,7 +1551,7 @@ func shellTokensTouchProtected(toks []shellToken, prefixes []string, depth int, 
 		// A shell that reads its commands from standard input
 		// (`echo 'rm f' | bash`, `bash <<< 'rm f'`): the text it will run
 		// is elsewhere in the command, so every word is checked.
-		if base == "" && len(words) > 0 && shellInterpreters[filepath.Base(words[0].value)] && shellReadsStdin(words[1:]) {
+		if base == "" && len(words) > 0 && shellInterpreters[filepath.Base(words[0].value)] && shellReadsStdin(words[0].value, words[1:]) {
 			if hit, target := stdinShellTouchesProtected(toks, prefixes, depth, bases); hit {
 				return true, target
 			}
@@ -1404,9 +1562,23 @@ func shellTokensTouchProtected(toks []shellToken, prefixes []string, depth int, 
 		vals := wordValues(words)
 		prog := filepath.Base(words[0].value)
 		// A shell started with -c runs an argument as a command, so that
-		// argument is checked like the command itself.
+		// argument is checked like the command itself. So is the value of a
+		// command-bearing option (fish -C, --init-command) and the command
+		// glued into such an option after the -c command, which reads as a
+		// single word (fish -c 'echo ok' -C'echo x > $X').
+		if shellInterpreters[prog] {
+			// A file the shell writes because an option names it
+			// (fish -o FILE, --profile FILE) is read as a redirection
+			// target is: under each base, through links, with its braces.
+			for _, f := range parseShellCall(prog, words[1:]).files {
+				if hit, target := writeTargetTouchesProtected(redirTarget{value: f.value, raw: f.raw, unresolved: f.unresolved}, toks, prefixes, base, bases); hit {
+					return true, target
+				}
+			}
+		}
 		if base == "" && shellInterpreters[prog] {
-			for _, arg := range shellDashCArgs(words[1:]) {
+			call := parseShellCall(prog, words[1:])
+			for _, arg := range call.writeCheckTexts() {
 				if depth >= maxShellSubstDepth {
 					return true, shortRaw(arg.raw)
 				}
@@ -1520,30 +1692,9 @@ func stripCommandPrefix(words []shellToken) []shellToken {
 // shellReadsStdin reports whether a shell started with these arguments reads
 // its commands from standard input: it has the -s option, or it has no -c
 // command and no script file.
-func shellReadsStdin(args []shellToken) bool {
-	if len(shellDashCArgs(args)) > 0 {
-		return false
-	}
-	for i := 0; i < len(args); i++ {
-		v := args[i].value
-		if args[i].unresolved || v == "" {
-			return false
-		}
-		if v[0] != '-' && v[0] != '+' {
-			return false // a script file
-		}
-		if strings.HasPrefix(v, "--") {
-			if v == "--rcfile" || v == "--init-file" {
-				i++
-			}
-			continue
-		}
-		if v[0] == '-' && strings.ContainsRune(v, 's') {
-			return true
-		}
-		i += strings.Count(v, "o") + strings.Count(v, "O")
-	}
-	return true
+func shellReadsStdin(prog string, args []shellToken) bool {
+	c := parseShellCall(prog, args)
+	return c.stdin || !c.known
 }
 
 // stdinShellTouchesProtected is the check for a command that holds a shell
@@ -1591,7 +1742,10 @@ func stdinShellTouchesProtected(toks []shellToken, prefixes []string, depth int,
 	return false, ""
 }
 
-// maxBraceWords bounds the words one brace expansion may produce.
+// maxBraceWords bounds the words one brace expansion of the old rules may
+// produce. Above it the net reads the words of the list without letter
+// case and counts a directory above a protected path as a name of it
+// (netPattern.big).
 const maxBraceWords = 64
 
 // expandBraceWords performs the comma form of bash brace expansion on the
@@ -1617,38 +1771,164 @@ func expandBraceWords(words []shellToken) []shellToken {
 			out = append(out, w)
 			continue
 		}
-		if w.raw != w.value {
-			// Quoting inside the word: which braces are live is not known.
-			if braceExprRe.MatchString(w.raw) {
-				w.unresolved = true
-			}
-			out = append(out, w)
-			continue
-		}
-		expanded, ok := expandBraces(w.value)
-		if !ok {
-			w.unresolved = true
-			out = append(out, w)
-			continue
-		}
-		for _, e := range expanded {
-			out = append(out, shellToken{kind: tokWord, value: e, raw: e, marked: e})
-		}
+		out = append(out, expandBraceWord(w)...)
 	}
 	return out
+}
+
+// braceWordCache holds the words that expandBraceWord made for a long word.
+// The rules read the words of one command several times (once for each
+// base and each rule), and a long word with deep lists costs the most to
+// expand, so its words are made once.
+var braceWordCache = struct {
+	sync.Mutex
+	m map[shellToken][]shellToken
+}{m: map[shellToken][]shellToken{}}
+
+const (
+	braceWordCacheMinLen = 256 // the shortest raw text a word is kept for
+	braceWordCacheMax    = 64  // words kept before the cache is emptied
+)
+
+// expandBraceWord returns the words bash makes of one word that holds a
+// brace. The caller may not change the slice.
+func expandBraceWord(w shellToken) []shellToken {
+	if len(w.raw) < braceWordCacheMinLen {
+		return expandBraceWordUncached(w)
+	}
+	braceWordCache.Lock()
+	made, ok := braceWordCache.m[w]
+	braceWordCache.Unlock()
+	if ok {
+		return made
+	}
+	made = expandBraceWordUncached(w)
+	braceWordCache.Lock()
+	if len(braceWordCache.m) >= braceWordCacheMax {
+		braceWordCache.m = map[shellToken][]shellToken{}
+	}
+	braceWordCache.m[w] = made
+	braceWordCache.Unlock()
+	return made
+}
+
+func expandBraceWordUncached(w shellToken) []shellToken {
+	var out []shellToken
+	if w.raw != w.value {
+		// Quoting inside the word: which braces are live is not
+		// known. bash expands only a brace that carries no quote,
+		// so a word whose every brace stands inside quoting is kept
+		// as it is (`> '{P,}'` makes the file "{P,}"). A word with
+		// a live brace next to a quoted one is not read and fails
+		// closed.
+		//
+		// A live brace is expanded with the quoting kept in mind
+		// (`''{P,{a}}` makes P and {a}). A word that holds an expansion
+		// as well, or whose list the reader cannot expand, is not read
+		// and fails closed.
+		if !holdsLiveBrace(w.raw) {
+			out = append(out, w)
+			return out
+		}
+		made, ok := expandQuotedBraces(w.raw, maxBraceWords)
+		if !ok && !strings.ContainsAny(w.raw, "$`") && netListFits(w.raw) {
+			// Only too long: the net reads every word of the list.
+			out = append(out, w)
+			return out
+		}
+		if !ok || strings.ContainsAny(w.raw, "$`") {
+			w.unresolved = true
+			out = append(out, w)
+			return out
+		}
+		for _, e := range made {
+			out = append(out, shellToken{kind: tokWord, value: e, raw: quoteBraces(e), marked: e})
+		}
+		return out
+	}
+	expanded, ok := expandBraces(w.value)
+	if holdsBraceList(expanded) {
+		// expandBraces does not expand a list that holds a brace group
+		// of one word (`P.{json,{a}}`, `{P,{a}}`). bash expands the
+		// inner group too, so the bounded long expander is asked once.
+		// When that too leaves a list, or makes more words than the rule
+		// reads, the word stays unresolved and a path position fails
+		// closed on it.
+		if made, longOK := expandLongBraces(w.value, maxBraceWords); longOK && !holdsBraceList(made) {
+			expanded, ok = made, true
+		}
+	}
+	if !ok || holdsBraceList(expanded) {
+		// A list that is only too long is read by the net, which
+		// makes every word of it (netCheck).
+		if !strings.ContainsAny(w.raw, "$`") && netListFits(w.raw) {
+			out = append(out, w)
+			return out
+		}
+		w.unresolved = true
+		out = append(out, w)
+		return out
+	}
+	for _, e := range expanded {
+		out = append(out, shellToken{kind: tokWord, value: e, raw: e, marked: e})
+	}
+	return out
+}
+
+// quoteBraces returns a raw text for a word that bash has already expanded:
+// a backslash goes in front of each character the reader would expand again.
+func quoteBraces(v string) string {
+	if !strings.ContainsAny(v, "{},'\"\\$`") {
+		return v
+	}
+	var b strings.Builder
+	for i := 0; i < len(v); i++ {
+		if strings.IndexByte("{},'\"\\$`", v[i]) >= 0 {
+			b.WriteByte('\\')
+		}
+		b.WriteByte(v[i])
+	}
+	return b.String()
 }
 
 // braceExprRe matches a brace group bash would expand: one with a comma or a
 // sequence expression.
 var braceExprRe = regexp.MustCompile(`\{[^{}]*(,|\.\.)[^{}]*\}`)
 
+// allBracesQuoted reports whether every "{" and "}" of a word's raw text
+// stands inside quoting or after a backslash (quotedChars), so bash expands
+// no brace list in it. A word with no brace, or with a quote that does not
+// close, returns false.
+func allBracesQuoted(raw string) bool {
+	if !strings.ContainsAny(raw, "{}") {
+		return false
+	}
+	chars, ok := quotedChars(raw)
+	if !ok {
+		return false
+	}
+	for _, q := range chars {
+		if (q.c == '{' || q.c == '}') && !q.quoted {
+			return false
+		}
+	}
+	return true
+}
+
 // expandBraces expands the innermost brace groups of s until none is left.
 // ok is false when the result is too large.
 func expandBraces(s string) (out []string, ok bool) {
 	todo := []string{s}
+	work := 0
 	for len(todo) > 0 {
 		cur := todo[0]
 		todo = todo[1:]
+		// Each search reads the whole word: a bound on the characters read
+		// keeps deep nesting from taking quadratic time. Over it, the word
+		// is not expanded, as for a list that makes too many words.
+		if work += len(cur) + 1; work > maxBraceWork {
+			return nil, false
+		}
 		loc := braceExprRe.FindStringIndex(cur)
 		if loc == nil {
 			out = append(out, cur)
@@ -1725,58 +2005,6 @@ var shellInterpreters = map[string]bool{
 	"ash": true, "mksh": true, "rbash": true, "fish": true,
 }
 
-// shellDashCArgs returns the words a shell may run as its -c command. words
-// are the arguments after the program name. The -c flag is any single-dash
-// option cluster that holds a "c" (-c, -lc, -ce, -cx). Every later word that
-// is not an option is returned, because options and their arguments may stand
-// between -c and the command (bash -c -e 'cmd', bash -c -- 'cmd'). That also
-// returns the positional arguments after the command; checking one of them as
-// a command can add a deny and cannot remove one.
-func shellDashCArgs(words []shellToken) []shellToken {
-	isOption := func(v string) bool {
-		return len(v) > 1 && (v[0] == '-' || v[0] == '+')
-	}
-	i := 0
-	found := false
-	for ; i < len(words); i++ {
-		v := words[i].value
-		if v == "--" || !isOption(v) {
-			return nil // options ended before a -c
-		}
-		if strings.HasPrefix(v, "--") {
-			if v == "--rcfile" || v == "--init-file" {
-				i++ // the option takes one argument
-			}
-			continue
-		}
-		if v[0] == '-' && strings.ContainsRune(v[1:], 'c') {
-			found = true
-			i++
-			break
-		}
-		// -o NAME, -O NAME, +o NAME, +O NAME: each o or O in the cluster
-		// takes one following word (bash -oe pipefail -c 'cmd').
-		i += strings.Count(v, "o") + strings.Count(v, "O")
-	}
-	if !found {
-		return nil
-	}
-	var out []shellToken
-	afterDashDash := false
-	for ; i < len(words); i++ {
-		v := words[i].value
-		if !afterDashDash && v == "--" {
-			afterDashDash = true
-			continue
-		}
-		if !afterDashDash && isOption(v) && !words[i].unresolved {
-			continue
-		}
-		out = append(out, words[i])
-	}
-	return out
-}
-
 // shellCommandArgTouchesProtected checks one word that a shell runs as a
 // command. The marked text of the word is tokenized again: each expansion of
 // the outer command is a mark there, so an inner word built from one stays
@@ -1786,7 +2014,7 @@ func shellDashCArgs(words []shellToken) []shellToken {
 // unknown and the check fails closed.
 func shellCommandArgTouchesProtected(arg shellToken, prefixes []string, depth int, bases []string) (bool, string) {
 	inner := arg.marked
-	for _, seg := range splitShellSegments(tokenizeShell(inner)) {
+	for _, seg := range splitShellSegments(tokenizeShellZsh(inner)) {
 		words := stripCommandPrefix(commandWords(seg))
 		if len(words) > 0 && words[0].unresolved {
 			return true, shortRaw(arg.raw)
@@ -2074,7 +2302,7 @@ func globLinkExpansions(literal string) (out []string, over bool) {
 		if filepath.IsAbs(literal) || strings.HasPrefix(literal, "~") {
 			return nil, false
 		}
-		wd, err := os.Getwd()
+		wd, err := fsGetwd()
 		if err != nil {
 			return nil, false
 		}
@@ -2099,7 +2327,7 @@ func globLinkExpansions(literal string) (out []string, over bool) {
 			for k := range states {
 				states[k].path += "/" + part
 				if sawPattern && part != ".." && !states[k].link {
-					if fi, err := os.Lstat(states[k].path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+					if fi, err := fsLstat(states[k].path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
 						states[k].link = true
 					}
 				}
@@ -2114,7 +2342,7 @@ func globLinkExpansions(literal string) (out []string, over bool) {
 			if dir == "" {
 				dir = "/"
 			}
-			list, err := os.ReadDir(dir)
+			list, err := fsReadDir(dir)
 			if err != nil {
 				continue
 			}
@@ -2236,8 +2464,8 @@ func fsIgnoresCase(prefix string) bool {
 	for len(p) > 1 && p != "." {
 		dir, base := filepath.Split(p)
 		if swapped := swapLetterCase(base); swapped != base {
-			if fi, err := os.Stat(p); err == nil {
-				other, err := os.Stat(dir + swapped)
+			if fi, err := fsStat(p); err == nil {
+				other, err := fsStat(dir + swapped)
 				return err == nil && os.SameFile(fi, other)
 			}
 		}
@@ -2333,20 +2561,20 @@ func redirectTargets(toks []shellToken) []redirTarget {
 // verb in one segment can't be attributed to a sibling. This replaces the old
 // FieldsFunc split, which was not quote-aware and so broke `echo "a;b"` in two.
 func splitShellSegments(toks []shellToken) [][]shellToken {
+	// Each segment is a part of toks, not a copy; its capacity ends with
+	// it, so an append to a segment cannot write into toks.
 	var segs [][]shellToken
-	var cur []shellToken
-	for _, t := range toks {
+	start := 0
+	for i, t := range toks {
 		if t.kind == tokSep {
-			if len(cur) > 0 {
-				segs = append(segs, cur)
-				cur = nil
+			if i > start {
+				segs = append(segs, toks[start:i:i])
 			}
-			continue
+			start = i + 1
 		}
-		cur = append(cur, t)
 	}
-	if len(cur) > 0 {
-		segs = append(segs, cur)
+	if len(toks) > start {
+		segs = append(segs, toks[start:len(toks):len(toks)])
 	}
 	return segs
 }
@@ -2357,7 +2585,19 @@ func splitShellSegments(toks []shellToken) [][]shellToken {
 // mis-read as an argument to the command; write targets are checked separately
 // by redirectTargets.
 func commandWords(seg []shellToken) []shellToken {
-	var out []shellToken
+	// A segment of words alone is its own list of words. The capacity
+	// ends with it, so an append cannot write into the segment.
+	plain := true
+	for _, t := range seg {
+		if t.kind != tokWord {
+			plain = false
+			break
+		}
+	}
+	if plain {
+		return seg[:len(seg):len(seg)]
+	}
+	out := make([]shellToken, 0, len(seg))
 	expectOperand := false
 	for _, t := range seg {
 		if expectOperand {
@@ -2524,4 +2764,32 @@ func shortRaw(s string) string {
 		return s[:max] + "…"
 	}
 	return s
+}
+
+// volumeNameOf returns the drive or UNC volume at the start of p, reading
+// both the separators of the host and the "/"-separated text a POSIX reading
+// of a Windows command holds. filepath.VolumeName itself is host-dependent:
+// it reads "" in "C:/dir" on a POSIX host and would leave such a path to the
+// relative branch, which prepends the working directory.
+func volumeNameOf(p string) string {
+	if v := filepath.VolumeName(p); v != "" {
+		return v
+	}
+	if v := filepath.VolumeName(filepath.FromSlash(p)); v != "" {
+		return v
+	}
+	// A single letter, a colon and a separator or the end of the text.
+	if len(p) >= 2 && p[1] == ':' && isDriveLetter(p[0]) {
+		if len(p) == 2 {
+			return p
+		}
+		if p[2] == '/' || p[2] == '\\' {
+			return p[:2]
+		}
+	}
+	return ""
+}
+
+func isDriveLetter(c byte) bool {
+	return ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z')
 }

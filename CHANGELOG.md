@@ -6,9 +6,152 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.9.0] — 2026-11-15
+## [0.9.0] — unreleased
 
 ### Review corrections
+
+- `tg hook` keeps the protected-path check of commit 22ed838, the state of
+  the 0.9.0 code before its pre-release review, unchanged, as a floor. When the
+  new protected-path checks allow a call, the hook also runs that check. When
+  that check denies a call, the hook denies it and gives that check's
+  reason. So for the paths named with
+  `-protect-path`, the hook denies every call that 22ed838 denies. The floor
+  covers only the protected-path check. The policy rules read a call as
+  22ed838 read it: a shell command is split into words as bash splits it,
+  and a path is resolved through its symbolic links. An `apply_patch` target
+  is also read as 22ed838 read it: a relative target joined to a cwd that
+  starts with `/`, with `DIR/..` removed, so
+  `.claude/commands/../settings.json` is read as `.claude/settings.json`.
+- The pre-release review found calls that wrote to a path named with
+  `-protect-path` and were allowed. `tg hook` now denies them:
+  - a redirect target that holds a brace list, such as `> {P,}`. This
+    includes a list mixed with quotes or inside another list, such as
+    `> ''{settings.json,{a}}`;
+  - a path under `/proc/self/cwd` or `/dev/fd` written with an empty, `.` or
+    `..` part, such as `/proc/self//cwd`, in a shell command and in a
+    file-write tool. This includes a path that reaches them from another
+    directory under `/dev`, such as `/dev/shm/../fd/3`, a path through a
+    symbolic link, absolute or relative, into `/proc` or `/dev/fd`, and a long
+    brace list under `/proc/self`. A file-write tool path under
+    `/proc/self/cwd` is read in the working directory of the hook process
+    and in the cwd of the tool call;
+  - an `apply_patch` target with `..` after a symbolic link, and patch text
+    under an alias key such as `cmd`. The hook also reads patch text under
+    other keys, such as `content` or `args`, in nested objects and in arrays.
+    It places a relative target under a work directory key, such as `workdir`,
+    `cwd` or `dir`, also when the key is nested, such as `input.workdir`. A
+    call with more than 8 distinct work directories is denied. A
+    patch nested deeper than 16 levels is denied. When the keys `command`,
+    `input` and `patch` name no file, the hook also checks the call as it
+    is, as 22ed838 did, so a write policy that denied such a call still
+    denies it;
+  - a command passed in a shell option, such as `fish --init-command=...`, or
+    after `bash -c` and another option. The hook reads fish options in their
+    short, glued and prefix forms, such as `-C`, `-iC"..."`, `--co` and
+    `--i`. An unknown long option of `bash`, `sh` or `zsh`, and the value of
+    `zsh --emulate`, no longer hide the command text after them;
+  - a fish option that writes a file, such as `-o`, `--debug-output` or
+    `--profile`, when the file is a protected path or is not known, under
+    every directory the command changes to;
+  - a word after the text of `bash -c` that the text can run, such as
+    `bash -c 'eval "$1"' _ 'echo x > P'`;
+  - a long brace list after `=`, after a short option glued to the path,
+    such as `tar -cf.claude/settings.{json,{1..70}}`, or with `..` after a
+    symbolic link. The list may hold quotes and escaped braces or commas,
+    and may stand in the text of `eval`, `trap` or another quoted command.
+    A list the hook cannot read in its bounds is denied;
+  - a relative path with `..` after a directory that the command changes to
+    with a value the hook cannot read, such as `cd $D` or `env -C"$D"`;
+  - a relative path after a directory glued to `-C`, such as `env -Clnk`. The
+    directory is read under the cwd of the tool call, also when the hook
+    process runs in another directory;
+  - a write to `/dev/stdout` or `/dev/stderr` when that stream may be a
+    file opened for reading, such as `cat 2< P 2>/dev/stderr` or
+    `exec 1>&0; echo x > /dev/stdout`. The file and the stream may be
+    written with quotes, escapes, `$'...'` or `$"..."`, such as
+    `2<$'.claude/settings.json'` or `> /de'v'/stdout`;
+  - a brace list in a word with an extended glob pattern, such as
+    `@(settings)`;
+  - a redirect written as `>|`, `>!`, `>>!`, `&>!`, `&>>!` or `>?`, and a
+    redirect after a descriptor move such as `1>&0-`. Only the
+    protected-path check reads `>!`, `>>!`, `&>!`, `&>>!` and `>?` as zsh
+    does. The policy rules read them as bash does: `rm >? -rf /` is
+    `rm -rf /` with its output in a file named `?`;
+  - a name split by a backslash, quotes and a newline, which `eval` or
+    `bash -c` joins into one word;
+  - a name written with `$'...'` escapes, such as `$'.cl\x61ude'`, also in
+    the text of `eval` or `trap`, and a blank, tab or newline written as such
+    an escape, such as `eval $'tee\t.claude/settings.json'`;
+  - a write in the text of `eval`, `trap` or a shell that reads its
+    commands from standard input, such as
+    `echo 'cd "$D"; echo x > alias' | sh`, also when the text holds `$(...)`,
+    backquotes or an escaped blank;
+  - a `~`, `$HOME` or bare `cd` after `HOME` is set with `printf -v` or
+    `read`. The hook reads such a home as any directory;
+  - a name in a collating element or a class of a bracket pattern, such as
+    `[[.k.]]`, `[[=k=]]` or `[[:alpha:]]`.
+- After a directory change the hook cannot resolve, a relative word whose
+  last part can be the protected file name is denied, and so is a relative
+  path with `..`. Such a change is a `cd`, `pushd`, `popd` or `chdir` to a
+  value the hook cannot read, a `CDPATH` assignment, a directory option of a
+  program such as `env -C`, `git -C`, `make -C`, `go -C`, `sudo -D`,
+  `nsenter --wd` or `docker run -w`, `chroot`, or a command word that comes
+  from a variable.
+- A relative redirect target is denied after such a change only when the
+  change is made by the shell that opens the redirect: a `cd`, `pushd`,
+  `popd` or `chdir` in the same `( )` group or in a group around it. A
+  `CDPATH` assignment and a `cd` to a pattern that matches no directory
+  count anywhere in the command. A directory option of one program, as in
+  `git -C "$R" log > log.txt`, and a `cd` in a `( )` group that ends before
+  the redirect, as in `(cd "$D" && make) > build.log`, do not count.
+- A brace sequence of 4096 words or more, such as `d{1..5000}`, is read as
+  any number in every reader. A sequence that bash does not make, such as
+  `{-9223372036854775808..0}`, is read as its text, as bash keeps it.
+- The hook reads brace lists, escapes and nested texts within a work counter.
+  A command that goes over the counter is denied. Some calls take seconds to check.
+  Measured on one Linux machine with no other load, with the coding-agent
+  shell policy and `-protect-path`, median of 3 runs, with the time of
+  22ed838 in parentheses: the 300 commands `cd a0*` to `cd a299*` in one
+  call, 4.3 s (0.01 s); 2,000 words such as `lnk/../f`, where `lnk` is a
+  symbolic link, 1.2 s (0.66 s); ten words of 4,000 nested brace lists,
+  0.60 s (0.55 s); `echo x > /;*`, 1.3 s (1.3 s); and
+  `ssh h{ost 'echo x >!{,/;}*'`, 7.9 s (7.9 s). With a load average of 20,
+  each time is about 1.6 times larger, and the last call is denied on the
+  9 s limit.
+- The new checks do not look into a network or FUSE file system, because a
+  lookup there can wait without end. A command that can write is denied
+  when a path or pattern in it reaches such a mount, as in `cp a M/x` where
+  `M` is such a mount: a link there can lead to the protected path. When the
+  working directory is on such a mount, a command that writes a relative
+  path is denied with the reason "a command whose working directory is on a
+  network or FUSE file system". The floor, the check of 22ed838, does look
+  up paths on such a mount. A hook call that does not end in 9 s is
+  denied, so the hook prints a decision within 10 s unless the system stops
+  the process first, for example on a memory limit. On one Linux machine,
+  an `apply_patch` call with 64 files, 8 work directories and 40,000 other
+  keys used at most 49 MB.
+- Calls that write no protected path stay allowed, such as a write to
+  `/dev/stdout` or `/proc/sys/vm/drop_caches`, an empty word after the text
+  of `bash -c`, and a relative `apply_patch` target such as `bin/run.sh`,
+  which the hook places under the working directory. Braces that are not a
+  path stay allowed too, such as `python3 -c 'print({"a":1,"b":{"c":2}})'`,
+  an `awk` program such as `awk '{a[$1]++} END{for(k in a) print k}'` and a
+  `kubectl` `jsonpath` such as `'{.items[0].metadata.name}'`.
+- Some calls that write no protected path are now denied: 0.8.1 allows
+  them, and the floor, the check of 22ed838, denies them. Examples are
+  `bash -e -c 'cat P'`, `echo '{"a":[1,2],"b":{"c":"d"}}' > out.json`,
+  `curl -d '{"items":[1,2],"meta":{"k":"v"}}' URL` and
+  `touch file{1..100}.txt`.
+- `-dispatch` now reads the shell tool of every dialect, such as
+  `run_command`, not only `Bash`. A command it does not classify is no longer
+  allowed. Another tool is read as a shell command only when it carries a
+  command parameter and its tool group is `shell`. Other tools that the
+  dispatch list does not name, such as `Glob` or `WebSearch`, keep the policy
+  decision.
+- With `-escalate-as deny`, the audit record of a converted escalation now
+  says `denied` and gives the conversion as the reason. The reason the hook
+  returns also names the rule, such as `Escalated by: [escalate-git]`.
+- [`policies/README.md`](policies/README.md) lists all ten shipped policies.
 
 - The example shell policy now matches recursive and force flags as separate
   words of the `rm` command. Plain `rm` of a path with `-r` or `-f` letters
@@ -424,10 +567,13 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   names two calls. `tg hook` evaluated one of them. It now handles such a
   payload as one it cannot read
   (`TestHookDeniesAPayloadWithTwoToolCalls`).
-- The protected-path check of one call has a limit of 10 seconds, and a
-  check that does not end in that time denies the call. Before, a command
-  with some thousands of words could keep the hook busy for longer than the
-  hook timeout of the harness (`pkg/engine/protect_workdir_test.go`).
+- `tg hook` denies a call that it has not checked in 9 seconds, from
+  reading the input to the decision, so it prints a decision within 10
+  seconds unless the system stops the process first.
+  Before, a command with some thousands of words, or an `apply_patch` call
+  with thousands of work directory keys, could keep the hook busy for longer
+  than the hook timeout of the harness (`pkg/engine/protect_workdir_test.go`,
+  `cmd/tg/hook_review090g_test.go`).
 - A command with a carriage return does not count as read-only. bash reads
   the carriage return as a character of a word, and the check ended a
   command there (`pkg/engine/protect_case_test.go`).

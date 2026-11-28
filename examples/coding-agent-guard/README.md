@@ -217,19 +217,54 @@ another name, such as an alias or a copy of the program. It also does not see an
 name pattern with the files that exist, so a pattern that matches a link to a
 protected directory counts.
 
+The hook expands a brace list that makes up to 64 words and reads each word.
 The hook does not expand a brace list that makes more than 64 words. Such a
-list counts as the name of a protected path when one of its words can be the
-path. When the comma lists of one word make more than 4096 words, the word
-counts as the name of a protected path. A command
-that holds the word `nocaseglob` counts in the same way, because that shell
-option makes a pattern match without letter case.
+list counts as the name of a protected path when one of its words, in any
+letter case, can be the path. In such a list a sequence, such as
+`{1..5000}`, is read as any number. When the comma lists of one word make
+more than 4096 words, the word counts as the name of a protected path. Brace
+groups nested more than 128 deep are not expanded: the hook reads the word as
+any mix of its parts. A command that holds the word `nocaseglob` counts in the same way, because that shell option makes a pattern match without letter case.
+
+The check of one command has a work counter: 2,000,000 steps and 10,000 file
+system lookups, for the command and the texts it runs. A command that goes
+over either limit is denied as too large to check. In a sequence of 4096 words or
+more, such as `d{1..5000}`, the hook reads the sequence as any number. A
+sequence that bash does not make, such as `{-9223372036854775808..0}`, is
+read as its text.
+
+The hook keeps the protected-path check of commit 22ed838, the state of
+the 0.9.0 code before its pre-release review, unchanged, as a floor. When the
+newer checks allow a call, the hook also runs that check, and a call it
+denies is denied. So for the paths named with `-protect-path`, the hook
+denies every call that 22ed838 denies. The floor covers only the
+protected-path check.
+
+The newer checks do not look into a network or FUSE file system, because a
+lookup there can wait without end. A command that can write is denied when
+a path or pattern in it reaches such a mount, as in `cp a M/x` where `M` is
+such a mount, because a link there can lead to the protected path. When the
+working directory is on such a mount, a command that writes a relative path
+is denied. The floor does look up paths on such a mount.
+
+After a directory change that the hook cannot resolve, such as `cd "$D"`,
+`env -C "$D"` or `sudo -D "$D"`, the hook denies a relative word whose last
+part can be the protected file name, and a relative path with `..`. It
+denies a relative redirect target after such a change only when the shell
+that opens the redirect makes the change: a `cd`, `pushd`, `popd` or
+`chdir` in the same `( )` group or in a group around it. A `CDPATH`
+assignment and a `cd` to a pattern that matches no directory count anywhere
+in the command. So `cd "$D" && make > build.log` is denied, and
+`git -C "$R" log > log.txt` and `(cd "$D" && make) > build.log` are not.
 
 The hook reads a relative path under the working directory that the harness
 sends with the call (`cwd` or `workdir`). When the harness sends none, it
 uses the directory of the hook process.
 
-The check of one call has a limit of 10 seconds. A check that does not end
-in that time denies the call.
+One hook call has a limit of 9 seconds, from reading the input to the
+decision. A check that does not end in that time denies the call. The
+hook prints a decision within 10 seconds unless the system stops the
+process first, for example on a memory limit.
 
 When the text names a protected path, the hook also denies a command that
 holds a comment (`#`), a here-document, `${...}`, `$((...))`, `case` or a
@@ -286,6 +321,13 @@ program other than `ln` makes in the same command. It goes to a directory
 that the command text does not name, as in `cd $DIR`, and writes a relative
 path there. It
 changes a whole directory above the path, as in `find ~/.claude -delete`.
+It writes into a protected directory through a symbolic link to it without
+the file name, as in `rsync -a src/ dlink/`, `tar -xf a.tar -C dlink` or
+`unzip a.zip -d dlink`, where `dlink` is a link to `~/.claude`. It finds
+the file with a program that searches, as in
+`find . -name settings.json -delete`. After a directory change that
+the hook cannot resolve, it writes through a link with another name, as in
+`cd "$D"; python3 w.py alias`.
 The hook does not read a script that a shell runs from a file. Other ways can
 exist that are not in this paragraph. An agent that can run a shell can
 change a protected file in one of these ways.
