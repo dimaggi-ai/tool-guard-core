@@ -67,11 +67,14 @@ var hookCallBudget = 9 * time.Second
 
 // hookGate passes the decision of a hook call to stdout, unless the call ran
 // past hookCallBudget: then the deny of runHook was written, and the late
-// decision and its audit record are dropped.
+// decision and its audit record are dropped. written is set when the
+// decision of the call is written, so that runHook does not write a second
+// one when its timer fires before the call has returned.
 type hookGate struct {
 	mu        sync.Mutex
 	out       io.Writer
 	abandoned bool
+	written   bool
 }
 
 // runHook is the testable inner implementation of cmdHook. It accepts an
@@ -101,6 +104,11 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) int {
 	case code := <-done:
 		return code
 	default:
+	}
+	if g.written {
+		// The decision is written and the call is returning. runHookCall
+		// returns 0 after it writes a decision.
+		return 0
 	}
 	g.abandoned = true
 	emitHookDecisionDialect(stdout, dialectBoth, "force_ask", "deny",
@@ -163,6 +171,7 @@ func runHookCall(args []string, stdin io.Reader, g *hookGate) int {
 			}
 		}
 		emitHookDecisionDialect(stdout, dialect, *agyEscalation, dec, reason)
+		g.written = true
 		if !dispatching && env != nil && *auditLog != "" {
 			appendHookAuditBestEffort(os.Stderr, *auditLog, env, result, dec, reason, auditPolicyHash)
 		}

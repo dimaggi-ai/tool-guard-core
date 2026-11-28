@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -159,5 +160,61 @@ func TestReview090hProtectViewVerdict(t *testing.T) {
 	env := &domain.ActionEnvelope{ToolName: "apply_patch", ToolGroup: hookToolGroup("apply_patch"), Parameters: p}
 	if hit, _ := engine.ViolatesProtectedPaths(env, []string{prot}); !hit {
 		t.Errorf("file_path %s: allowed, want deny", prot)
+	}
+}
+
+// TestReview090hOneDecisionAtTheTimeLimit: round-11 review F1. The decision
+// of a call was written under the lock of hookGate, and the call returned
+// after the lock was released. A timer that fired in that gap found the call
+// not done and wrote the deny of the time limit as a second decision. With a
+// budget near the time of a call, every call writes exactly one decision.
+func TestReview090hOneDecisionAtTheTimeLimit(t *testing.T) {
+	dir := t.TempDir()
+	pol := filepath.Join(dir, "p.yaml")
+	if err := os.WriteFile(pol, []byte(hookDenyPolicy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"-policy", pol}
+	ev := `{"tool_name":"Bash","tool_input":{"command":"ls"}}`
+	old := hookCallBudget
+	defer func() { hookCallBudget = old }()
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(8))
+
+	// The median time of a call.
+	var times []time.Duration
+	for i := 0; i < 51; i++ {
+		start := time.Now()
+		runHookStr(t, ev, args...)
+		times = append(times, time.Since(start))
+	}
+	sort.Slice(times, func(i, j int) bool { return times[i] < times[j] })
+	median := times[len(times)/2]
+
+	n := 60000
+	if raceEnabled {
+		n = 10000
+	}
+	counts := map[int]int{}
+	for i := 0; i < n; i++ {
+		// Budgets from 0.5 to 1.5 times the median time.
+		hookCallBudget = median/2 + median*time.Duration(i%21)/20
+		var out strings.Builder
+		runHook(args, strings.NewReader(ev), &out)
+		dec := json.NewDecoder(strings.NewReader(out.String()))
+		objects := 0
+		for {
+			var v map[string]interface{}
+			if err := dec.Decode(&v); err == io.EOF {
+				break
+			} else if err != nil {
+				t.Fatalf("output %q: %v", out.String(), err)
+			}
+			objects++
+		}
+		counts[objects]++
+	}
+	t.Logf("median call %s; %d calls; decisions per call: %v", median, n, counts)
+	if len(counts) != 1 || counts[1] != n {
+		t.Errorf("decisions per call %v, want exactly one in each of %d calls", counts, n)
 	}
 }
