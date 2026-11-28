@@ -142,7 +142,10 @@ func TestReview090gApplyPatchManyWorkDirsEndsInTime(t *testing.T) {
 		if got != c.want {
 			t.Errorf("%s: %s, want %s\n%s", c.name, got, c.want, out)
 		}
-		if took > 10*time.Second+500*time.Millisecond {
+		if strings.Contains(out, "did not end in") {
+			t.Errorf("%s: denied on the time limit: %s", c.name, out)
+		}
+		if !raceEnabled && took > 10*time.Second+500*time.Millisecond {
 			t.Errorf("%s: took %s, want the answer within 10 s", c.name, took)
 		}
 	}
@@ -169,7 +172,22 @@ func TestReview090gHookCallBudgetDenies(t *testing.T) {
 	if !strings.Contains(out.String(), "did not end in") {
 		t.Errorf("reason %q does not name the time limit", out.String())
 	}
-	if took > 2*time.Second {
+	if !raceEnabled && took > 2*time.Second {
 		t.Errorf("took %s, want about the 200ms budget", took)
+	}
+}
+
+// review090Took checks the time of one case of the 0.9.0 review tests. The
+// reason must not be the deny of a time limit. The wall-clock limit is
+// checked only in a build without the race detector: a race build on a
+// shared CI runner is several times slower, and its time says little about
+// the check.
+func review090Took(t *testing.T, took, limit time.Duration, reason string) {
+	t.Helper()
+	if strings.Contains(reason, "did not end in") {
+		t.Errorf("denied on the time limit: %s", reason)
+	}
+	if !raceEnabled && took > limit {
+		t.Errorf("took %s, want under %s", took, limit)
 	}
 }

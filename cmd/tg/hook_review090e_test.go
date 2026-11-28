@@ -343,9 +343,7 @@ func TestReview090eBypasses(t *testing.T) {
 		if got != "deny" {
 			t.Errorf("decision %q (%s), want deny", got, reason)
 		}
-		if took > 2*time.Second {
-			t.Errorf("took %s, want under 2s", took)
-		}
+		review090Took(t, took, 2*time.Second, reason)
 	})
 }
 
@@ -484,9 +482,7 @@ func TestReview090eRound5Probes(t *testing.T) {
 		if got != "deny" {
 			t.Errorf("decision %q (%s), want deny", got, reason)
 		}
-		if took > 2*time.Second {
-			t.Errorf("took %s, want under 2s", took)
-		}
+		review090Took(t, took, 2*time.Second, reason)
 	})
 }
 
@@ -542,9 +538,7 @@ func TestReview090eOrdinaryCommands(t *testing.T) {
 		if got == "deny" {
 			t.Errorf("decision deny (%s), want not deny", reason)
 		}
-		if took > 2*time.Second {
-			t.Errorf("took %s, want under 2s", took)
-		}
+		review090Took(t, took, 2*time.Second, reason)
 	})
 	floorDenies := []review090eCase{
 		// main denies this; the frozen floor keeps main's verdict.
@@ -558,9 +552,7 @@ func TestReview090eOrdinaryCommands(t *testing.T) {
 		if got != "deny" {
 			t.Errorf("decision %q (%s), want deny", got, reason)
 		}
-		if took > 2*time.Second {
-			t.Errorf("took %s, want under 2s", took)
-		}
+		review090Took(t, took, 2*time.Second, reason)
 	})
 }
 
@@ -627,9 +619,7 @@ func TestReview090ePathologicalInputs(t *testing.T) {
 				limit = l
 			}
 		}
-		if took > limit {
-			t.Errorf("took %s, want under %s", took, limit)
-		}
+		review090Took(t, took, limit, reason)
 		if strings.Contains(reason, "did not end in") {
 			t.Errorf("denied on the time limit: %s", reason)
 		}

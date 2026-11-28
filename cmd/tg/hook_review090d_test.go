@@ -269,9 +269,7 @@ func TestReview090dPathologicalWords(t *testing.T) {
 			}
 			start := time.Now()
 			got, reason := review090dRun(t, bashEv(c.cmd, home), file)
-			if d := time.Since(start); d > limit {
-				t.Errorf("took %s, want under %s", d, limit)
-			}
+			review090Took(t, time.Since(start), limit, reason)
 			if strings.Contains(reason, "did not end in") {
 				t.Errorf("denied on the time limit: %s", reason)
 			}
