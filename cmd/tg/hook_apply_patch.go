@@ -268,16 +268,83 @@ func applyPatchTargets(text string) (targets []string, added string) {
 	return targets, strings.Join(add, "\n")
 }
 
-// applyPatchEnvelopes returns one envelope per file an apply_patch call
-// names, with the file on file_path and the added lines on content, so the
+// applyPatchPlan holds the files of one apply_patch call. Each file gets an
+// envelope with the file on file_path and the added lines on content, so the
 // protected-path check and the write policies read the call like a call of a
-// write tool with a path parameter. A relative path is placed under cwd, the
-// working directory the harness reports.
+// write tool with a path parameter. The plan holds the parameters other than
+// file_path once; envelope builds the envelope of one file when the hook
+// checks it, so a large patch is not held in many envelopes at the same time.
+type applyPatchPlan struct {
+	base *domain.ActionEnvelope
+	// shared is the encoded parameters other than file_path, the same in
+	// every envelope.
+	shared []byte
+	// light is shared without the key patch and the keys of the content
+	// and command alias families, which hold the patch text, its added
+	// lines and their copies. The protected-path check does not read these
+	// keys for apply_patch (see protectEnvelope).
+	light       []byte
+	lightParams map[string]json.RawMessage
+	files       []applyPatchFile
+}
+
+// applyPatchFile is one envelope of an apply_patch call: the path on
+// file_path, the envelope ID, and the parameters as a map, with the alias
+// values the hook also checks. The map values are shared between files.
+type applyPatchFile struct {
+	path   []byte
+	id     string
+	params map[string]json.RawMessage
+	cands  []hookAliasCandidate
+	// pathCands is the number of candidates of the file_path family, the
+	// first ones in cands.
+	pathCands int
+}
+
+// envelope builds the envelope of file i.
+func (p *applyPatchPlan) envelope(i int) *domain.ActionEnvelope {
+	return p.splice(i, p.shared)
+}
+
+// protectEnvelope builds the envelope of file i for the protected-path
+// check, without the keys left out of light, and the parameters it was
+// built from. For a tool that is not a shell tool and not in the group
+// "shell", the check reads only path and work directory keys (file_path,
+// path, edits, cwd, workdir, ...), so the verdict is the verdict of the
+// full envelope (TestReview090hProtectViewVerdict). Without these keys an
+// envelope is small, and the check of many of them does not decode the
+// patch text each time.
+func (p *applyPatchPlan) protectEnvelope(i int) (*domain.ActionEnvelope, map[string]json.RawMessage) {
+	m := make(map[string]json.RawMessage, len(p.lightParams)+1)
+	for k, v := range p.lightParams {
+		m[k] = v
+	}
+	m["file_path"] = p.files[i].path
+	return p.splice(i, p.light), m
+}
+
+func (p *applyPatchPlan) splice(i int, shared []byte) *domain.ActionEnvelope {
+	f := p.files[i]
+	b := make([]byte, 0, len(shared)+len(f.path)+16)
+	b = append(b, `{"file_path":`...)
+	b = append(b, f.path...)
+	if len(shared) > 2 {
+		b = append(b, ',')
+	}
+	b = append(b, shared[1:]...)
+	e := *p.base
+	e.Parameters = b
+	e.EnvelopeID = f.id
+	return &e
+}
+
+// applyPatchPlanFor returns the plan of an apply_patch call. A relative path
+// is placed under cwd, the working directory the harness reports.
 //
 // ok is false when the tool is not apply_patch or the text names no file: the
 // caller then evaluates the call unchanged. deny is set when the call names
 // an empty path or more files than maxApplyPatchTargets.
-func applyPatchEnvelopes(base *domain.ActionEnvelope, cwd string) (envs []*domain.ActionEnvelope, deny string, ok bool) {
+func applyPatchPlanFor(base *domain.ActionEnvelope, cwd string) (plan *applyPatchPlan, deny string, ok bool) {
 	if base == nil || base.ToolName != "apply_patch" {
 		return nil, "", false
 	}
@@ -328,19 +395,39 @@ func applyPatchEnvelopes(base *domain.ActionEnvelope, cwd string) (envs []*domai
 	if err != nil {
 		return nil, "apply_patch parameters could not be encoded", true
 	}
-	envelope := func(full, id string) *domain.ActionEnvelope {
-		fp, _ := json.Marshal(full)
-		b := make([]byte, 0, len(shared)+len(fp)+16)
-		b = append(b, `{"file_path":`...)
-		b = append(b, fp...)
-		if len(shared) > 2 {
-			b = append(b, ',')
+	// The map the alias values of each envelope are read from: the same
+	// map an envelope decodes to, with the file on file_path.
+	var sharedParams map[string]json.RawMessage
+	if json.Unmarshal(shared, &sharedParams) != nil {
+		return nil, "apply_patch parameters could not be encoded", true
+	}
+	for k := range mm {
+		if n := normParamName(k); k == "patch" || contentAliasNames[n] || commandAliasNames[n] {
+			delete(mm, k)
 		}
-		b = append(b, shared[1:]...)
-		e := *base
-		e.Parameters = b
-		e.EnvelopeID = id
-		return &e
+	}
+	light, err := json.Marshal(mm)
+	if err != nil {
+		return nil, "apply_patch parameters could not be encoded", true
+	}
+	plan = &applyPatchPlan{base: base, shared: shared, light: light}
+	if json.Unmarshal(light, &plan.lightParams) != nil {
+		return nil, "apply_patch parameters could not be encoded", true
+	}
+	// Only the file_path family differs between files: the candidates of
+	// the other families are found once.
+	rest := hookAliasCandidatesIn(sharedParams, hookAliasFamilies[1:])
+	add := func(full, id string) {
+		fp, _ := json.Marshal(full)
+		m := make(map[string]json.RawMessage, len(sharedParams)+1)
+		for k, v := range sharedParams {
+			m[k] = v
+		}
+		m["file_path"] = fp
+		cands := hookAliasCandidatesIn(m, hookAliasFamilies[:1])
+		n := len(cands)
+		cands = append(cands, rest...)
+		plan.files = append(plan.files, applyPatchFile{path: fp, id: id, params: m, cands: cands, pathCands: n})
 	}
 	for i, target := range targets {
 		if target == "" {
@@ -354,7 +441,7 @@ func applyPatchEnvelopes(base *domain.ActionEnvelope, cwd string) (envs []*domai
 		if !absolute && strings.HasPrefix(cwd, "/") {
 			mainPath = path.Join(cwd, target)
 		}
-		envs = append(envs, envelope(mainPath, fmt.Sprintf("%s-patch-%d", base.EnvelopeID, i+1)))
+		add(mainPath, fmt.Sprintf("%s-patch-%d", base.EnvelopeID, i+1))
 		seen := map[string]bool{mainPath: true}
 		// "" stands for the target as the patch spells it: a relative
 		// target stays relative, and is not placed under the root.
@@ -385,10 +472,10 @@ func applyPatchEnvelopes(base *domain.ActionEnvelope, cwd string) (envs []*domai
 				continue
 			}
 			seen[full] = true
-			envs = append(envs, envelope(full, fmt.Sprintf("%s-patch-%d-%d", base.EnvelopeID, i+1, j+1)))
+			add(full, fmt.Sprintf("%s-patch-%d-%d", base.EnvelopeID, i+1, j+1))
 		}
 	}
-	return envs, "", true
+	return plan, "", true
 }
 
 // distinctStrings returns ss without repeats, in the order of first use.
